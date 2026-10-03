@@ -27,7 +27,7 @@ export const CURRENCY_OPTIONS = [
   { value: 'BRL', label: 'BRL — Brazilian Real',      symbol: 'R$' },
 ] as const;
 
-export type CurrencyCode = typeof CURRENCY_OPTIONS[number]['value'];
+type CurrencyCode = typeof CURRENCY_OPTIONS[number]['value'];
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 

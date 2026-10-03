@@ -54,11 +54,10 @@ pub(crate) fn extract_params_b(model_id: &str) -> Option<f32> {
         let after_num: String = after_substr.chars()
             .take_while(|c| c.is_ascii_digit() || *c == '.').collect();
         let suffix_ok = after_substr[after_num.len()..].starts_with('b');
-        if !before.is_empty() && !after_num.is_empty() && suffix_ok {
-            if let (Ok(e), Ok(p)) = (before.parse::<f32>(), after_num.parse::<f32>()) {
+        if !before.is_empty() && !after_num.is_empty() && suffix_ok
+            && let (Ok(e), Ok(p)) = (before.parse::<f32>(), after_num.parse::<f32>()) {
                 return Some(e * p);
             }
-        }
     }
     // Fallback: plain "NB" or "N.MB", word-boundaried so "1b" in "1binary"
     // doesn't match.
@@ -70,11 +69,9 @@ pub(crate) fn extract_params_b(model_id: &str) -> Option<f32> {
             while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'.') { i += 1; }
             if i < bytes.len() && bytes[i] == b'b' {
                 let is_boundary = i + 1 >= bytes.len() || !bytes[i + 1].is_ascii_alphanumeric();
-                if is_boundary {
-                    if let Ok(p) = lower[start..i].parse::<f32>() {
-                        if p > 0.0 && p < 10000.0 { return Some(p); }
-                    }
-                }
+                if is_boundary
+                    && let Ok(p) = lower[start..i].parse::<f32>()
+                        && p > 0.0 && p < 10000.0 { return Some(p); }
             }
         }
         i += 1;
@@ -91,13 +88,19 @@ pub(crate) fn extract_params_b(model_id: &str) -> Option<f32> {
 /// as bytes — every correctly-sized GGUF came out at ~12% of "expected" and
 /// was rejected by the 30% floor, silently emptying model discovery.
 pub(crate) fn bytes_per_param_for_quant(quant: &str) -> Option<f32> {
+    // Calibrated against real GGUF files, not nominal bit widths — K-quants
+    // are mixed precision (Llama 3.1 8B Q4_K_M = 4.92 GB / 8.03B = 0.61 B/W;
+    // Q2_K = 3.18 GB / 8.03B = 0.40 B/W). Single source for the agent's
+    // model-fit sizing; src/utils/quantSize.ts mirrors these values.
     let q = quant.to_ascii_uppercase();
-    if q.starts_with("Q2") || q.starts_with("IQ2") { return Some(0.375); }  // ~3 bits
-    if q.starts_with("Q3") || q.starts_with("IQ3") { return Some(0.4375); } // ~3.5 bits
-    if q.starts_with("Q4") || q.starts_with("IQ4") { return Some(0.5625); } // ~4.5 bits
-    if q.starts_with("Q5") { return Some(0.6875); }                          // ~5.5 bits
-    if q.starts_with("Q6") { return Some(0.8125); }                          // ~6.5 bits
-    if q.starts_with("Q8") { return Some(1.125); }                           // ~9 bits
+    if q.starts_with("IQ2") { return Some(0.34); }                          // ~2.7 bits
+    if q.starts_with("Q2") { return Some(0.39); }                           // ~3.2 bits
+    if q.starts_with("Q3") || q.starts_with("IQ3") { return Some(0.45); }  // ~3.6 bits
+    if q.starts_with("IQ4") { return Some(0.56); }                          // ~4.5 bits
+    if q.starts_with("Q4") { return Some(0.60); }                           // ~4.85 bits
+    if q.starts_with("Q5") { return Some(0.69); }                           // ~5.5 bits
+    if q.starts_with("Q6") { return Some(0.82); }                           // ~6.6 bits
+    if q.starts_with("Q8") { return Some(1.0); }                            // ~8.5 bits
     if q == "F16" || q == "BF16" { return Some(2.0); }
     if q == "F32" { return Some(4.0); }
     None
@@ -256,8 +259,8 @@ mod shared_scoring_tests {
     fn bytes_per_param_is_bits_over_eight() {
         assert_eq!(bytes_per_param_for_quant("F16"), Some(2.0));
         assert_eq!(bytes_per_param_for_quant("F32"), Some(4.0));
-        assert_eq!(bytes_per_param_for_quant("Q4_K_M"), Some(0.5625));
-        assert_eq!(bytes_per_param_for_quant("Q8_0"), Some(1.125));
+        assert_eq!(bytes_per_param_for_quant("Q4_K_M"), Some(0.60));
+        assert_eq!(bytes_per_param_for_quant("Q8_0"), Some(1.0));
     }
 
     #[test]

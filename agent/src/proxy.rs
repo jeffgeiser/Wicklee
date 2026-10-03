@@ -23,10 +23,10 @@ pub(crate) struct ProxyState {
     pub(crate) client:         reqwest::Client,
     /// Number of inference requests currently streaming through the proxy.
     /// >0 = inference active right now. Incremented when a request arrives,
-    /// decremented when its relay task ends (done packet, stream end, error,
-    /// timeout, or client disconnect — Drop guard covers them all). Replaces
-    /// a set-but-never-cleared AtomicBool that stuck "inference active" on
-    /// permanently after the first proxied request.
+    /// > decremented when its relay task ends (done packet, stream end, error,
+    /// > timeout, or client disconnect — Drop guard covers them all). Replaces
+    /// > a set-but-never-cleared AtomicBool that stuck "inference active" on
+    /// > permanently after the first proxied request.
     pub(crate) in_flight: std::sync::atomic::AtomicU32,
     /// Timestamp of last completed request (done packet received).
     pub(crate) last_done_ts:   Mutex<Option<std::time::Instant>>,
@@ -44,6 +44,33 @@ pub(crate) struct ProxyState {
 /// the proxy closes the stream with an error rather than hanging indefinitely.
 const CHUNK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
+/// Max buffered request body for /api/generate and /api/chat (base64 images
+/// in multimodal prompts make these far larger than plain-text prompts).
+const MAX_INFERENCE_BODY: usize = 64 * 1024 * 1024;
+
+fn body_too_large() -> axum::http::Response<Body> {
+    axum::http::Response::builder()
+        .status(StatusCode::PAYLOAD_TOO_LARGE)
+        .body(Body::from(format!(
+            "Wicklee proxy: request body exceeds {} MB limit for /api/generate and /api/chat",
+            MAX_INFERENCE_BODY / (1024 * 1024),
+        )))
+        .unwrap()
+}
+
+/// True when a `to_bytes` failure was caused by the length limit (as opposed
+/// to e.g. the client disconnecting mid-upload).
+fn is_length_limit(e: &axum::Error) -> bool {
+    let mut src: Option<&(dyn std::error::Error + 'static)> = Some(e);
+    while let Some(err) = src {
+        if err.to_string().contains("length limit exceeded") {
+            return true;
+        }
+        src = err.source();
+    }
+    false
+}
+
 /// Proxy handler for /api/generate and /api/chat — streams request through and
 /// inspects the final done packet for exact tok/s.
 pub(crate) async fn proxy_ollama_streaming(
@@ -59,12 +86,21 @@ pub(crate) async fn proxy_ollama_streaming(
     let method = req.method().clone();
     let headers = req.headers().clone();
 
-    // Buffer request body (prompt JSON — typically <64 KB)
-    let body_bytes = match axum::body::to_bytes(req.into_body(), 1024 * 1024).await {
+    // Buffer request body so the model name can be parsed for tracing. Text
+    // prompts are small, but multimodal requests carry base64 images, so the
+    // cap is generous; anything larger gets an explicit 413.
+    let declared_len = headers.get(axum::http::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<usize>().ok());
+    if declared_len.is_some_and(|n| n > MAX_INFERENCE_BODY) {
+        return body_too_large();
+    }
+    let body_bytes = match axum::body::to_bytes(req.into_body(), MAX_INFERENCE_BODY).await {
         Ok(b) => b,
-        Err(_) => return axum::http::Response::builder()
+        Err(e) if is_length_limit(&e) => return body_too_large(),
+        Err(e) => return axum::http::Response::builder()
             .status(StatusCode::BAD_REQUEST)
-            .body(Body::from("request body too large"))
+            .body(Body::from(format!("Wicklee proxy: failed to read request body — {e}")))
             .unwrap(),
     };
 
@@ -144,8 +180,8 @@ pub(crate) async fn proxy_ollama_streaming(
                             // The done packet is the last line; it's small and rarely split across chunks.
                             if let Ok(text) = std::str::from_utf8(&bytes) {
                                 for line in text.lines() {
-                                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
-                                        if v["done"].as_bool() == Some(true) {
+                                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(line)
+                                        && v["done"].as_bool() == Some(true) {
                                             let total_dur    = v["total_duration"].as_u64().unwrap_or(0);
                                             let prompt_dur   = v["prompt_eval_duration"].as_u64().unwrap_or(0);
                                             let eval_dur     = v["eval_duration"].as_u64().unwrap_or(0);
@@ -195,7 +231,6 @@ pub(crate) async fn proxy_ollama_streaming(
                                                 });
                                             }
                                         }
-                                    }
                                 }
                             }
                             if tx.send(Ok(bytes)).await.is_err() {
@@ -203,7 +238,7 @@ pub(crate) async fn proxy_ollama_streaming(
                             }
                         }
                         Err(e) => {
-                            let _ = tx.send(Err(std::io::Error::new(std::io::ErrorKind::Other, e))).await;
+                            let _ = tx.send(Err(std::io::Error::other(e))).await;
                             break;
                         }
                     }
@@ -248,15 +283,15 @@ pub(crate) async fn proxy_passthrough(
 
     let method  = req.method().clone();
     let headers = req.headers().clone();
-    let body_bytes = axum::body::to_bytes(req.into_body(), 16 * 1024 * 1024) // 16 MB
-        .await
-        .unwrap_or_default();
+    // Stream the body through unbuffered — /api/blobs/:digest carries whole
+    // GGUF files, far beyond any sane in-memory cap.
+    let body = reqwest::Body::wrap_stream(req.into_body().into_data_stream());
 
     let backend_url = format!("http://127.0.0.1:{}{}", state.ollama_port, path);
     let upstream = state.client
         .request(method, &backend_url)
         .headers(headers)
-        .body(body_bytes)
+        .body(body)
         .send()
         .await;
 
@@ -276,7 +311,7 @@ pub(crate) async fn proxy_passthrough(
                         Ok(Some(c)) => {
                             match c {
                                 Ok(b)  => { if tx.send(Ok(b)).await.is_err() { break; } }
-                                Err(e) => { let _ = tx.send(Err(std::io::Error::new(std::io::ErrorKind::Other, e))).await; break; }
+                                Err(e) => { let _ = tx.send(Err(std::io::Error::other(e))).await; break; }
                             }
                         }
                         Ok(None) => break,
@@ -301,5 +336,69 @@ pub(crate) async fn proxy_passthrough(
                     .unwrap()
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_state(ollama_port: u16) -> Arc<ProxyState> {
+        Arc::new(ProxyState {
+            ollama_port,
+            bypass_if_down: false,
+            client:         reqwest::Client::new(),
+            in_flight:      std::sync::atomic::AtomicU32::new(0),
+            last_done_ts:   Mutex::new(None),
+            node_id:        "test".into(),
+            #[cfg(not(target_env = "musl"))]
+            trace_tx:       None,
+            per_model:      Mutex::new(HashMap::new()),
+        })
+    }
+
+    async fn body_string(resp: axum::response::Response) -> String {
+        let b = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        String::from_utf8(b.to_vec()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn inference_body_over_cap_is_413() {
+        let state = test_state(1); // never contacted
+        // Declared Content-Length over the cap → rejected before buffering.
+        let req = axum::http::Request::post("/api/chat")
+            .header("content-length", (MAX_INFERENCE_BODY + 1).to_string())
+            .body(Body::empty()).unwrap();
+        let resp = proxy_ollama_streaming(axum::extract::State(Arc::clone(&state)), req)
+            .await.into_response();
+        assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+        // No Content-Length (chunked) → caught by the to_bytes limit.
+        let big = vec![b'a'; MAX_INFERENCE_BODY + 1];
+        let stream = tokio_stream::once(Ok::<_, std::io::Error>(axum::body::Bytes::from(big)));
+        let req = axum::http::Request::post("/api/chat")
+            .body(Body::from_stream(stream)).unwrap();
+        let resp = proxy_ollama_streaming(axum::extract::State(state), req)
+            .await.into_response();
+        assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn passthrough_forwards_bodies_over_16mb() {
+        // Mock backend that echoes the received body length.
+        let app = axum::Router::new().fallback(|body: axum::body::Bytes| async move {
+            body.len().to_string()
+        }).layer(axum::extract::DefaultBodyLimit::disable());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let len = 20 * 1024 * 1024;
+        let req = axum::http::Request::post("/api/blobs/sha256-abc")
+            .body(Body::from(vec![0u8; len])).unwrap();
+        let resp = proxy_passthrough(axum::extract::State(test_state(port)), req)
+            .await.into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(body_string(resp).await, len.to_string());
     }
 }

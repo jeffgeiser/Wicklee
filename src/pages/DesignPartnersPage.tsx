@@ -1,7 +1,7 @@
 /**
  * DesignPartnersPage — /design-partners — GTM Rock 5.
  *
- * The offer: 3–5 companies running local/on-prem AI get Business free for a
+ * The offer: 3–5 companies running private AI get Enterprise free for a
  * year in exchange for a logo, a case study, and monthly feedback. Case
  * studies are the only advertising enterprises trust; partners also steer
  * the roadmap while the surface is still wet.
@@ -9,12 +9,17 @@
 
 import React, { useEffect } from 'react';
 import { ArrowLeft, Handshake, Check, Building2, ShieldCheck, LineChart } from 'lucide-react';
+import { CONTACT_EMAIL, mailto } from '../utils/contact';
 
 interface DesignPartnersPageProps {
   onNavigate: (path: string) => void;
 }
 
-const MAILTO = 'mailto:sales@wicklee.dev?subject=Design%20partner%20program&body=Company%3A%0AFleet%20(nodes%2C%20hardware%2C%20runtimes)%3A%0AWhat%20you%20run%20locally%20and%20why%3A%0A';
+const MAILTO = mailto(
+  CONTACT_EMAIL,
+  'Design partner program',
+  'Company:\nFleet (nodes, hardware, runtimes):\nWhat you run locally and why:\n',
+);
 
 const DesignPartnersPage: React.FC<DesignPartnersPageProps> = ({ onNavigate }) => {
   useEffect(() => { window.scrollTo(0, 0); }, []);
@@ -39,10 +44,10 @@ const DesignPartnersPage: React.FC<DesignPartnersPageProps> = ({ onNavigate }) =
             <Handshake className="w-3.5 h-3.5" /> 3–5 companies · applications open
           </div>
           <h1 className="text-3xl font-bold text-white leading-tight">
-            Run local AI in production?<br />Help us build your fleet's observability — Business tier free for a year.
+            Running private AI in production?<br />Help us build your fleet's observability — Enterprise tier free for a year.
           </h1>
           <p className="text-gray-400 leading-relaxed max-w-2xl">
-            Wicklee is the observability layer for on-prem and local AI inference: hardware telemetry
+            Wicklee is the observability layer for private AI inference — on-prem, private cloud, or colo: hardware telemetry
             and token throughput in one store, so you can see efficiency, cost, and reliability the way
             you see them for the rest of your infrastructure. We're taking on a small number of design
             partners whose fleets and requirements will steer the roadmap.
@@ -55,7 +60,7 @@ const DesignPartnersPage: React.FC<DesignPartnersPageProps> = ({ onNavigate }) =
             <h2 className="text-base font-bold text-white">You get</h2>
             <ul className="text-sm text-gray-400 space-y-2">
               {[
-                'Business tier free for 12 months (normally $499/mo): 100 nodes, unlimited seats, SSO/SAML, RBAC, audit log + SIEM streaming, 365-day history',
+                'Enterprise tier free for 12 months: unlimited nodes and seats, SSO/SAML, RBAC, audit log export + SIEM streaming, 12-month history',
                 'SLOs with error budgets, chargeback/showback, capacity planning, idle-waste recovery — the cost-governance suite, on your real fleet',
                 'A direct line to the founder: monthly call, priority on your feature requests and fixes',
                 'Self-hosted control plane evaluation if telemetry can’t leave your network',
@@ -127,7 +132,7 @@ const DesignPartnersPage: React.FC<DesignPartnersPageProps> = ({ onNavigate }) =
             href={MAILTO}
             className="inline-block px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-sm font-semibold text-white transition-colors"
           >
-            sales@wicklee.dev →
+            {CONTACT_EMAIL} →
           </a>
         </div>
       </div>

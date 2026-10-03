@@ -11,7 +11,9 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(no_nvml)'] }
 
 [dependencies]
 axum          = { version = "0.7", features = ["ws"] }
-tokio         = { version = "1",   features = ["full"] }
+# Explicit feature list (was "full"): io-std for MCP stdio, process for
+# runtime probes/service control, signal for SIGTERM/ctrl_c handling.
+tokio         = { version = "1",   features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util", "io-std", "process", "signal"] }
 serde         = { version = "1.0", features = ["derive"] }
 serde_json    = "1.0"
 scopeguard    = "1"
@@ -30,9 +32,10 @@ uuid          = { version = "1", features = ["v4"] }
 rand          = "0.8"
 # Outbound HTTPS for cloud pairing registration.
 reqwest       = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
-# Binary self-replacement for the auto-update flow.
-# default-features = false: we use reqwest directly for downloads; only need self_replace().
-self_update   = { version = "0.41", default-features = false }
+# Atomic binary self-replacement for the auto-update flow (downloads use reqwest).
+self-replace  = "1"
+# SHA-256 verification of auto-update downloads against the release's SHA256SUMS.
+sha2          = "0.10"
 # Local metrics store — three-tier DuckDB schema (raw 1Hz / 1-min / 1-hr).
 # `bundled` compiles DuckDB from source for a fully self-contained binary.
 # Gated to non-musl targets: musl static linking + DuckDB C++ is unsupported;
@@ -65,4 +68,5 @@ opt-level     = "z"   # Optimise for size over speed
 lto           = true  # Cross-crate dead-code elimination
 codegen-units = 1     # Single unit allows the most aggressive inlining + DCE
 strip         = true  # Strip debug symbols from the final ELF/Mach-O
-panic         = "abort" # Remove stack-unwinding machinery (~20 KB savings)
+# NOTE: no `panic = "abort"` — supervisor.rs recovers crashed background
+# loops via JoinError::is_panic, which requires unwinding.

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Cpu, Zap, Activity, Terminal, ChevronRight, Database, Thermometer, Copy, Check, Flame, MemoryStick, ShieldCheck, Route, ClipboardCheck, TrendingDown, BarChart2, Gauge, Waves, HardDrive, Server, Search, Webhook, Bell } from 'lucide-react';
 import Logo from './Logo';
+import { perfMark } from '../utils/perfMark';
 
 interface LandingPageProps {
   onSignIn: () => void;
@@ -42,14 +43,14 @@ const allPatterns: ObsTile[] = [
   { id: 'H', title: 'Power Jitter',                trigger: 'Power draw is swinging wildly during inference — unstable delivery or erratic batch scheduling.',                            scope: null,    tier: 'community', icon: <Waves       className="w-4 h-4 text-orange-400" /> },
   { id: 'J', title: 'Swap I/O Pressure',           trigger: 'Model layers are spilling to disk during inference, causing latency spikes.',                                               scope: null,    tier: 'community', icon: <HardDrive   className="w-4 h-4 text-rose-400" />   },
   { id: 'K', title: 'Clock Drift',                 trigger: 'GPU clocks are throttled during inference but thermals are normal — a power cap or driver limit.',                           scope: null,    tier: 'community', icon: <Gauge       className="w-4 h-4 text-lime-400" />   },
-  { id: 'N', title: 'NVIDIA Thermal Redline',      trigger: 'GPU temperature is dangerously high — the driver will aggressively throttle clocks.',                                       scope: null,    tier: 'community', icon: <Flame       className="w-4 h-4 text-red-400" />    },
+  { id: 'N', title: 'NVIDIA Thermal Redline',      trigger: 'GPU temperature is dangerously high — the driver will aggressively throttle clocks.',                                       scope: null,    tier: 'pro', icon: <Flame       className="w-4 h-4 text-red-400" />    },
   { id: 'O', title: 'VRAM Overcommit',             trigger: 'The loaded model consumes nearly all available memory — no headroom for KV cache or concurrency.',                          scope: null,    tier: 'community', icon: <MemoryStick className="w-4 h-4 text-emerald-400" /> },
   // Pro patterns (9)
   { id: 'D', title: 'Power-GPU Decoupling',        trigger: 'High power draw but the GPU is barely active — inference is running on CPU instead of GPU.',                                 scope: null,    tier: 'pro', icon: <Cpu         className="w-4 h-4 text-cyan-400" />    },
   { id: 'E', title: 'Fleet Load Imbalance',        trigger: 'This node is stressed while a healthier fleet peer has spare capacity.',                                                     scope: 'Cloud', tier: 'pro', icon: <BarChart2   className="w-4 h-4 text-blue-400" />    },
   { id: 'G', title: 'Bandwidth Saturation',        trigger: 'VRAM is nearly full but the GPU compute is barely used — a memory bandwidth bottleneck, not compute.',                       scope: null,    tier: 'pro', icon: <Gauge       className="w-4 h-4 text-emerald-400" /> },
   { id: 'I', title: 'Efficiency Penalty Drag',     trigger: 'Significant efficiency loss with normal thermals and no memory pressure — a hidden context or batch inefficiency.',           scope: null,    tier: 'pro', icon: <TrendingDown className="w-4 h-4 text-yellow-400" /> },
-  { id: 'L', title: 'PCIe Lane Degradation',       trigger: 'GPU is running in a reduced PCIe lane width, limiting data transfer bandwidth.',                                            scope: null,    tier: 'pro', icon: <Server      className="w-4 h-4 text-orange-400" /> },
+  { id: 'L', title: 'PCIe Lane Degradation',       trigger: 'GPU is running in a reduced PCIe lane width, limiting data transfer bandwidth.',                                            scope: null,    tier: 'community', icon: <Server      className="w-4 h-4 text-orange-400" /> },
   { id: 'M', title: 'vLLM KV Cache Saturation',    trigger: 'The vLLM KV cache is nearly full — new sequences will queue or get rejected.',                                              scope: null,    tier: 'pro', icon: <Database    className="w-4 h-4 text-pink-400" />   },
   { id: 'P', title: 'TTFT Regression',             trigger: 'Time to first token has spiked above 2x the recent baseline — queue contention or model swap.',                             scope: null,    tier: 'pro', icon: <Activity    className="w-4 h-4 text-pink-400" />   },
   { id: 'Q', title: 'Latency Spike',               trigger: 'End-to-end request latency exceeds 2 seconds sustained — inference pipeline bottleneck.',                                    scope: null,    tier: 'pro', icon: <Thermometer className="w-4 h-4 text-red-300" />    },
@@ -57,6 +58,7 @@ const allPatterns: ObsTile[] = [
 ];
 
 const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigate }) => {
+  React.useEffect(() => { perfMark('wk:page-landing'); }, []);
   // H4 — Use React state for copy-button feedback instead of direct DOM
   // mutation via btn.innerHTML.  The old pattern bypassed React's virtual DOM,
   // caused unnecessary re-renders of sibling nodes, and created a surface for
@@ -75,6 +77,17 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
       <nav className="max-w-7xl mx-auto px-4 sm:px-8 py-5 sm:py-8 flex items-center justify-between relative z-10">
         <Logo className="text-3xl" connectionState="connected" />
         <div className="flex items-center gap-4 sm:gap-8">
+          {/* Demo first: for a cold visitor the live fleet is the strongest thing
+              we have, and it was previously unlinked from anywhere on the site.
+              External — it's a separate deployment, not a route. */}
+          <a
+            href="https://demo.wicklee.dev"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hidden sm:block text-sm font-medium text-blue-400 hover:text-blue-300 transition-colors"
+          >
+            Live demo
+          </a>
           <button onClick={() => onNavigate('/docs')} className="hidden sm:block text-sm font-medium text-gray-400 hover:text-white transition-colors">Documentation</button>
           <button onClick={() => onNavigate?.('/pricing')} className="hidden sm:block text-sm font-medium text-gray-400 hover:text-white transition-colors">Pricing</button>
           <button
@@ -108,16 +121,39 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
 
       {/* Hero Section */}
       <section className="max-w-5xl mx-auto px-4 sm:px-8 pt-12 sm:pt-20 pb-16 sm:pb-32 text-center relative z-10">
+        {/* Category eyebrow. The headline is an outcome, which is right — but
+            without this the page never says WHAT Wicklee is above the fold. The
+            only above-fold uses of "observability" were in the contrast line
+            below, where they describe the alternatives rather than us, so a
+            visitor scanning for the category saw the word attached to everyone
+            else. Category here, outcome in the H1. */}
+        <p className="text-[11px] sm:text-xs font-bold uppercase tracking-[0.2em] text-cyan-400/80 mb-5">
+          Hardware-aware observability for private AI fleets
+        </p>
+        {/* Three nouns, and the subhead below expands them in the same order:
+            health -> efficiency -> true cost. A list headline gives up the punch
+            a single claim has, so the ordering does that work instead — and the
+            page stops resolving to cost four times above the fold. Cost stays,
+            last, as the payoff rather than the pitch. */}
         <h1 className="text-4xl sm:text-6xl md:text-7xl font-extrabold tracking-tight text-white mb-6 leading-[1.1]">
-          Self-hosted AI inference,{' '}
+          Know your fleet&rsquo;s{' '}
           <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-cyan-400">
-            fully observable.
+            health, efficiency, and true cost.
           </span>
         </h1>
-        <p className="text-base sm:text-xl text-gray-400 max-w-3xl mx-auto mb-10 leading-relaxed">
-          WES (thermally-honest MPG for AI), 18 observation patterns, instant model fit checks, and programmable APIs for Ollama, vLLM, and llama.cpp. Install in 60 seconds — no sudo, no account, nothing to configure.
+        <p className="text-base sm:text-xl text-gray-400 max-w-3xl mx-auto mb-6 leading-relaxed">
+          Wicklee measures watts and tokens together on every node — so you catch a box
+          working harder for the same output, find hardware burning power while nothing
+          is using it, and get real cost per model. Installs in 60 seconds — no sudo, no
+          account, nothing to configure.
         </p>
-        <div className="flex items-center justify-center">
+        {/* The "why not Datadog/Grafana" answer used to sit here as a third block
+            of prose. Removed — four stacked text blocks above the CTA made the
+            hero busy, and the eyebrow already names the category. The argument
+            itself is not lost: it is made at full length below the fold, in
+            "Standard monitors stop at the hardware. We see the inference layer."
+            Keep the hero to eyebrow -> headline -> subhead -> CTA. */}
+        <div className="flex items-center justify-center mt-10">
           <button
             onClick={() => document.getElementById('install-snippet')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
             className="w-full sm:w-auto px-8 py-4 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-2xl transition-all shadow-xl shadow-blue-500/30 flex items-center justify-center gap-2 text-lg"
@@ -188,23 +224,190 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
         </div>
       </section>
 
+      {/* ── PROOF STRIP — placeholder ────────────────────────────────────────
+          Intentionally not shipped yet. The only fleet numbers available are
+          from the synthetic demo fleet, and publishing those as evidence would
+          be the same overclaiming this page was rewritten to remove. Drop in
+          real figures from a live fleet (idle-waste $/mo recovered, or the
+          tok/s-holds-while-WES-drops thermal example) and delete this comment.
+      ─────────────────────────────────────────────────────────────────────── */}
+
+      {/* ── The ladder: local → fleet → enterprise ──────────────────────────── */}
+      <section className="max-w-7xl mx-auto px-4 sm:px-8 py-16 sm:py-24 border-t border-gray-800 relative z-10">
+        <p className="text-xs font-bold text-blue-400 uppercase tracking-widest mb-4 text-center">How it scales</p>
+        <h2 className="text-3xl sm:text-4xl font-bold text-white mb-3 tracking-tight text-center">
+          Start local. Add a fleet when you need one.
+        </h2>
+        <p className="text-gray-400 text-base max-w-2xl mb-12 text-center mx-auto">
+          The agent is free forever and works completely on its own. Everything above it is optional.
+        </p>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {([
+            {
+              step: '01',
+              name: 'Local',
+              price: 'Free forever',
+              accent: 'text-gray-300',
+              border: 'border-gray-700',
+              desc: 'One binary per machine. Full dashboard at localhost:7700, unlimited local nodes, per-model cost attribution, 9 observation patterns.',
+              foot: 'Nothing leaves the machine.',
+            },
+            {
+              step: '02',
+              name: 'Fleet view',
+              price: 'Team',
+              accent: 'text-blue-400',
+              border: 'border-blue-500/40',
+              desc: 'Pair nodes into one dashboard. Chargeback by node, model and team tag; idle-waste recovery; capacity planning; SLOs with error budgets.',
+              foot: 'Hardware telemetry only — you choose when to pair.',
+            },
+            {
+              step: '03',
+              name: 'Enterprise',
+              price: 'Self-hosted',
+              accent: 'text-purple-400',
+              border: 'border-purple-500/40',
+              desc: 'Run the whole control plane on your own infrastructure via Docker Compose or Helm. SSO/SAML through your IdP, audit export and SIEM streaming.',
+              foot: 'Nothing transits our infrastructure at all.',
+            },
+          ] as const).map(t => (
+            <div key={t.step} className={`bg-gray-800/40 border ${t.border} rounded-2xl p-6 flex flex-col`}>
+              <div className="flex items-baseline gap-2 mb-3">
+                <span className="text-[10px] font-mono text-gray-600">{t.step}</span>
+                <span className={`text-sm font-bold ${t.accent}`}>{t.name}</span>
+                <span className="text-[10px] text-gray-500 ml-auto">{t.price}</span>
+              </div>
+              <p className="text-sm text-gray-400 leading-relaxed flex-1">{t.desc}</p>
+              <p className="text-[11px] text-gray-500 mt-4 pt-3 border-t border-gray-700/60">{t.foot}</p>
+            </div>
+          ))}
+        </div>
+
+        <div className="text-center mt-8">
+          <button
+            onClick={() => onNavigate?.('/pricing')}
+            className="text-sm font-semibold text-blue-400 hover:text-blue-300 transition-colors"
+          >
+            See what&apos;s in each tier →
+          </button>
+        </div>
+      </section>
+
+      {/* ── Cost governance — the wedge ─────────────────────────────────────── */}
+      <section className="max-w-7xl mx-auto px-4 sm:px-8 py-16 sm:py-24 relative z-10">
+        <p className="text-xs font-bold text-emerald-400 uppercase tracking-widest mb-4 text-center">Cost governance</p>
+        <h2 className="text-3xl sm:text-4xl font-bold text-white mb-3 tracking-tight max-w-3xl text-center mx-auto">
+          Your GPUs have a bill. Nobody itemises it.
+        </h2>
+        <p className="text-gray-400 text-base sm:text-lg max-w-2xl mb-12 text-center mx-auto">
+          Cloud inference comes with a line item per token. Self-hosted inference comes with
+          an electricity bill and a capex sheet, and no way to connect either to the models
+          that caused them. Wicklee measures both halves on the node, so it can.
+        </p>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-6xl mx-auto">
+          {([
+            {
+              icon: <BarChart2 className="w-5 h-5 text-emerald-400" />,
+              title: 'Cost attribution',
+              desc: 'Power cost and $/1M tokens broken down by node, model and team tag, from measured watts against sampled throughput — not a vendor TDP number. CSV export for finance.',
+            },
+            {
+              icon: <Zap className="w-5 h-5 text-amber-400" />,
+              title: 'Phantom load',
+              desc: 'Models sitting resident in memory drawing power while nothing is inferring. Wicklee prices that waste per node and tells you what unloading or consolidating would recover per month.',
+            },
+            {
+              icon: <Gauge className="w-5 h-5 text-blue-400" />,
+              title: 'Capacity planning',
+              desc: 'Reach a throughput target and see the options priced — 2× RTX 4090 against 1× H100 — costed from your own fleet’s measured tokens per watt, per hardware class.',
+            },
+          ] as const).map(c => (
+            <div key={c.title} className="bg-gray-800/40 border border-gray-700 rounded-2xl p-6">
+              <div className="mb-4">{c.icon}</div>
+              <h3 className="text-base font-bold text-white mb-2">{c.title}</h3>
+              <p className="text-sm text-gray-400 leading-relaxed">{c.desc}</p>
+            </div>
+          ))}
+        </div>
+
+        <p className="text-center text-xs text-gray-500 mt-8 max-w-2xl mx-auto leading-relaxed">
+          Per-model cost attribution runs locally on the free agent. Fleet-wide chargeback,
+          idle-waste recovery and capacity planning are part of the Team tier.
+        </p>
+      </section>
+
+      {/* ── Data boundary — the trust layer ─────────────────────────────────── */}
+      <section className="max-w-7xl mx-auto px-4 sm:px-8 py-16 sm:py-24 relative z-10">
+        <p className="text-xs font-bold text-violet-400 uppercase tracking-widest mb-4 text-center">Data boundary</p>
+        <h2 className="text-3xl sm:text-4xl font-bold text-white mb-3 tracking-tight max-w-3xl text-center mx-auto">
+          Exactly what leaves the machine, and when.
+        </h2>
+        <p className="text-gray-400 text-base sm:text-lg max-w-2xl mb-12 text-center mx-auto">
+          Wicklee measures the hardware effort behind inference, not the inference itself.
+          Here is the whole boundary, including the parts that are optional.
+        </p>
+
+        <div className="max-w-4xl mx-auto overflow-x-auto">
+          <table className="w-full text-left border-collapse">
+            <thead>
+              <tr className="border-b border-gray-700">
+                <th className="py-3 pr-4 text-[10px] font-bold uppercase tracking-widest text-gray-500">Data</th>
+                <th className="py-3 pr-4 text-[10px] font-bold uppercase tracking-widest text-gray-500">Where it lives</th>
+              </tr>
+            </thead>
+            <tbody className="text-sm">
+              {([
+                ['Prompts and responses',
+                 <>Never read, never stored, never transmitted. By default Wicklee is <strong className="text-white">not in the request path at all</strong> — it samples the hardware and polls the runtime&apos;s own status endpoints.</>],
+                ['Model templates and system prompts',
+                 <>Captured for the local Runtime Config view and kept <strong className="text-white">on the node only</strong>. Never pushed to the fleet.</>],
+                ['Hardware telemetry (watts, temps, tok/s, model names)',
+                 <>Stays local until you explicitly pair a node. Pairing is opt-in, per node, and reversible.</>],
+                ['Optional inline proxy',
+                 <>Off by default. When enabled, requests pass through it for real-traffic timing — it records <strong className="text-white">only</strong> latency, TTFT, TPOT, status and the model name (24-hour local retention). Request and response bodies are not stored.</>],
+                ['Local MCP server',
+                 <>Runs on localhost with no auth and no network egress. AI agents query your node without anything leaving the machine.</>],
+                ['Cloud MCP server',
+                 <>A separate, opt-in surface on wicklee.dev requiring a bearer token — it answers over fleet telemetry you have already chosen to pair. If you never pair, it has nothing to serve.</>],
+              ] as const).map(([k, v], i) => (
+                <tr key={i} className="border-b border-gray-800 align-top">
+                  <td className="py-4 pr-4 font-semibold text-gray-200 w-1/3">{k}</td>
+                  <td className="py-4 text-gray-400 leading-relaxed">{v}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="text-center mt-8">
+          <button
+            onClick={() => onNavigate?.('/trust')}
+            className="text-sm font-semibold text-violet-400 hover:text-violet-300 transition-colors"
+          >
+            Full trust &amp; security detail →
+          </button>
+        </div>
+      </section>
+
       {/* Feature Grid */}
       <section className="max-w-7xl mx-auto px-4 sm:px-8 py-16 sm:py-32 border-t border-gray-800 relative z-10">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
           <FeatureCard
             icon={Cpu}
-            title="See every node"
-            description="Live GPU temp, VRAM usage, and inference throughput across your entire fleet — auto-detected, zero configuration."
+            title="Stop paying for idle hardware"
+            description="Find models sitting in memory drawing power while nothing is using them — priced per node, with what you'd recover by unloading or consolidating."
           />
           <FeatureCard
             icon={Activity}
-            title="Thermal Intelligence"
-            description="Monitor thermal thresholds and health signals across your entire fleet. Prevent hardware degradation with real-time alerts and WES-aware health telemetry."
+            title="Know which node to trust"
+            description="Catch a box that is thermally throttling, memory-starved for the model you want to run, or simply the wrong place to send the next request — before users feel it."
           />
           <FeatureCard
             icon={Terminal}
-            title="Understand your costs"
-            description="WES — the MPG for AI — scores each node on tok/s per watt, thermally adjusted. Wattage-per-Token is the metric cloud providers don't surface. Now you have it for your local fleet."
+            title="Answer the cost question"
+            description="Real cost per model and per million tokens, measured from actual watts and actual throughput on your own hardware — not a vendor TDP figure or a cloud price list."
           />
         </div>
       </section>
@@ -267,6 +470,51 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
           </div>
         </div>
 
+        {/* Part 1b — WES, explained by example rather than by formula */}
+        <div>
+          <p className="text-xs font-bold text-emerald-400 uppercase tracking-widest mb-4 text-center">The mechanism</p>
+          <h2 className="text-3xl sm:text-4xl font-bold text-white mb-3 tracking-tight max-w-3xl text-center mx-auto">
+            WES is miles per gallon, for inference.
+          </h2>
+          <p className="text-gray-400 text-base sm:text-lg max-w-2xl mb-10 text-center mx-auto">
+            How many tokens you get per watt — with a penalty applied as the hardware heats
+            up. Higher is better. It exists to catch the moment a node starts working
+            harder for the same output, while throughput still looks fine.
+          </p>
+
+          <div className="max-w-3xl mx-auto grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="bg-gray-800/40 border border-gray-700 rounded-2xl p-6">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-400 mb-4">Normal thermal</p>
+              <dl className="space-y-2 text-sm">
+                <div className="flex justify-between"><dt className="text-gray-500">Throughput</dt><dd className="text-gray-200 font-mono">47 tok/s</dd></div>
+                <div className="flex justify-between"><dt className="text-gray-500">Power</dt><dd className="text-gray-200 font-mono">180 W</dd></div>
+                <div className="flex justify-between"><dt className="text-gray-500">Cost / 1M tokens</dt><dd className="text-gray-200 font-mono">$0.17</dd></div>
+                <div className="flex justify-between pt-2 border-t border-gray-700"><dt className="text-gray-300 font-semibold">WES</dt><dd className="text-emerald-400 font-mono font-bold">0.26</dd></div>
+              </dl>
+            </div>
+            <div className="bg-gray-800/40 border border-amber-500/30 rounded-2xl p-6">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-amber-400 mb-4">Same node, running hot</p>
+              <dl className="space-y-2 text-sm">
+                <div className="flex justify-between"><dt className="text-gray-500">Throughput</dt><dd className="text-gray-200 font-mono">44 tok/s <span className="text-gray-500 text-xs">−6%</span></dd></div>
+                <div className="flex justify-between"><dt className="text-gray-500">Power</dt><dd className="text-gray-200 font-mono">180 W</dd></div>
+                <div className="flex justify-between"><dt className="text-gray-500">Cost / 1M tokens</dt><dd className="text-gray-200 font-mono">$0.18 <span className="text-gray-500 text-xs">+7%</span></dd></div>
+                <div className="flex justify-between pt-2 border-t border-gray-700"><dt className="text-gray-300 font-semibold">WES</dt><dd className="text-amber-400 font-mono font-bold">0.14 <span className="text-xs">−47%</span></dd></div>
+              </dl>
+            </div>
+          </div>
+
+          <p className="text-sm text-gray-400 max-w-2xl mx-auto mt-6 text-center leading-relaxed">
+            Throughput moved 6%. A dashboard watching tok/s would call that noise. WES
+            nearly halves, because it counts the heat as a cost — which is why it fires
+            before the throughput cliff, not after it.
+          </p>
+          <p className="text-xs text-gray-600 max-w-2xl mx-auto mt-3 text-center">
+            Illustrative figures. The penalty is deliberately a scoring weight, not a
+            physical multiplier — your electricity bill tracks throughput, while WES is
+            tuned to warn you earlier than the bill does.
+          </p>
+        </div>
+
         {/* Part 2 — 18 Hardware Observation Patterns */}
         <div>
           <p className="text-xs font-bold text-blue-400 uppercase tracking-widest mb-4 text-center">What Wicklee surfaces</p>
@@ -275,6 +523,14 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
           </h2>
           <p className="text-gray-400 text-base sm:text-lg max-w-2xl mb-10 text-center mx-auto">
             Pure arithmetic over time-windowed telemetry. Every pattern requires sustained evidence before firing — single-frame spikes never produce an alert.
+          </p>
+          {/* 18 here + 2 cloud-only (fleet_load_imbalance, wes_long_term_drift) = the
+              20 total quoted above and in the docs. Stated so the two numbers on this
+              page don't appear to contradict each other. */}
+          <p className="text-xs text-gray-600 max-w-2xl mb-10 text-center mx-auto">
+            These 18 run on the agent itself. Two more — fleet load imbalance and
+            long-term WES drift — need multi-node or multi-week context, so they run in
+            the fleet view.
           </p>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -683,6 +939,39 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
               <div className="absolute -top-6 -right-6 w-32 h-32 bg-blue-600/20 rounded-full blur-3xl"></div>
               <div className="absolute -bottom-10 -left-10 w-40 h-40 bg-cyan-400/10 rounded-full blur-3xl"></div>
             </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ── Design partner program ───────────────────────────────────────────
+          Surfaced above the footer deliberately. The program page has been live
+          since July and was reachable only from the footer, which is why it has
+          had no applicants — an offer nobody sees isn't a program.
+      ─────────────────────────────────────────────────────────────────────── */}
+      <section className="max-w-7xl mx-auto px-4 sm:px-8 pb-16 sm:pb-24 relative z-10">
+        <div className="rounded-[32px] border border-emerald-500/25 bg-gradient-to-r from-emerald-500/5 to-blue-500/5 p-6 sm:p-10">
+          <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6">
+            <div className="max-w-2xl">
+              <p className="text-xs font-bold text-emerald-400 uppercase tracking-widest mb-3">
+                Design partner program
+              </p>
+              <h2 className="text-2xl sm:text-3xl font-bold text-white mb-3 tracking-tight">
+                Run a real fleet? Get Enterprise free for a year.
+              </h2>
+              <p className="text-gray-400 text-sm sm:text-base leading-relaxed">
+                We&apos;re taking on a small number of design partners: the full Enterprise
+                tier — self-hosted control plane, SSO, audit export, cost governance — free
+                for twelve months, on your actual hardware. In exchange we ask for a logo,
+                a case study, and a monthly call that shapes the roadmap.
+              </p>
+            </div>
+            <button
+              onClick={() => onNavigate?.('/design-partners')}
+              className="shrink-0 px-8 py-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold transition-all shadow-lg shadow-emerald-600/20 flex items-center gap-2"
+            >
+              See the program
+              <ChevronRight className="w-4 h-4" />
+            </button>
           </div>
         </div>
       </section>

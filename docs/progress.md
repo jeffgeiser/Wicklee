@@ -2,7 +2,19 @@
 
 *A running log of what shipped, what was learned, and what's next. Most recent entry first.*
 
-> **Canonical references:** `docs/ROADMAP.md` (product roadmap, phases, tier structure) · `docs/progress.md` (this file — engineering journal, most-recent-first)
+> **Canonical references:** `docs/ROADMAP.md` (product roadmap, phases, tier structure) · `docs/progress.md` (this file — engineering journal, most-recent-first) · `docs/NEXT_STEPS.md` (founder checklist — open items that need a human) · `docs/QA_CHECKLIST.md` (standing manual release checks)
+
+---
+
+## September 28, 2026 — Security + bug-fix sweep from the code review (PRs #61–#64)
+
+Worked through Priorities 1–2 of `docs/CODE_REVIEW.md` before Paddle goes live. S1–S9 and B1–B10 are closed; Priority 3 (performance) is in progress.
+
+- **#61 — auth, billing, pairing (S1–S4, B1).** No more auto-linking a new Clerk identity to a password account; legacy `/api/auth/signup|login` return 404 whenever `CLERK_JWKS_URL` is set. Paddle webhook: 5-minute timestamp tolerance, HMAC over raw bytes, any `h1` may match; tier follows `data.status` (active/trialing grant, paused/canceled revoke, past_due keeps the tier), out-of-order events skipped, `subscription.paused`/`resumed` handled. `client_ip` reads `X-Forwarded-For` from the right (`TRUSTED_PROXY_HOPS`, default 1). Activate counts and claims in one transaction.
+- **#63 — hardening (S5–S9).** Webhook, audit-drain, OTel and Slack URLs are resolved and refused when private, loopback, link-local, CGNAT or metadata (allowed under `SELF_HOSTED` or `OUTBOUND_ALLOW_PRIVATE=true`); redirects never followed. Personal tenant scope now requires `org_id IS NULL`. Boot-time node backfill and `RESET_NODES` removed. Legacy sessions expire after 30 days (and `/api/auth/me` is off under Clerk); node tokens stored as sha256, compared in constant time. Agent auto-update installs only when the binary matches the release's `SHA256SUMS`, which the release workflow now publishes.
+- **#62 — SPA routes.** `_redirects` rewrites to `/` instead of `/index.html`, so direct hits on `/pricing`, `/terms`, `/trust` etc. stop bouncing to the homepage. Legal copy covers annual plans and drops Pro.
+- **#64 — bugs (B2–B10).** Dashboard socket leak and stale org data on org switch/sign-out fixed; local-agent calls use relative URLs. Agent proxy streams passthrough bodies and uses connect/read timeouts (no 300 s cap); telemetry push recovers after a 410 and re-pair; `panic = "abort"` dropped so the supervisor can recover loops; runtime-config pollers honour `[runtime_ports]`; one quant table. New **`GET /api/metrics/snapshot`** returns the latest frame as JSON (`/api/metrics` is SSE).
+- Docs pass against the current code: retired Pro/Business labels replaced with Team/Enterprise in public docs, pattern count 20, llama.cpp listed as a runtime, self-hosted agent pairing via `WICKLEE_CLOUD_URL`, and README build steps fixed.
 
 ---
 

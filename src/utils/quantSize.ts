@@ -8,7 +8,8 @@
  * for a 32GB FP8 model that's only consuming ~25% of its 128GB unified
  * memory — the rest is vLLM's KV cache reservation.
  *
- * Mirrors the agent-side `bytes_per_weight()` in agent/src/main.rs so
+ * Mirrors shared/scoring.rs `bytes_per_param_for_quant` (via the agent's
+ * `bytes_per_weight()` in agent/src/main.rs) so
  * client and server agree on size estimates.
  */
 

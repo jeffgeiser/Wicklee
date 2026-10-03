@@ -71,8 +71,8 @@ const ThermalBudgetCard: React.FC<ThermalBudgetCardProps> = ({
       const res = await fetch(`${CLOUD_URL}/api/v1/thermal-budget?node_id=${encodeURIComponent(selectedNodeId)}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
-      if (res.status === 403) {
-        setError('Pro tier required for Thermal Budget.');
+      if (res.status === 402 || res.status === 403) {
+        setError('Team tier required for Thermal Budget.');
       } else if (!res.ok) {
         setError(`Server returned ${res.status}`);
       } else {

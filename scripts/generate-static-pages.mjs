@@ -33,6 +33,7 @@
  */
 
 import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve, join } from 'node:path';
 import { marked } from 'marked';
@@ -92,6 +93,20 @@ function applyMeta(shell, { title, description, path, ogType }) {
   return html;
 }
 
+/**
+ * Preload the lazily-imported page chunk a generated route will need. The
+ * marketing pages became separate chunks (App.tsx React.lazy) to keep the
+ * entry small; a prerendered route knows which one it is, so the fetch can
+ * start with the HTML instead of after the entry executes. Best-effort.
+ */
+let pageChunks = null;
+async function preloadPageChunk(html, prefix) {
+  pageChunks ??= (await readdir(join(DIST, 'assets'))).filter(f => f.endsWith('.js'));
+  const hits = pageChunks.filter(f => f.startsWith(prefix + '-'));
+  if (hits.length !== 1) return html;
+  return html.replace('</head>', `<link rel="modulepreload" crossorigin href="/assets/${hits[0]}">\n</head>`);
+}
+
 /** Inject JSON-LD + content into the shell's #root. */
 function injectContent(html, { jsonLd, bodyHtml, wrapStyle }) {
   if (jsonLd) {
@@ -102,12 +117,36 @@ function injectContent(html, { jsonLd, bodyHtml, wrapStyle }) {
   if (bodyHtml) {
     const rootTag = '<div id="root" role="application" aria-label="Wicklee dashboard">';
     if (!html.includes(rootTag)) throw new Error('#root div not found in built index.html');
-    // Content lives inside #root: visible to crawlers and during the
-    // pre-hydration paint; React's createRoot().render() replaces it with
-    // the live page once the bundle loads.
+
+    // Content lives inside #root so React's createRoot().render() clears it once
+    // the bundle loads. That is also why it used to FLASH: the block paints
+    // immediately, the ~1.6 MB bundle lands a beat later, and the user sees a
+    // narrower, nav-less version of the page shift away.
+    //
+    // The block has to keep doing two jobs, which rules out a plain display:none:
+    //
+    //   - Raw-HTML consumers (link unfurlers, LLM fetchers, curl, non-rendering
+    //     crawlers) must find real content in the source. They don't run CSS or
+    //     JS, so whatever we do here is invisible to them.
+    //   - It is the graceful fallback when the bundle fails or the network
+    //     stalls. Hiding it unconditionally turns a slow load into a blank page.
+    //
+    // public/prerender.js hides it on parse and puts it back after 4s if React
+    // never mounted. A CSS delayed-reveal was tried first and rejected: it
+    // depends on the document animation clock, which is suspended in some
+    // environments, and where animations don't run the content would never
+    // appear at all. See the header comment in public/prerender.js.
+    // Fail loudly if the script isn't in the build. A 404 here degrades safely
+    // (the block just stays visible, i.e. today's flash), so it would otherwise
+    // slip through review as "works fine" while the fix is silently dead.
+    if (!existsSync(join(DIST, 'prerender.js'))) {
+      throw new Error('dist/prerender.js missing — the injected <script src="/prerender.js"> would 404 and the flash fix would be inert');
+    }
+
     const style = wrapStyle ?? 'max-width:48rem;margin:0 auto;padding:3rem 1.5rem';
     html = html.replace(rootTag,
-      `${rootTag}<div class="blog-content" style="${style}">${bodyHtml}</div>`);
+      `${rootTag}<div id="wk-prerender" class="blog-content" style="${style}">${bodyHtml}</div>` +
+      '<script src="/prerender.js"></script>');
   }
   return html;
 }
@@ -126,9 +165,9 @@ function injectContent(html, { jsonLd, bodyHtml, wrapStyle }) {
  */
 function landingBodyHtml() {
   const features = [
-    ['See every node', 'Live GPU temp, VRAM usage, and inference throughput across your entire fleet — auto-detected, zero configuration.'],
-    ['Thermal Intelligence', 'Monitor thermal thresholds and health signals across your entire fleet. Prevent hardware degradation with real-time alerts and WES-aware health telemetry.'],
-    ['Understand your costs', 'WES — the MPG for AI — scores each node on tok/s per watt, thermally adjusted. Wattage-per-Token is the metric cloud providers don’t surface. Now you have it for your local fleet.'],
+    ['Stop paying for idle hardware', 'Find models sitting in memory drawing power while nothing is using them — priced per node, with what you’d recover by unloading or consolidating.'],
+    ['Know which node to trust', 'Catch a box that is thermally throttling, memory-starved for the model you want to run, or simply the wrong place to send the next request — before users feel it.'],
+    ['Answer the cost question', 'Real cost per model and per million tokens, measured from actual watts and actual throughput on your own hardware — not a vendor TDP figure or a cloud price list.'],
   ];
   const featureHtml = features.map(([t, d]) =>
     `<li style="margin-bottom:1rem"><strong style="color:#f9fafb">${esc(t)}</strong> — ${esc(d)}</li>`
@@ -136,11 +175,12 @@ function landingBodyHtml() {
 
   return `
 <main>
-  <h1 style="font-size:2rem;font-weight:800;color:#f9fafb;line-height:1.15">Self-hosted AI inference, fully observable.</h1>
-  <p style="font-size:1.05rem;color:#9ca3af;line-height:1.6;margin:1rem 0 1.5rem">
-    WES (thermally-honest MPG for AI), 18 observation patterns, instant model fit checks, and
-    programmable APIs for Ollama, vLLM, and llama.cpp. Install in 60 seconds — no sudo, no account,
-    nothing to configure.
+  <p style="font-size:0.8rem;font-weight:700;letter-spacing:0.2em;text-transform:uppercase;color:#22d3ee;margin:0 0 0.75rem">Hardware-aware observability for private AI fleets</p>
+  <h1 style="font-size:2rem;font-weight:800;color:#f9fafb;line-height:1.15">Know your fleet&rsquo;s health, efficiency, and true cost.</h1>
+  <p style="font-size:1.05rem;color:#9ca3af;line-height:1.6;margin:1rem 0 1rem">
+    Wicklee measures watts and tokens together on every node — so you catch a box working harder
+    for the same output, find hardware burning power while nothing is using it, and get real cost
+    per model. Installs in 60 seconds — no sudo, no account, nothing to configure.
   </p>
   <p style="margin:0 0 2rem">
     <code style="background:#1f2937;border:1px solid #374151;border-radius:0.375rem;padding:0.5rem 0.75rem;color:#f9fafb;font-family:ui-monospace,monospace;font-size:0.875rem">curl -fsSL https://wicklee.dev/install.sh | bash</code>
@@ -149,10 +189,20 @@ function landingBodyHtml() {
   <ul style="list-style:none;padding:0;color:#9ca3af;line-height:1.6">
 ${featureHtml}
   </ul>
-  <h2 style="font-size:1.4rem;font-weight:700;color:#f9fafb;margin-top:2.5rem">Sovereign by design</h2>
+  <h2 style="font-size:1.4rem;font-weight:700;color:#f9fafb;margin-top:2.5rem">Start local, add a fleet when you need one</h2>
   <p style="color:#9ca3af;line-height:1.6">
-    Telemetry never leaves your hardware. Self-hostable, air-gap friendly, and built to complement
-    your existing Prometheus / Grafana / Datadog stack rather than replace it.
+    The agent is free forever and works on its own: full dashboard at localhost:7700, unlimited
+    local nodes, per-model cost attribution. Pair nodes into a fleet view for chargeback by node,
+    model and team, idle-waste recovery and capacity planning. Enterprise runs the entire control
+    plane on your own infrastructure.
+  </p>
+  <h2 style="font-size:1.4rem;font-weight:700;color:#f9fafb;margin-top:2.5rem">What leaves the machine</h2>
+  <p style="color:#9ca3af;line-height:1.6">
+    Prompts and responses are never read, stored or transmitted — by default Wicklee is not in the
+    request path at all. Hardware telemetry stays local until you explicitly pair a node. The
+    optional inline proxy records only timing and the model name, never request or response
+    bodies. Built to complement your existing Prometheus / Grafana / Datadog stack rather than
+    replace it.
   </p>
   <h2 style="font-size:1.4rem;font-weight:700;color:#f9fafb;margin-top:2.5rem">Built for agents &amp; LLMs</h2>
   <p style="color:#9ca3af;line-height:1.6">
@@ -160,10 +210,13 @@ ${featureHtml}
     AI agents can query your fleet's status, efficiency, and model fit directly.
   </p>
   <p style="margin-top:2.5rem">
+    <a href="https://demo.wicklee.dev" style="color:#60a5fa">Live demo</a> ·
     <a href="/docs" style="color:#60a5fa">Documentation</a> ·
     <a href="/pricing" style="color:#60a5fa">Pricing</a> ·
     <a href="/blog" style="color:#60a5fa">Blog</a> ·
-    <a href="/metrics-reference" style="color:#60a5fa">Metrics reference</a>
+    <a href="/metrics-reference" style="color:#60a5fa">Metrics reference</a> ·
+    <a href="/design-partners" style="color:#60a5fa">Design partners</a> ·
+    <a href="/trust" style="color:#60a5fa">Trust &amp; security</a>
   </p>
 </main>`.trim();
 }
@@ -177,7 +230,52 @@ async function emit(routePath, html) {
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
-const shell = await readFile(join(DIST, 'index.html'), 'utf8');
+let shell = await readFile(join(DIST, 'index.html'), 'utf8');
+
+// ── Cold-load waterfall ───────────────────────────────────────────────────────
+// On the cloud build, index.tsx awaits import('@clerk/clerk-react') before its
+// first render, and App then lazy-loads CloudApp. Vite only preloads a dynamic
+// import's dependencies at the moment the import() runs, so on a cold load
+// those two chunks are fetched one after another, AFTER the entry has
+// downloaded and executed: three serial round-trips before /pricing can paint.
+// Preloading them from the HTML lets all three download in parallel.
+//
+// Chunk names are hashed, so they are discovered here rather than authored:
+// the Clerk vendor chunk is the non-entry index-*.js that carries
+// ClerkProvider. Best-effort — if the shape changes, log and skip rather than
+// fail the build over an optimisation.
+{
+  const assetsDir = join(DIST, 'assets');
+  const entry = (shell.match(/assets\/(index-[\w-]+\.js)/) ?? [])[1];
+  const files = (await readdir(assetsDir)).filter(f => f.endsWith('.js'));
+  const preload = [];
+  const clerkVendor = [];
+  for (const f of files) {
+    if (f.startsWith('index-') && f !== entry) {
+      const src = await readFile(join(assetsDir, f), 'utf8');
+      if (src.includes('ClerkProvider')) clerkVendor.push(f);
+    }
+    if (f.startsWith('CloudApp-')) preload.push(f);
+  }
+  if (clerkVendor.length === 1) preload.unshift(clerkVendor[0]);
+  else console.warn(`[static-pages] expected one Clerk vendor chunk, found ${clerkVendor.length} — skipping its preload`);
+  // A preloaded chunk's own static imports are only discovered once the
+  // browser has parsed it — one more serial round-trip per level (measured:
+  // a 1 kB use-sync-external-store shim fetched ~160 ms after the entry
+  // executed). Pull in one level of them here; they are small.
+  for (const f of [...preload]) {
+    const src = await readFile(join(assetsDir, f), 'utf8');
+    for (const m of src.matchAll(/from\s*"\.\/([^"]+\.js)"|import\s*"\.\/([^"]+\.js)"/g)) {
+      const dep = m[1] ?? m[2];
+      if (dep && dep !== entry && !preload.includes(dep)) preload.push(dep);
+    }
+  }
+  if (preload.length) {
+    const links = preload.map(f => `<link rel="modulepreload" crossorigin href="/assets/${f}">`).join('\n');
+    shell = shell.replace('</head>', `${links}\n</head>`);
+    console.log(`[static-pages] modulepreload: ${preload.join(', ')}`);
+  }
+}
 
 // 1. Landing page: add SoftwareApplication JSON-LD in place.
 {
@@ -187,7 +285,7 @@ const shell = await readFile(join(DIST, 'index.html'), 'utf8');
     name: SITE_NAME,
     applicationCategory: 'DeveloperApplication',
     operatingSystem: 'macOS, Linux, Windows',
-    description: 'Self-hosted AI inference observability for Ollama, vLLM, and llama.cpp fleets.',
+    description: 'Hardware-aware observability for private AI fleets. Know your fleet\u2019s health, efficiency, and true cost: watts and tokens measured together on every node — thermal early warning, phantom-load detection and real cost per model for Ollama, vLLM and llama.cpp.',
     url: ORIGIN,
     offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
   };
@@ -232,6 +330,7 @@ for (const file of postFiles) {
   // the rendered article doesn't already start with it.
   const heading = /^\s*<h1/.test(article) ? '' : `<h1>${esc(title)}</h1>\n`;
   html = injectContent(html, { jsonLd, bodyHtml: `<article>${heading}${article}</article>` });
+  html = await preloadPageChunk(html, 'BlogPost');
   await emit(`/blog/${slug}`, html);
 }
 
@@ -248,6 +347,7 @@ for (const file of postFiles) {
     path: '/blog',
   });
   html = injectContent(html, { bodyHtml: `<h1>Wicklee Blog</h1>\n<ul>\n${list}\n</ul>` });
+  html = await preloadPageChunk(html, 'BlogListing');
   await emit('/blog', html);
 }
 
@@ -278,6 +378,7 @@ for (const page of [
     },
     bodyHtml: `<article>${body}</article>`,
   });
+  html = await preloadPageChunk(html, 'DocsPage');
   await emit(page.path, html);
 }
 

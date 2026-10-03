@@ -49,6 +49,9 @@ services:
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       FROM_EMAIL: ${FROM_EMAIL:-}
       HUGGINGFACE_TOKEN: ${HUGGINGFACE_TOKEN:-}
+      # Proxies appending X-Forwarded-For in front of the cloud service: the
+      # bundled nginx = 1; add one per load balancer in front of it.
+      TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-1}
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8081/health || exit 1"]
       interval: 15s

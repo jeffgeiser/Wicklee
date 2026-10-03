@@ -1,3 +1,4 @@
+import { isProOrAbove as tierIsProOrAbove, isTeamOrAbove as tierIsTeamOrAbove } from '../utils/tier';
 import React, { useState, useEffect, useCallback } from 'react';
 import { version as pkgVersion } from '../../package.json';
 import { Zap, MapPin, Check, ChevronDown, Monitor, Bell, User, Download, Plus, Trash2, Send, AlertTriangle, Slack, Mail, Lock, Key, ChevronRight, Globe } from 'lucide-react';
@@ -5,13 +6,15 @@ import type { NodeAgent, PairingInfo, SentinelMetrics } from '../types';
 import { useFleetStream } from '../contexts/FleetStreamContext';
 import WebhooksSection from './settings/WebhooksSection';
 import AuditLogSection from './settings/AuditLogSection';
+import SsoSection from './settings/SsoSection';
+import ModelGovernanceSection from './settings/ModelGovernanceSection';
 import SLOSection from './settings/SLOSection';
 import DeploymentProfileSection from './settings/DeploymentProfileSection';
 import {
   CURRENCY_OPTIONS, FLEET_DEFAULTS,
-  type FleetSettings, type NodeOverride, type WickleeSettings, type NodeEffectiveSettings,
-} from '../hooks/useSettings';
+  type FleetSettings, type NodeOverride, type WickleeSettings, type NodeEffectiveSettings} from '../hooks/useSettings';
 import { CLOUD_URL } from '../utils/cloudUrl';
+import { IS_AGENT } from '../utils/buildTarget';
 
 // ── Alert types ────────────────────────────────────────────────────────────────
 
@@ -169,8 +172,6 @@ interface SettingsViewProps {
   setNodeOverride: (nodeId: string, patch: Partial<NodeOverride>) => void;
   clearAllOverridesForField: (field: 'kwhRate' | 'currency' | 'pue') => void;
   clearAllNodeOverrides: () => void;
-  theme: 'light' | 'dark';
-  onThemeChange: (t: 'dark' | 'light' | 'system') => void;
   onNavigateToManagement: () => void;
   onNavigateToApiKeys?: () => void;
   onNavigateToPricing?: () => void;
@@ -250,8 +251,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({
   setNodeOverride,
   clearAllOverridesForField,
   clearAllNodeOverrides,
-  theme,
-  onThemeChange,
   onNavigateToManagement,
   onNavigateToApiKeys,
   onNavigateToPricing,
@@ -260,7 +259,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
   subscriptionTier = 'community',
   isLocalHost = false,
 }) => {
-  const isCloudMode = (import.meta.env.VITE_BUILD_TARGET as string) !== 'agent';
+  const isCloudMode = !IS_AGENT;
   const { allNodeMetrics } = useFleetStream();
 
   // ── Fleet defaults drafts (numbers need validation before commit) ───────────
@@ -274,7 +273,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
   const pueDirty = pueDraft !== settings.fleet.pue.toString();
 
   // Save display name to cloud backend (Pro+ only)
-  const isProOrAbove = subscriptionTier === 'pro' || subscriptionTier === 'team' || subscriptionTier === 'enterprise';
+  const isProOrAbove = tierIsProOrAbove(subscriptionTier);
   const saveDisplayNameToCloud = React.useCallback(async (nodeId: string, name: string) => {
     if (!isProOrAbove || !isCloudMode || !getToken) return;
     try {
@@ -402,10 +401,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({
     a.click();
     URL.revokeObjectURL(url);
   };
-
-  // ── Theme preference ───────────────────────────────────────────────────────
-  // settings.fleet.themePreference is the stored value; fall back to current effective theme
-  const themePreference: string = settings.fleet.themePreference ?? theme;
 
   return (
     <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in duration-300 pb-12">
@@ -762,13 +757,30 @@ const SettingsView: React.FC<SettingsViewProps> = ({
       )}
 
       {/* ── ④¾ OPENTELEMETRY EXPORT ───────────────────────────────────── */}
-      {isCloudMode && (subscriptionTier === 'team' || subscriptionTier === 'enterprise') && (
+      {isCloudMode && tierIsTeamOrAbove(subscriptionTier) && (
         <OtelExportSection getToken={getToken} />
       )}
 
       {/* ── ④⅞ AUDIT LOG (Business+) ──────────────────────────────────── */}
       {isCloudMode && (
         <AuditLogSection
+          subscriptionTier={subscriptionTier}
+          getToken={getToken}
+          onNavigateToPricing={onNavigateToPricing}
+        />
+      )}
+
+      {/* ── ④⅞·⑤ SINGLE SIGN-ON (Enterprise) ──────────────────────────── */}
+      {isCloudMode && (
+        <SsoSection
+          subscriptionTier={subscriptionTier}
+          onNavigateToPricing={onNavigateToPricing}
+        />
+      )}
+
+      {/* ── ④⅞·⑥ MODEL GOVERNANCE (Enterprise) ────────────────────────── */}
+      {isCloudMode && (
+        <ModelGovernanceSection
           subscriptionTier={subscriptionTier}
           getToken={getToken}
           onNavigateToPricing={onNavigateToPricing}
@@ -925,9 +937,9 @@ const AlertsSection: React.FC<{
   // Cloud mode = any build that isn't the embedded agent binary (localhost:7700).
   // pairingInfo.status tracks whether a local node is paired — irrelevant here.
   // On wicklee.dev the user is already in the fleet regardless of local pairing state.
-  const isCloudMode    = (import.meta.env.VITE_BUILD_TARGET as string) !== 'agent';
-  const isProOrAbove   = subscriptionTier === 'pro' || subscriptionTier === 'team' || subscriptionTier === 'enterprise';
-  const isTeam         = subscriptionTier === 'team' || subscriptionTier === 'enterprise';
+  const isCloudMode    = !IS_AGENT;
+  const isProOrAbove   = tierIsProOrAbove(subscriptionTier);
+  const isTeam         = tierIsTeamOrAbove(subscriptionTier);
   const { channels, rules, silences, loading, error, createChannel, deleteChannel, testChannel, createRule, deleteRule, createSilence, deleteSilence } =
     useAlerts(getToken, isCloudMode && isProOrAbove);
 
@@ -1073,9 +1085,9 @@ const AlertsSection: React.FC<{
           <div className="rounded-xl bg-indigo-500/5 border border-indigo-500/20 px-5 py-4 flex items-start gap-3">
             <Bell size={14} className="text-indigo-400 mt-0.5 shrink-0" />
             <div className="space-y-1">
-              <p className="text-xs font-semibold text-gray-200">Alerts & Notifications — Pro+</p>
+              <p className="text-xs font-semibold text-gray-200">Alerts &amp; Notifications — Team+</p>
               <p className="text-[11px] text-gray-500 leading-relaxed">
-                Custom alert thresholds, Slack notifications, and stateful alerting. Pro: single Slack channel with custom thresholds. Team: unlimited channels + PagerDuty.
+                Custom alert thresholds, stateful alerting, and unlimited Slack, Email &amp; PagerDuty channels.
               </p>
             </div>
           </div>
@@ -1093,7 +1105,7 @@ const AlertsSection: React.FC<{
             onClick={() => onNavigateToPricing?.()}
             className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition-colors"
           >
-            Upgrade to Pro — $29/mo
+            Upgrade to Team — from $99/mo
           </button>
         </div>
       </Section>

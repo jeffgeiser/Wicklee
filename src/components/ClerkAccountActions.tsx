@@ -9,10 +9,7 @@ import { CLOUD_URL } from '../utils/cloudUrl';
  * chunk is loaded — which only happens in cloud builds where ClerkProvider exists.
  * Agent builds never load this chunk, avoiding the "Missing publishableKey" error.
  */
-const ClerkAccountActions: React.FC<{
-  onClose: () => void;
-  onNavigateSettings: () => void;
-}> = ({ onClose, onNavigateSettings: _nav }) => {
+const ClerkAccountActions: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const { signOut, openUserProfile } = useClerk();
   const { getToken } = useAuth();
 

@@ -249,7 +249,7 @@ Auth: `X-API-Key: wk_live_...` header.
 | Field | Type | Description |
 |-------|------|-------------|
 | inference_state | string | "live" \| "idle-spd" \| "busy" \| "idle" |
-| ollama_tokens_per_second | f32 | tok/s from 20-token probe (~30s) |
+| ollama_tokens_per_second | f32 | tok/s from 20-token probe (≤ every 10 min) |
 | apple_soc_power_w | f32 | Combined CPU+GPU+ANE (Apple Silicon) |
 | nvidia_power_draw_w | f32 | Board power (NVIDIA) |
 | thermal_state | string | "Normal" \| "Fair" \| "Serious" \| "Critical" |

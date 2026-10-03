@@ -13,6 +13,7 @@ import {
   ArrowLeft, ShieldCheck, Server, Cloud, Lock, Eye, EyeOff,
   FileText, Network, KeyRound, Building2,
 } from 'lucide-react';
+import { CONTACT_EMAIL, mailto } from '../utils/contact';
 
 interface TrustPageProps {
   onNavigate: (path: string) => void;
@@ -112,9 +113,13 @@ const TrustPage: React.FC<TrustPageProps> = ({ onNavigate }) => {
               removal is Admin-only, unknown custom roles never escalate.
             </li>
             <li>
-              <strong className="text-white">SSO/SAML</strong> for Business and Enterprise via Clerk
-              Organizations; on self-hosted deployments you bring your own Clerk application and
-              configure SAML in your own tenant.
+              <strong className="text-white">SSO/SAML.</strong> Authentication is delegated to Clerk
+              and the backend reads only the user and org role from the session token, so an
+              SSO login carries the same RBAC and audit behaviour as any other. On a
+              self-hosted control plane you bring your own Clerk application and configure
+              enterprise SAML/OIDC in your own tenant against your own IdP — identity never
+              transits our infrastructure. On hosted wicklee.dev, SSO is available to Enterprise
+              on request, configured per organization.
             </li>
             <li>
               <strong className="text-white">Scoped API keys.</strong> Personal keys see only your nodes;
@@ -137,7 +142,7 @@ const TrustPage: React.FC<TrustPageProps> = ({ onNavigate }) => {
             audit log</strong> (no update or delete paths exist in the codebase). Business+ tenants can read it
             in-app, export the full history as CSV/JSON (formula-injection-hardened), or stream it
             continuously to a SIEM via HMAC-signed webhook batches with automatic tier re-verification
-            and delivery-failure cutoff. Retention: 365 days on Business, unlimited on Enterprise.
+            and delivery-failure cutoff. Retention: unlimited — audit entries are never pruned.
           </p>
         </Section>
 
@@ -183,12 +188,12 @@ const TrustPage: React.FC<TrustPageProps> = ({ onNavigate }) => {
           </div>
           <p className="text-sm text-gray-400 leading-relaxed">
             Security questionnaires, architecture review calls, or a self-hosted evaluation license:{' '}
-            <a href="mailto:sales@wicklee.dev" className="text-emerald-400 underline">sales@wicklee.dev</a>.
-            Running local AI in a regulated environment? Our{' '}
+            <a href={mailto(CONTACT_EMAIL)} className="text-emerald-400 underline">{CONTACT_EMAIL}</a>.
+            Running private AI in a regulated environment? Our{' '}
             <button onClick={() => onNavigate('/design-partners')} className="text-emerald-400 underline">
               design-partner program
             </button>{' '}
-            gives a small number of companies Business free for a year.
+            gives a small number of companies Enterprise free for a year.
           </p>
         </div>
       </div>

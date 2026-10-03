@@ -17,7 +17,7 @@ import { useInsightDismiss } from '../../hooks/useInsightDismiss';
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
-export interface InsightCardProps {
+interface InsightCardProps {
   /** Unique card ID — combined with nodeId as the sessionStorage dismiss key. */
   id: string;
   /** Per-node cards pass the node_id so each node's card is dismissed independently. */

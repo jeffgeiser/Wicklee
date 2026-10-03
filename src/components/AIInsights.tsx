@@ -22,30 +22,30 @@
  *   Mission Control        — FleetStreamContext allNodeMetrics, multi-node
  */
 
+import { isProOrAbove as tierIsProOrAbove } from '../utils/tier';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Thermometer, Zap, HardDrive, Target, BarChart2,
   TrendingDown, Database, Cpu, Globe, Shield,
   Activity, Layers, CheckCircle, ChevronDown, History, Clock,
-  Copy, Check, Server, Radio, FileText,
-} from 'lucide-react';
+  Check} from 'lucide-react';
 
 import { NodeAgent, SentinelMetrics, InsightsTier, FleetEvent, SubscriptionTier, ObservabilityNavParams } from '../types';
 import { useFleetObservations } from '../hooks/useFleetObservations';
 import type { FleetObservation } from '../hooks/useFleetObservations';
 import { useFleetDuty } from '../hooks/useFleetDuty';
 import { useFleetStream } from '../contexts/FleetStreamContext';
-import EventFeed from './EventFeed';
+
 import { computeWES, computeRawWES, thermalCostPct } from '../utils/wes';
 import { INFERENCE_VRAM_THRESHOLD_MB } from '../utils/efficiency';
 import { getNodePowerW } from '../utils/power';
 import { buildReportFromLive } from '../utils/benchmarkReport';
 import type { BenchmarkReport } from '../utils/benchmarkReport';
-import { CLOUD_URL } from '../utils/cloudUrl';
 
 import BenchmarkReportModal from './BenchmarkReportModal';
 import { computeModelFitScore } from '../utils/modelFit';
 import { useSettings } from '../hooks/useSettings';
+import { useLocalMetricsStream } from '../hooks/useLocalMetricsStream';
 
 // Tier 1 cards
 import ThermalDegradationCard  from './insights/tier1/ThermalDegradationCard';
@@ -54,7 +54,7 @@ import MemoryExhaustionCard    from './insights/tier1/MemoryExhaustionCard';
 import PowerAnomalyCard        from './insights/tier1/PowerAnomalyCard';
 
 // Tier 2 cards
-import ModelFitInsightCard from './insights/tier2/ModelFitInsightCard';
+
 import ModelEvictionCard   from './insights/tier2/ModelEvictionCard';
 import IdleResourceCard    from './insights/tier2/IdleResourceCard';
 
@@ -75,13 +75,13 @@ import ChargebackCard from './insights/ChargebackCard';
 import CapacityPlannerCard from './insights/CapacityPlannerCard';
 import MigrationAdvisorCard from './insights/MigrationAdvisorCard';
 import IdleWasteCard from './insights/IdleWasteCard';
-import ObservationCard from './insights/ObservationCard';
+
 import AccordionObservationCard from './insights/AccordionObservationCard';
 import FleetObservationCard from './insights/FleetObservationCard';
-import CompactMonitoringStrip from './insights/CompactMonitoringStrip';
+
 import ModelFitMiniTile from './insights/ModelFitMiniTile';
 import FleetHeaderBar from './insights/FleetHeaderBar';
-import InsightsBriefingCard from './insights/InsightsBriefingCard';
+
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip } from 'recharts';
 import { useLocalObservations } from '../hooks/useLocalObservations';
 import type { DetectedInsight } from '../types/observations';
@@ -89,9 +89,7 @@ import { appendRecentEvent, ONSET_SUPPRESSION_MS } from '../lib/insightLifecycle
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const isLocalHost =
-  window.location.hostname === 'localhost' ||
-  window.location.hostname === '127.0.0.1';
+import { IS_LOCAL_HOST as isLocalHost } from '../utils/buildTarget';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -118,68 +116,6 @@ function fmtVram(m: SentinelMetrics): string | null {
   if (used == null || total <= 0) return null;
   return `${((used / total) * 100).toFixed(0)}%`;
 }
-
-// ── InlineCopyButton — used by Top Finding curl snippet ───────────────────────
-
-const InlineCopyButton: React.FC<{ text: string }> = ({ text }) => {
-  const [copied, setCopied] = useState(false);
-  const handleCopy = useCallback(() => {
-    if (navigator.clipboard) {
-      navigator.clipboard.writeText(text).then(() => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      }).catch(() => {});
-    } else {
-      try {
-        const el = document.createElement('textarea');
-        el.value = text;
-        document.body.appendChild(el);
-        el.select();
-        document.execCommand('copy');
-        document.body.removeChild(el);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      } catch {}
-    }
-  }, [text]);
-  return (
-    <button
-      onClick={handleCopy}
-      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-700 border border-gray-700 text-[10px] font-medium text-gray-400 hover:text-gray-200 transition-colors shrink-0"
-    >
-      {copied
-        ? <><Check className="w-3 h-3 text-green-400" />Copied</>
-        : <><Copy  className="w-3 h-3" />Copy</>}
-    </button>
-  );
-};
-
-// ── InlineCopyAction — used by Top Finding action buttons ─────────────────────
-
-const InlineCopyAction: React.FC<{ text: string; label: string }> = ({ text, label }) => {
-  const [copied, setCopied] = useState(false);
-  const handleCopy = useCallback(() => {
-    navigator.clipboard.writeText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }).catch(() => {});
-  }, [text]);
-  return (
-    <button
-      onClick={handleCopy}
-      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-700
-                 border border-gray-700 hover:border-gray-600 transition-colors group"
-    >
-      <code className="text-[10px] font-mono text-gray-300 group-hover:text-white truncate max-w-[180px]">
-        {label}
-      </code>
-      {copied
-        ? <Check className="w-3 h-3 text-green-400 shrink-0" />
-        : <Copy  className="w-3 h-3 text-gray-500 group-hover:text-gray-300 shrink-0" />
-      }
-    </button>
-  );
-};
 
 // ── Alert statefulness — types & constants ────────────────────────────────────
 
@@ -228,7 +164,7 @@ interface ObsEntry {
 }
 
 /** An entry in the session-scoped Recent Activity log. */
-export interface AlertLogEntry {
+interface AlertLogEntry {
   id:         string;
   title:      string;
   nodeLabel:  string;
@@ -352,33 +288,6 @@ const SectionHeader: React.FC<{ children: React.ReactNode }> = ({ children }) =>
   <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-4">
     {children}
   </p>
-);
-
-/** Single dormant monitoring row shown when an alert condition is NOT firing. */
-const AlertDormantRow: React.FC<{
-  icon: React.ReactNode;
-  label: string;
-  reading: string | null;
-  isFirst?: boolean;
-  isLast?: boolean;
-}> = ({ icon, label, reading, isFirst, isLast }) => (
-  <div
-    className={`
-      flex items-center gap-3 px-4 h-10 bg-gray-800 border-x border-gray-700
-      ${isFirst ? 'border-t rounded-t-2xl' : ''}
-      ${isLast  ? 'border-b rounded-b-2xl' : 'border-b border-gray-700/60'}
-    `}
-  >
-    <span className="text-gray-600 shrink-0">{icon}</span>
-    <span className="text-xs text-gray-600 flex-1">{label}</span>
-    <div className="flex items-center gap-2">
-      <div className="w-1.5 h-1.5 rounded-full bg-green-500/50 animate-pulse" />
-      <span className="font-telin text-[10px] text-gray-600 uppercase tracking-widest">Monitoring</span>
-      {reading && (
-        <span className="font-telin text-xs text-gray-500 ml-1">· {reading}</span>
-      )}
-    </div>
-  </div>
 );
 
 /** Compact nominal bar for Section 2 Pro cards when condition is not active. */
@@ -542,6 +451,8 @@ interface AIInsightsProps {
   /** Navigate to the Models tab — used by model-placement cards (e.g. the
    *  Migration Advisor's "view what's loaded" handoff). */
   onNavigateToModels?: () => void;
+  /** Open /pricing — every Team/Pro upgrade CTA on this page routes there. */
+  onNavigateToPricing?: () => void;
 }
 
 // ── InferenceProfiler — correlated multi-signal timeline (localhost) ────────────
@@ -995,6 +906,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   deepLink,
   onDeepLinkConsumed,
   onNavigateToModels,
+  onNavigateToPricing,
 }) => {
 
   // ── Hooks — all unconditional ──────────────────────────────────────────────
@@ -1041,8 +953,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   const localInferenceStateRef  = useRef<string | null>(null);
   const localIdlePreseededRef   = useRef(false);
   const firstMessageTsRef       = useRef<number | null>(null);
-  const hadActivityRef          = useRef<boolean>(false);
-  const [hadAnyActivity, setHadAnyActivity] = useState(false);
 
   // ── Alert log (session-scoped, Recent Activity panel) ─────────────────────
   const [alertLog, setAlertLog] = useState<AlertLogEntry[]>(() => {
@@ -1075,29 +985,47 @@ const AIInsights: React.FC<AIInsightsProps> = ({
     });
   }, []);
 
+  const { allNodeMetrics, lastSeenMsMap, addFleetEvent } = useFleetStream();
+
   // ── Observation cache — sticky firstFiredMs + hold-after-clear ─────────────
   const obsCacheRef  = useRef(new Map<string, ObsEntry>());
   const [obsEntries, setObsEntries] = useState<ObsEntry[]>([]);
-  const isProOrAbove = subscriptionTier === 'pro' || subscriptionTier === 'team' || subscriptionTier === 'enterprise';
+  const isProOrAbove = tierIsProOrAbove(subscriptionTier);
 
   // Seed obsCacheRef from server observations on mount (Pro+ persistent cards)
+  // Server observations often arrive before the first fleet frame, so seeded
+  // cards would keep the raw node_id as their hostname. Re-run on
+  // allNodeMetrics and relabel those entries once a hostname is known.
   const serverSeededRef = useRef(false);
   useEffect(() => {
-    if (serverSeededRef.current || !isProOrAbove || serverObservations.length === 0) return;
-    serverSeededRef.current = true;
+    if (!isProOrAbove) return;
     const cache = obsCacheRef.current;
-    for (const obs of serverObservations) {
-      if (obs.state === 'acknowledged') continue;
-      const key = `${obs.alert_type}:${obs.node_id}`;
-      if (cache.has(key)) continue;
-      cache.set(key, {
-        insight:      serverObsToInsight(obs, allNodeMetrics[obs.node_id]?.hostname ?? obs.node_id),
-        firstFiredMs: obs.fired_at_ms,
-        resolvedMs:   obs.state === 'resolved' ? (obs.resolved_at_ms ?? Date.now()) : null,
-      });
+    let changed = false;
+    if (!serverSeededRef.current && serverObservations.length > 0) {
+      serverSeededRef.current = true;
+      changed = true;
+      for (const obs of serverObservations) {
+        if (obs.state === 'acknowledged') continue;
+        const key = `${obs.alert_type}:${obs.node_id}`;
+        if (cache.has(key)) continue;
+        cache.set(key, {
+          insight:      serverObsToInsight(obs, allNodeMetrics[obs.node_id]?.hostname ?? obs.node_id),
+          firstFiredMs: obs.fired_at_ms,
+          resolvedMs:   obs.state === 'resolved' ? (obs.resolved_at_ms ?? Date.now()) : null,
+        });
+      }
     }
-    setObsEntries(Array.from(cache.values()));
-  }, [serverObservations, isProOrAbove]);
+    if (!serverSeededRef.current) return;
+    for (const [key, entry] of cache) {
+      const { nodeId, hostname } = entry.insight;
+      if (hostname !== nodeId) continue;
+      const resolved = allNodeMetrics[nodeId]?.hostname;
+      if (!resolved || resolved === hostname) continue;
+      cache.set(key, { ...entry, insight: { ...entry.insight, hostname: resolved } });
+      changed = true;
+    }
+    if (changed) setObsEntries(Array.from(cache.values()));
+  }, [serverObservations, isProOrAbove, allNodeMetrics]);
 
   /**
    * Onset suppression map — tracks the last timestamp a pattern_onset event was
@@ -1146,8 +1074,8 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   const nodeSessionStartRef = useRef<Record<string, number>>({});
   const nodeHadActivityRef  = useRef<Record<string, boolean>>({});
 
-  // Fleet data from SSE context
-  const { allNodeMetrics, lastSeenMsMap, addFleetEvent, fleetEvents } = useFleetStream();
+  // Fleet data from SSE context: destructured from useFleetStream() above,
+  // ahead of the observation-cache effect that depends on allNodeMetrics.
 
   // Merged event emitter — prop takes precedence, falls back to context
   const emitFleetEvent = onFleetEvent ?? addFleetEvent;
@@ -1155,7 +1083,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   const { getNodeSettings } = useSettings();
 
   // ── Server-side observations (agent + cloud) ────────────────────────────────
-  const [observations, setObservations]             = useState<DetectedInsight[]>([]);
   const lastObsEvalRef                              = useRef<number>(0);
 
   // Tick every 10s to keep elapsed times fresh in the status rail
@@ -1164,70 +1091,37 @@ const AIInsights: React.FC<AIInsightsProps> = ({
     return () => clearInterval(id);
   }, []);
 
-  // Local SSE (Cockpit only)
-  const esRef = useRef<EventSource | null>(null);
+  // Local agent stream (Cockpit only) — shared connection, see useLocalMetricsStream.
+  useLocalMetricsStream((data) => {
+    setLocalSentinel(data);
 
-  useEffect(() => {
-    if (!isLocalHost) return;
+    if (firstMessageTsRef.current === null) {
+      firstMessageTsRef.current = Date.now();
+    }
 
-    let retry: ReturnType<typeof setTimeout>;
+    const watts = getNodePowerW(data);
+    if (watts != null && wattReadingsRef.current.length < 10) {
+      wattReadingsRef.current = [...wattReadingsRef.current, watts];
+      if (wattReadingsRef.current.length === 10) {
+        const avg = wattReadingsRef.current.reduce((a, b) => a + b, 0) / 10;
+        setSessionBaselineWatts(avg);
+      }
+    }
 
-    const connect = () => {
-      const es = new EventSource('/api/metrics');
-      esRef.current = es;
-
-      es.onmessage = (ev) => {
-        try {
-          const data = JSON.parse(ev.data) as SentinelMetrics;
-          setLocalSentinel(data);
-
-          if (firstMessageTsRef.current === null) {
-            firstMessageTsRef.current = Date.now();
-          }
-
-          const watts = getNodePowerW(data);
-          if (watts != null && wattReadingsRef.current.length < 10) {
-            wattReadingsRef.current = [...wattReadingsRef.current, watts];
-            if (wattReadingsRef.current.length === 10) {
-              const avg = wattReadingsRef.current.reduce((a, b) => a + b, 0) / 10;
-              setSessionBaselineWatts(avg);
-            }
-          }
-
-          // Track inference_state transitions for eviction / idle-resource cards.
-          const state = data.inference_state ?? 'idle';
-          const prev  = localInferenceStateRef.current;
-          if (state === 'live') {
-            setLocalIdleStartMs(null); // actively inferring — reset idle clock
-            if (!hadActivityRef.current) {
-              hadActivityRef.current = true;
-              setHadAnyActivity(true);
-            }
-          } else if (prev === 'live' || (prev === null && localIdlePreseededRef.current)) {
-            // Transitioned from live → idle (or first non-live frame after preseed)
-            setLocalIdleStartMs(ts => ts ?? Date.now());
-          } else if (prev === null && !localIdlePreseededRef.current) {
-            // First frame, preseed not yet done — set idle clock conservatively
-            setLocalIdleStartMs(ts => ts ?? Date.now());
-          }
-          localInferenceStateRef.current = state;
-        } catch { /* malformed frame */ }
-      };
-
-      es.onerror = () => {
-        es.close();
-        esRef.current = null;
-        retry = setTimeout(connect, 3_000);
-      };
-    };
-
-    connect();
-    return () => {
-      clearTimeout(retry);
-      esRef.current?.close();
-      esRef.current = null;
-    };
-  }, []);
+    // Track inference_state transitions for eviction / idle-resource cards.
+    const state = data.inference_state ?? 'idle';
+    const prev  = localInferenceStateRef.current;
+    if (state === 'live') {
+      setLocalIdleStartMs(null); // actively inferring — reset idle clock
+    } else if (prev === 'live' || (prev === null && localIdlePreseededRef.current)) {
+      // Transitioned from live → idle (or first non-live frame after preseed)
+      setLocalIdleStartMs(ts => ts ?? Date.now());
+    } else if (prev === null && !localIdlePreseededRef.current) {
+      // First frame, preseed not yet done — set idle clock conservatively
+      setLocalIdleStartMs(ts => ts ?? Date.now());
+    }
+    localInferenceStateRef.current = state;
+  });
 
   // ── Localhost: pre-seed idle start from DuckDB history ───────────────────
   // Fetches the last hour of 1-min aggregates to find when inference was last
@@ -1240,7 +1134,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
     localIdlePreseededRef.current = true;
 
     const from = Date.now() - 60 * 60 * 1_000;
-    fetch(`http://localhost:7700/api/history?node_id=${encodeURIComponent(nodeId)}&from=${from}&resolution=1min`)
+    fetch(`/api/history?node_id=${encodeURIComponent(nodeId)}&from=${from}&resolution=1min`)
       .then(r => r.ok ? r.json() : null)
       .then((data: { samples?: Array<{ ts_ms: number; tps?: number | null }> } | null) => {
         if (!data?.samples?.length) return;
@@ -1256,7 +1150,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
         }
       })
       .catch(() => {}); // non-fatal; SSE tracking fills in the gap
-  }, [isLocalHost, localSentinel?.node_id]);
+  }, [localSentinel?.node_id]);
 
   // ── Fleet activity tracking (Mission Control only) ────────────────────────
   // On every SSE frame, track inference_state transitions per node so eviction
@@ -1436,7 +1330,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
       return b.firstFiredMs - a.firstFiredMs;
     });
     setObsEntries(sorted);
-    setObservations(allObservations);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [localAgentObs, serverObservations]);
 
@@ -1793,22 +1686,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   }, [fitModelKey]);
 
   // ── RENDER ────────────────────────────────────────────────────────────────
-
-  // ── Benchmark report export ───────────────────────────────────────────────
-
-  const handleExportBenchmark = () => {
-    // Pick the node with the best (highest) penalized WES from live data, or localSentinel
-    const source = isLocalHost
-      ? localSentinel
-      : effectiveNodes.reduce<SentinelMetrics | null>((best, n) => {
-          const wes = computeNodeWes(n);
-          if (wes == null) return best;
-          if (best == null) return n;
-          return wes > (computeNodeWes(best) ?? 0) ? n : best;
-        }, null);
-    if (!source) return;
-    setBenchmarkReport(buildReportFromLive(source));
-  };
 
   return (
     <>
@@ -2324,6 +2201,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 </div>
               ) : (
                 <InsightsTeaseCard
+                  onUpgradeClick={onNavigateToPricing}
                   title="Silicon Fit Audit"
                   icon={<Cpu className="w-3.5 h-3.5" />}
                   tierRequired="team"
@@ -2370,27 +2248,27 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 <ChargebackCard
                   getToken={getToken}
                   subscriptionTier={subscriptionTier}
+                  onNavigateToPricing={onNavigateToPricing}
                 />
               )}
 
               {/* Capacity Planner + Migration Advisor (Team+, cloud only — measured-WES fleet planning) */}
               {!isLocalHost && getToken && (
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                  <CapacityPlannerCard getToken={getToken} subscriptionTier={subscriptionTier} />
-                  <MigrationAdvisorCard getToken={getToken} subscriptionTier={subscriptionTier} onViewModels={onNavigateToModels} />
+                  <CapacityPlannerCard getToken={getToken} subscriptionTier={subscriptionTier} onNavigateToPricing={onNavigateToPricing} />
+                  <MigrationAdvisorCard getToken={getToken} subscriptionTier={subscriptionTier} onNavigateToPricing={onNavigateToPricing} onViewModels={onNavigateToModels} />
                 </div>
               )}
 
               {/* Idle Waste & right-sizing (Team+, cloud only — phantom-load cost + weekly digest) */}
               {!isLocalHost && getToken && (
-                <IdleWasteCard getToken={getToken} subscriptionTier={subscriptionTier} />
+                <IdleWasteCard getToken={getToken} subscriptionTier={subscriptionTier} onNavigateToPricing={onNavigateToPricing} />
               )}
 
               {/* Performance History — Tok/s · Power · GPU% · Mem% (cloud only) */}
               {!isLocalHost && getToken && (
                 <MetricsHistoryChart
                   getToken={getToken}
-                  historyDays={historyDays}
                   subscriptionTier={subscriptionTier}
                   selectedNodeId={perfNodeId}
                   onNodeSelect={setPerfNodeId}
@@ -2473,6 +2351,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                   </div>
                 ) : (
                   <InsightsLiteCard
+                    onUpgradeClick={onNavigateToPricing}
                     title="WES Leaderboard"
                     icon={<BarChart2 className="w-3.5 h-3.5" />}
                     tierRequired="pro"
@@ -2516,6 +2395,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 </div>
               ) : (
                 <InsightsTeaseCard
+                  onUpgradeClick={onNavigateToPricing}
                   title="Efficiency Regression"
                   icon={<TrendingDown className="w-3.5 h-3.5" />}
                   tierRequired="team"
@@ -2552,6 +2432,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 </div>
               ) : (
                 <InsightsTeaseCard
+                  onUpgradeClick={onNavigateToPricing}
                   title="Memory Forecast"
                   icon={<Database className="w-3.5 h-3.5" />}
                   tierRequired="team"
@@ -2599,6 +2480,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 </div>
               ) : (
                 <InsightsTeaseCard
+                  onUpgradeClick={onNavigateToPricing}
                   title="Hardware Cold Start"
                   icon={<Activity className="w-3.5 h-3.5" />}
                   tierRequired="team"
@@ -2638,6 +2520,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 </div>
               ) : (
                 <InsightsTeaseCard
+                  onUpgradeClick={onNavigateToPricing}
                   title="Fleet Thermal Diversity"
                   icon={<Globe className="w-3.5 h-3.5" />}
                   tierRequired="team"
@@ -2680,6 +2563,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
 
               {/* Inference Density (Historical) — Team locked */}
               <InsightsLockedCard
+                onUpgradeClick={onNavigateToPricing}
                 title="Inference Density (Historical)"
                 icon={<Layers className="w-3.5 h-3.5" />}
                 description="Historical playback of the inference density hive plot. Unlock peak-hour analysis and utilisation trends."
@@ -2688,6 +2572,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
 
               {/* Sovereignty Audit — Enterprise locked */}
               <InsightsLockedCard
+                onUpgradeClick={onNavigateToPricing}
                 title="Sovereignty Audit"
                 icon={<Shield className="w-3.5 h-3.5" />}
                 description="Cryptographically signed compliance PDF. Audit trail of every telemetry destination, pairing event, and outbound connection."

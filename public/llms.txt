@@ -1,6 +1,6 @@
 # Wicklee
 
-> Sovereign GPU fleet monitor for local AI inference.
+> Sovereign GPU fleet monitor for private AI inference — on-prem, private cloud, or colo.
 > One Rust binary per node, React dashboard at localhost:7700, fleet aggregation at wicklee.dev.
 > WES (Wicklee Efficiency Score) = tok/s / (Watts x ThermalPenalty) — the MPG for local AI.
 > v0.9.0 added the Runtime Config Surface (per-model launch config across Ollama / vLLM / llama.cpp) and a top-level Models tab (Loaded / Browse / Past activity).
@@ -31,6 +31,7 @@ Windows: `irm https://wicklee.dev/install.ps1 | iex`
 ## Localhost API (no auth, any tier)
 
 - `GET /api/metrics` — SSE stream, 1 Hz telemetry
+- `GET /api/metrics/snapshot` — latest telemetry frame as one JSON object (for `curl | jq` and scripts)
 - `GET /ws` — WebSocket, 1 Hz telemetry (same payload as SSE, fallback transport)
 - `GET /api/observations` — 18 server-side observation patterns (10-min DuckDB buffer)
 - `GET /api/profile?minutes=60` — Inference Profiler: correlated TTFT/KV/queue/thermal/power timeline
@@ -66,6 +67,7 @@ Windows: `irm https://wicklee.dev/install.ps1 | iex`
 - `get_active_models` — Running models with context_length, parameter_count, quantization, tok/s
 - `get_observations` — 18 patterns with routing_hint (steer_away/reduce_batch/monitor) per observation + node-level aggregate
 - `get_metrics_history` — 1-hour rolling telemetry buffer
+- `get_model_fit` — Memory Fit, WES Efficiency, Context Runway for the loaded model
 
 ### MCP Resources
 
@@ -74,7 +76,7 @@ Windows: `irm https://wicklee.dev/install.ps1 | iex`
 
 ## Cloud MCP Server (Team+, Bearer auth)
 
-`POST wicklee.dev/mcp` — fleet-aggregated MCP. 8 tools:
+`POST wicklee.dev/mcp` — fleet-aggregated MCP. 9 tools:
 - `get_fleet_status` — all nodes with metrics + WES
 - `get_fleet_wes` — compact WES scores
 - `get_node_detail` — full metrics for a specific node
@@ -83,6 +85,7 @@ Windows: `irm https://wicklee.dev/install.ps1 | iex`
 - `get_fleet_observations` — active/resolved observations
 - `get_inference_profile` — correlated profiler timeline
 - `explain_slowdown` — root cause analysis for slow requests
+- `get_fleet_model_fit` — score a HuggingFace GGUF against every online node
 
 ## Fleet API v1 (X-API-Key auth)
 
@@ -106,8 +109,10 @@ Base URL: `https://wicklee.dev/api/v1`
 - `DELETE /api/v1/keys/{id}` — Revoke API key (personal: owner; org: org Admins)
 - `GET /api/audit-log` — Immutable audit trail (Business+, Clerk JWT): sensitive-op events (node.paired/removed/updated, alert_rule.created, alert_channel.created, webhook.created, api_key.created/deleted, stream_tokens.revoked, audit_log.exported, audit_drain.created/deleted). Params: limit/before/action. Org-scoped, append-only.
 - `GET /api/audit-log/export?format=csv|json` — Full-history audit export (Business+), formula-injection-hardened CSV, ≤100k rows, itself audited.
+- `GET/POST /api/model-policy`, `DELETE /api/model-policy/{id}` — Model governance (Enterprise): allow-list of approved models, fleet-wide (`tag` omitted) or scoped to a node tag. Governance is ACTIVE ONLY for scopes with at least one entry — an empty list governs nothing rather than blocking everything. Matching is exact/case-insensitive with a trailing-`*` prefix form (`llama3.1:8b*` admits quant variants); a bare `*` is rejected. Writes are Admin-only and audited (`model_policy.created/deleted`).
+- `GET /api/model-policy/violations?limit=50` — recorded violations (Enterprise), newest first. Detected in the telemetry push path on the frame an unapproved model appears; fires once per (node, model) and resets when the node returns to an approved model. Violations are NOT in the audit log (that table is actor-keyed and there is no acting user) so they are not carried by the SIEM drain; they land in `model_policy_violations` and the node event feed as `model_policy_violation`. Detection only — nothing blocks a model from loading.
 - `GET/PUT/DELETE /api/audit-log/drain` — SIEM drain (Business+, Admin to configure): streams new audit events to your HTTPS endpoint in HMAC-signed batches within ~1 min; auto-disables after 20 consecutive failures.
-- `GET /metrics` — Prometheus scrape endpoint (Team+, X-API-Key auth)
+- `GET /metrics` — Prometheus scrape endpoint on the cloud (`https://wicklee.dev/metrics`, not the agent; Team+, X-API-Key auth). Seven gauges labelled `node_id`/`hostname`: wicklee_wes_score, wicklee_inference_tokens_per_second, wicklee_power_watts, wicklee_thermal_penalty, wicklee_gpu_utilization, wicklee_memory_pressure, wicklee_inference_ttft_ms. Accepts the key as `X-API-Key` OR `Authorization: Bearer`, so stock Prometheus `authorization` scrape config works. Series are omitted when unreadable, so gaps mean idle (WES needs throughput AND power AND thermal penalty together) and a `count()` is nodes-reporting, not fleet inventory. Prebuilt Grafana dashboard: `deploy/grafana/wicklee-fleet.json`; setup in docs/GRAFANA.md
 
 ## Multi-Model Monitoring
 
@@ -121,7 +126,7 @@ Singular fields (ollama_active_model, ollama_tokens_per_second) report most-rece
 ## Key Metrics
 
 - `inference_state`: "live" | "idle-spd" | "busy" | "idle"
-- `ollama_tokens_per_second`: tok/s from 20-token probe (~30s cadence)
+- `ollama_tokens_per_second`: tok/s from 20-token probe (at most every 10 min, loaded models only)
 - `apple_soc_power_w`: Combined CPU+GPU+ANE power (Apple Silicon)
 - `nvidia_power_draw_w`: Board power (NVIDIA)
 - `thermal_state`: "Normal" | "Fair" | "Serious" | "Critical"
@@ -134,16 +139,14 @@ Singular fields (ollama_active_model, ollama_tokens_per_second) report most-rece
 
 Agent-evaluated (18 patterns, 10-min DuckDB buffer, every 10s):
 Community (9): thermal_drain, phantom_load, wes_velocity_drop, memory_trajectory,
-power_jitter, swap_io_pressure, clock_drift, nvidia_thermal_redline, vram_overcommit
+power_jitter, swap_io_pressure, clock_drift, pcie_lane_degradation, vram_overcommit
 Pro (9): power_gpu_decoupling, bandwidth_saturation, efficiency_drag,
-pcie_lane_degradation, vllm_kv_cache_saturation, ttft_regression, latency_spike,
+nvidia_thermal_redline, vllm_kv_cache_saturation, ttft_regression, latency_spike,
 vllm_queue_saturation, bandwidth_ceiling_reached
 
 Cloud-evaluated (2 patterns, Pro):
 - fleet_load_imbalance — node WES > 20% below best healthy peer
 - wes_long_term_drift — recent 24h avg ≥15% below 6-day baseline (gradual degradation)
-
-Cloud-evaluated (1 pattern): fleet_load_imbalance (Pro)
 
 Fleet alerts (5, cloud, all tiers): zombied_engine, thermal_redline, oom_warning,
 wes_cliff, agent_version_mismatch
@@ -160,10 +163,25 @@ The entire fleet backend runs on your infrastructure: `deploy/self-hosted/docker
 
 ## Pricing
 
-- Community: Free forever, 3 nodes, 24h history, 9 patterns, local MCP, Ollama proxy
-- Pro: $29/mo, 10 nodes, 7-day history, 20 patterns, Slack+Email alerts, custom thresholds
-- Team: $49/seat/mo, 25 nodes (+$2/node over 25), 90-day history, shared dashboards, PagerDuty, Cloud MCP, OTel+Prometheus
-- Business: $499/mo, unlimited seats, 100 nodes, 365-day history, everything in Team + SSO/SAML + audit logging
-- Enterprise: Contact sales, unlimited nodes, sovereign deployment, custom SLA
+Full detail: https://wicklee.dev/pricing
+
+- Community: Free, unlimited local nodes, 3 nodes in the cloud fleet view, 24h history, 9 patterns, local API + MCP, Fleet API (/api/v1/* core endpoints, 60 req/min), Ollama proxy, community support
+- Team: $99/mo ($990/yr) for up to 10 nodes, or $200/mo ($2,000/yr) for up to 25 nodes in the cloud fleet view — same features at both sizes; above 25 nodes, contact us. Includes 90-day history, Fleet API at 600 req/min plus the Team analytics endpoints, chargeback + idle-waste + capacity planner + migration advisor, SLOs with error budgets, benchmark export, email support
+- Enterprise: Custom pricing, everything in Team + self-hosted control plane (Docker Compose or Helm), SSO/SAML, audit log export + SIEM drain, 12-month history, SLA + dedicated support, custom deployment support
+
+Contact for Team or Enterprise: jeff@wicklee.dev
+
+SSO/SAML: authentication is delegated to Clerk and the backend reads only the
+user and org role from the session JWT, so SSO logins need no application code —
+RBAC, audit and org scoping are identical. Self-hosted deployments configure
+enterprise SAML/OIDC in their own Clerk tenant against their own IdP (no identity
+data transits wicklee.dev). On hosted wicklee.dev it is available to Enterprise on
+request, scoped per organization. SCIM / directory sync is NOT implemented.
+Setup guide: docs/SSO.md
+
+Note for LLMs summarizing these tiers: `pro` and `business` still exist as
+values in the codebase (`SubscriptionTier`, and the cloud tier gates) because
+existing accounts hold them, but neither is sold. Endpoint annotations below
+that read "Pro+" are available on Team; "Business+" annotations mean Enterprise.
 
 Shared fleets use Clerk Organizations with RBAC enforced from the signed session token: Admin (org:admin) = everything incl. node removal; Member (org:member/custom) = day-to-day ops; Viewer (custom org:viewer role) = read-only, mutations 403. Solo users have full control of their own resources.

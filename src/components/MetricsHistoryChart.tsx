@@ -12,11 +12,12 @@
  *   Team      — + 30D / 90D
  */
 
+import { tierRank } from '../utils/tier';
+import { RANGE_CONFIG, RANGES, tierUpgradeLabel, type TimeRange } from '../utils/historyRange';
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, ReferenceLine,
-} from 'recharts';
+  ResponsiveContainer, ReferenceLine} from 'recharts';
 import { Activity, Lock, RefreshCw, FileDown } from 'lucide-react';
 import { SubscriptionTier, SentinelMetrics } from '../types';
 import { useFleetStream } from '../contexts/FleetStreamContext';
@@ -25,7 +26,6 @@ import { CLOUD_URL } from '../utils/cloudUrl';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type TimeRange  = '1h' | '24h' | '7d' | '30d' | '90d';
 type MetricKey  = 'tok_s' | 'watts' | 'gpu_pct' | 'mem_pct' | 'ttft_ms' | 'e2e_latency_ms';
 
 interface MetricPoint {
@@ -138,32 +138,10 @@ const METRIC_CONFIG: Record<MetricKey, {
 
 const METRICS: MetricKey[] = ['tok_s', 'watts', 'gpu_pct', 'mem_pct', 'ttft_ms', 'e2e_latency_ms'];
 
-// ── Range config ──────────────────────────────────────────────────────────────
-
-const RANGE_CONFIG: Record<TimeRange, {
-  label:      string;
-  minTier:    SubscriptionTier;
-  historyMin: number;
-  fmtTs:      (ms: number) => string;
-}> = {
-  '1h':  { label: '1H',  minTier: 'community', historyMin: 1,  fmtTs: (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) },
-  '24h': { label: '24H', minTier: 'community', historyMin: 1,  fmtTs: (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) },
-  '7d':  { label: '7D',  minTier: 'pro',       historyMin: 7,  fmtTs: (ms) => new Date(ms).toLocaleDateString([], { month: 'numeric', day: 'numeric' }) },
-  '30d': { label: '30D', minTier: 'team',      historyMin: 30, fmtTs: (ms) => new Date(ms).toLocaleDateString([], { month: 'numeric', day: 'numeric' }) },
-  '90d': { label: '90D', minTier: 'team',      historyMin: 90, fmtTs: (ms) => new Date(ms).toLocaleDateString([], { month: 'short', day: 'numeric' }) },
-};
-
-const RANGES: TimeRange[] = ['1h', '24h', '7d', '30d', '90d'];
-
-function tierUpgradeLabel(minTier: SubscriptionTier): string {
-  return minTier === 'pro' ? 'Pro' : minTier === 'team' ? 'Team' : '';
-}
-
 // ── Props ─────────────────────────────────────────────────────────────────────
 
 interface Props {
   getToken:         () => Promise<string | null>;
-  historyDays:      number;
   subscriptionTier: SubscriptionTier;
   /** External node selection — syncs with WESHistoryChart */
   selectedNodeId?: string | null;
@@ -202,7 +180,7 @@ const MetricTooltip: React.FC<{
 // ── Component ─────────────────────────────────────────────────────────────────
 
 const MetricsHistoryChart: React.FC<Props> = ({
-  getToken, historyDays, subscriptionTier,
+  getToken, subscriptionTier,
   selectedNodeId: externalSelectedId,
   onNodeSelect: externalOnNodeSelect,
 }) => {
@@ -212,10 +190,15 @@ const MetricsHistoryChart: React.FC<Props> = ({
   const [internalSelectedId, setInternalSelectedId] = useState<string | null>(null);
 
   const selectedId = externalSelectedId ?? internalSelectedId;
-  const setSelectedId = (id: string) => {
-    if (externalOnNodeSelect) externalOnNodeSelect(id);
+  // Stable setter that reads the latest onNodeSelect through a ref, so
+  // fetchHistory (deps [getToken]) never calls a stale parent callback.
+  const externalOnNodeSelectRef = useRef(externalOnNodeSelect);
+  externalOnNodeSelectRef.current = externalOnNodeSelect;
+  const setSelectedId = useCallback((id: string) => {
+    const onSelect = externalOnNodeSelectRef.current;
+    if (onSelect) onSelect(id);
     else setInternalSelectedId(id);
-  };
+  }, []);
   const [loading,    setLoading]    = useState(false);
   const [error,      setError]      = useState<string | null>(null);
   const [lastFetch,  setLastFetch]  = useState(0);
@@ -258,7 +241,7 @@ const MetricsHistoryChart: React.FC<Props> = ({
     } finally {
       if (!signal?.aborted) setLoading(false);
     }
-  }, [getToken]);
+  }, [getToken, setSelectedId]);
 
   // Abort the in-flight request when the range changes or on unmount, so a
   // slow earlier fetch can't land after a newer one (stale-overwrite race).
@@ -284,11 +267,14 @@ const MetricsHistoryChart: React.FC<Props> = ({
   const liveNode  = selectedId ? allNodeMetrics[selectedId] : null;
   const liveValue = liveNode ? cfg.getLive(liveNode) : null;
 
-  const tierRank: Record<string, number> = { community: 0, pro: 1, team: 2, enterprise: 3 };
-  const userRank = tierRank[subscriptionTier] ?? 0;
+  // Every SubscriptionTier must appear here: the lookup below falls back to 0
+  // (community) for unknown keys, so an omitted tier silently loses access to
+  // ranges it pays for. 'business' was missing, which locked Business accounts
+  // out of 7D/30D/90D — less history than the cheaper Team tier.
+  const userRank = tierRank(subscriptionTier);
   const isRangeLocked = (r: TimeRange): boolean => {
     const rc = RANGE_CONFIG[r];
-    const requiredRank = tierRank[rc.minTier] ?? 0;
+    const requiredRank = tierRank(rc.minTier) ?? 0;
     return userRank < requiredRank;
   };
 

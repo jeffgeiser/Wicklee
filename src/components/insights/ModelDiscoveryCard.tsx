@@ -10,7 +10,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Search, Package, ExternalLink, Copy, Check, ChevronDown, ChevronRight, Cpu, Loader2 } from 'lucide-react';
+import { Search, Package, ExternalLink, ChevronDown, ChevronRight, Cpu, Loader2 } from 'lucide-react';
 import { ELECTRICITY_RATE_USD_PER_KWH } from '../../utils/efficiency';
 import { useSettings } from '../../hooks/useSettings';
 import {
@@ -23,43 +23,14 @@ import {
   DEFAULT_CONTEXT_LENGTH,
   contextLengthLabel,
 } from '../../utils/quantQuality';
-import { useModelComparisonHistory, projectTpsForVariant, type ComparisonRow, type TpsProjection } from '../../utils/modelHistory';
+import { useModelComparisonHistory, projectTpsForVariant, type ComparisonRow } from '../../utils/modelHistory';
 import { inferCategory, categoryDescription, ALL_CATEGORIES, type ModelCategory } from '../../utils/modelCategory';
-import DiscoveryHoverCard, { type DiscoveryHoverRow } from './DiscoveryHoverCard';
-
-// ── Projection-tier helpers (shared with FleetModelDiscovery — when those
-// stabilise, lift these into modelHistory.ts) ─────────────────────────────
-
-/** Single-word label for a projection's confidence tier. */
-function projConfidenceLabel(c: TpsProjection['confidence']): string {
-  switch (c) {
-    case 'cohort':      return 'measured';
-    case 'sample':      return 'measured (1 sample)';
-    case 'bandwidth':   return 'scaled estimate';
-    case 'theoretical': return 'spec estimate';
-  }
-}
-/** One-line body explaining how this projection was produced. */
-function projConfidenceBody(p: TpsProjection): string {
-  switch (p.confidence) {
-    case 'cohort':
-      return `Average across ${p.count} similar-size models that have actually run on this node. Highest fidelity.`;
-    case 'sample':
-      return `Single similar-size measurement on this node, shown as a point estimate ±10%.`;
-    case 'bandwidth':
-      return `Scaled from your node's measured throughput on a different-size model. Inference is memory-bandwidth-bound: tok/s ∝ 1/size.`;
-    case 'theoretical':
-      return `Estimated from this chip's published memory bandwidth and the model's file size. No telemetry needed — refines once you run a model.`;
-  }
-}
-/** Structured rows summarising the projection range + method. */
-function projConfidenceRows(p: TpsProjection): DiscoveryHoverRow[] {
-  return [
-    { label: 'Range',  value: `${p.min} – ${p.max} tok/s` },
-    { label: 'Source', value: projConfidenceLabel(p.confidence), accent: p.confidence === 'theoretical' ? 'amber' : 'cyan' },
-    ...(p.count > 0 ? [{ label: 'Samples', value: `${p.count}` } as DiscoveryHoverRow] : []),
-  ];
-}
+import DiscoveryHoverCard from './DiscoveryHoverCard';
+import { RowCopyButton, CopyButton } from '../shared/CopyButton';
+import {
+  fitColors, fitGradeLabel, fmtDl, shortModelName, uploaderName,
+  projConfidenceLabel, projConfidenceBody, projConfidenceRows,
+} from './discoveryHelpers';
 
 /** Sort modes for the Discovery results list. Default = 'fit' (current behavior). */
 type SortMode = 'fit' | 'popularity' | 'speed' | 'cost' | 'size_asc' | 'size_desc';
@@ -99,101 +70,9 @@ interface DiscoveryResponse {
   models:         ModelResult[];
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function fitColors(score: number): { dot: string; badge: string; text: string } {
-  if (score >= 80) return { dot: 'bg-emerald-500', badge: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/20', text: 'text-emerald-400' };
-  if (score >= 60) return { dot: 'bg-green-500',   badge: 'bg-green-500/15 text-green-400 border-green-500/20',       text: 'text-green-400' };
-  if (score >= 40) return { dot: 'bg-yellow-500',  badge: 'bg-yellow-500/15 text-yellow-400 border-yellow-500/20',    text: 'text-yellow-400' };
-  if (score > 0)   return { dot: 'bg-orange-500',  badge: 'bg-orange-500/15 text-orange-400 border-orange-500/20',    text: 'text-orange-400' };
-  return             { dot: 'bg-red-500',    badge: 'bg-red-500/15 text-red-400 border-red-500/20',          text: 'text-red-400' };
-}
-
-function fmtDl(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000)     return `${(n / 1_000).toFixed(0)}K`;
-  return `${n}`;
-}
-
-function shortModelName(model_id: string): string {
-  return model_id.split('/').pop() ?? model_id;
-}
-
-function uploaderName(model_id: string): string | null {
-  const parts = model_id.split('/');
-  return parts.length > 1 ? parts[0] : null;
-}
-
-function fitGradeLabel(score: number): string {
-  if (score >= 80) return 'Excellent';
-  if (score >= 60) return 'Good';
-  if (score >= 40) return 'Tight';
-  if (score > 0)   return 'Marginal';
-  return "Won't Fit";
-}
-
-function fitBarClass(score: number): string {
-  if (score >= 80) return 'bg-emerald-500';
-  if (score >= 60) return 'bg-green-500';
-  if (score >= 40) return 'bg-yellow-500';
-  if (score > 0)   return 'bg-orange-500';
-  return 'bg-red-500';
-}
-
-/**
- * Per-row inline copy button — stops propagation so clicking it doesn't
- * also toggle the row's expand state.
- */
-const RowCopyButton: React.FC<{ text: string; title?: string }> = ({ text, title }) => {
-  const [copied, setCopied] = useState(false);
-  const handle = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    e.preventDefault();
-    navigator.clipboard.writeText(text).catch(() => {});
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  };
-  return (
-    <button
-      onClick={handle}
-      title={title ?? 'Copy pull command'}
-      className={`inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded border transition-colors ${
-        copied
-          ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300'
-          : 'bg-gray-800/60 border-gray-700/60 text-gray-400 hover:text-cyan-300 hover:border-cyan-500/30'
-      }`}
-    >
-      {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-      <span>{copied ? 'Copied!' : 'Copy pull'}</span>
-    </button>
-  );
-};
-
 function hfUrl(model_id: string): string {
   return `https://huggingface.co/${model_id}`;
 }
-
-// ── Copy button ───────────────────────────────────────────────────────────────
-
-const CopyButton: React.FC<{ text: string; className?: string }> = ({ text, className = '' }) => {
-  const [copied, setCopied] = useState(false);
-  const handle = () => {
-    navigator.clipboard.writeText(text).catch(() => {});
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1800);
-  };
-  return (
-    <button
-      onClick={handle}
-      title="Copy command"
-      className={`p-1 rounded transition-colors hover:bg-gray-700/60 ${className}`}
-    >
-      {copied
-        ? <Check className="w-3 h-3 text-emerald-400" />
-        : <Copy className="w-3 h-3 text-gray-500 hover:text-gray-300" />}
-    </button>
-  );
-};
 
 // ── Variant table (extracted to allow useState) ───────────────────────────────
 
@@ -266,7 +145,7 @@ const VariantTable: React.FC<{
       {/* Variant rows */}
       <div className="space-y-0">
         {displayed.map(v => {
-          const vc = fitColors(v._score);
+          const vc = fitColors(v._score, 'red');
           const label = quantLabel(v);
           const isRecommended = hasRecQuant && v.quant?.toUpperCase() === recQuant.toUpperCase();
           const proj = history ? projectTpsForVariant(history, v.file_size_mb, v.quant) : null;
@@ -353,7 +232,7 @@ const VariantTable: React.FC<{
       {pullCmd && (
         <div className="flex items-center gap-1 mt-1.5 bg-gray-900/60 border border-gray-700/60 rounded px-2 py-1">
           <code className="text-[11px] text-cyan-300 font-mono flex-1 truncate">{pullCmd}</code>
-          <CopyButton text={pullCmd} />
+          <CopyButton text={pullCmd} variant="compact" title="Copy command" />
         </div>
       )}
     </>
@@ -434,7 +313,7 @@ const ModelRow: React.FC<{
   const [open, setOpen] = useState(false);
   const best = model.variants[0];
   if (!best) return null;
-  const colors = fitColors(best.fit_score);
+  const colors = fitColors(best.fit_score, 'red');
   const uploader = uploaderName(model.model_id);
 
   // Recommended quant for line 2. Falls back to best variant when no rec.
@@ -514,7 +393,7 @@ const ModelRow: React.FC<{
           className="flex items-center gap-1.5 text-[10px] min-w-0"
           title={`Fit score ${best.fit_score}/100`}
         >
-          <span className={`inline-block w-1.5 h-3 rounded-sm shrink-0 ${fitBarClass(best.fit_score)}`} />
+          <span className={`inline-block w-1.5 h-3 rounded-sm shrink-0 ${colors.bar}`} />
           <span className={`${colors.text} truncate`}>{fitGradeLabel(best.fit_score)}</span>
           <span className="text-gray-600 tabular-nums whitespace-nowrap">fit</span>
         </div>
@@ -524,7 +403,7 @@ const ModelRow: React.FC<{
           {proj ? (
             <DiscoveryHoverCard
               heading={`≈${((proj.min + proj.max) / 2).toFixed(0)} tok/s · ${projConfidenceLabel(proj.confidence)}`}
-              body={projConfidenceBody(proj)}
+              body={projConfidenceBody(proj, 'node')}
               rows={projConfidenceRows(proj)}
             >
               <span className={proj.confidence === 'theoretical' ? 'text-gray-500 italic' : 'text-gray-400'}>

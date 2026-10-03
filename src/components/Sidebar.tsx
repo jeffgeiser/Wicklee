@@ -1,12 +1,10 @@
 import React, { Suspense, useState, useRef, useEffect } from 'react';
-import { LayoutGrid, Server, Activity, Terminal, Cpu, Users, LogOut, Key, Settings, BookOpen, Newspaper, Github, User as UserIcon, UserCog, CreditCard, Boxes } from 'lucide-react';
-import { ConnectionState, DashboardTab, User, UserRole, TIER_BADGE } from '../types';
+import { LayoutGrid, Server, Activity, Cpu, Users, Settings, BookOpen, Newspaper, Github, User as UserIcon, CreditCard, Boxes } from 'lucide-react';
+import { ConnectionState, DashboardTab, User, TIER_BADGE } from '../types';
 import { usePermissions } from '../hooks/usePermissions';
+import { IS_AGENT, IS_DEMO } from '../utils/buildTarget';
 
-// Build-time flag: true when compiled for the local agent binary (VITE_BUILD_TARGET=agent).
-// In agent builds, ClerkProvider is absent — this gates all useClerk() calls.
-const IS_AGENT = (import.meta.env.VITE_BUILD_TARGET as string) === 'agent';
-const IS_DEMO  = (import.meta.env.VITE_BUILD_TARGET as string) === 'demo';
+// In agent and demo builds ClerkProvider is absent — IS_AGENT / IS_DEMO gate all useClerk() calls.
 
 // Clerk account actions are lazy-loaded so @clerk/clerk-react is never imported
 // in agent builds. The dynamic import is tree-shaken when IS_AGENT is true.
@@ -19,12 +17,11 @@ interface SidebarProps {
   onUserChange: (user: User) => void;
   connectionState?: ConnectionState;
   theme?: 'light' | 'dark';
-  isLocalMode?: boolean;
   isLocalHost?: boolean;
   onNavigate?: (path: string) => void;
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser, onUserChange: _onUserChange, connectionState: _connectionState = 'disconnected', theme: _theme, isLocalMode = true, isLocalHost = false, onNavigate }) => {
+const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser, onUserChange: _onUserChange, connectionState: _connectionState = 'disconnected', theme: _theme, isLocalHost = false, onNavigate }) => {
   const permissions = usePermissions(currentUser);
   const [isAvatarMenuOpen, setIsAvatarMenuOpen] = useState(false);
   const avatarMenuRef = useRef<HTMLDivElement>(null);
@@ -45,11 +42,10 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
     { id: DashboardTab.AI_INSIGHTS,  icon: Cpu,        label: 'Insights',        show: permissions.canRunAIAnalysis },
     { id: DashboardTab.NODES,        icon: Server,     label: 'Management',      show: true },
     { id: DashboardTab.TRACES,       icon: Activity,   label: 'Observability',   show: true },
-    // Scaffolding and AI Key Vault hidden — placeholder tabs, not shipped.
-    // Team Management hidden — Team tier is "Coming Soon".
-    { id: DashboardTab.SCAFFOLDING,  icon: Terminal,   label: 'Scaffolding',     show: false },
-    { id: DashboardTab.AI_PROVIDERS, icon: Key,        label: 'AI Key Vault',    show: false },
-    { id: DashboardTab.TEAM,         icon: Users,      label: 'Team Management', show: false },
+    // Clerk organization members/roles (TeamManagement). Owner-only, matching
+    // the App.tsx guard on DashboardTab.TEAM; cloud dashboard only (agent,
+    // demo and localhost builds have no Clerk).
+    { id: DashboardTab.TEAM,         icon: Users,      label: 'Team Management', show: permissions.canManageTeam && !IS_AGENT && !IS_DEMO && !isLocalHost },
   ];
 
   return (
@@ -185,10 +181,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
                     <div className="px-3 py-2 h-9" />
                   </div>
                 }>
-                  <LazyClerkAccountActions
-                    onClose={() => setIsAvatarMenuOpen(false)}
-                    onNavigateSettings={() => { setActiveTab(DashboardTab.SETTINGS); setIsAvatarMenuOpen(false); }}
-                  />
+                  <LazyClerkAccountActions onClose={() => setIsAvatarMenuOpen(false)} />
                 </Suspense>
               )}
             </div>

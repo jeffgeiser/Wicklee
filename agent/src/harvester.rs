@@ -9,38 +9,73 @@ use std::time::Duration;
 /// so firing tokens into an already-loaded scheduler would only add noise.
 const GPU_LOAD_THRESHOLD_PCT: f32 = 40.0;
 
-/// Discovers the first model installed in Ollama via GET /api/tags.
+/// How often the probe tasks wake to check whether a probe is due. Cheap —
+/// each wake only reads shared state; an actual generation fires at most once
+/// per [`ProbePolicy::interval`] (or when no baseline exists / the model changed).
+const PROBE_CHECK_TICK: Duration = Duration::from_secs(30);
+
+/// Extra time a successful baseline stays "fresh" past the probe interval, so
+/// IDLE-SPD doesn't flicker to IDLE while the next scheduled probe is pending.
+const BASELINE_FRESH_SLACK: Duration = Duration::from_secs(60);
+
+/// Idle-probe policy, from the `[probe]` section of config.toml.
 ///
-/// Returns None when Ollama has no models installed or the request fails.
-/// Used as a probe fallback when /api/ps shows no loaded model — Ollama will
-/// auto-load the returned model when the subsequent /api/generate probe arrives.
-/// This is identical behaviour to a user's first request on a fresh Ollama session.
-async fn discover_first_ollama_model(client: &reqwest::Client, port: u16) -> Option<String> {
-    let url = format!("http://127.0.0.1:{port}/api/tags");
-    let resp = match client.get(&url).send().await {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("[ollama] /api/tags on :{port} failed: {e}");
-            return None;
-        }
-    };
-    if !resp.status().is_success() {
-        eprintln!("[ollama] /api/tags on :{port} → HTTP {}", resp.status());
-        return None;
+/// Each probe is a real ~20-token generation, so it costs GPU time and (for
+/// Ollama) resets the model's keep_alive timer. Probes therefore fire only when
+/// the baseline is missing, the model changed, or the last attempt is older
+/// than `interval` — never on every tick.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ProbePolicy {
+    /// false → no probe tasks are spawned at all (IDLE-SPD / baseline tok/s
+    /// then come only from the proxy or runtime-reported metrics).
+    pub(crate) enabled:  bool,
+    /// Minimum time between probes once a baseline for the current model exists.
+    pub(crate) interval: Duration,
+}
+
+impl Default for ProbePolicy {
+    fn default() -> Self {
+        Self { enabled: true, interval: Duration::from_secs(600) }
     }
-    let json: serde_json::Value = resp.json().await.ok()?;
-    let models = json["models"].as_array();
-    if models.map_or(true, |m| m.is_empty()) {
-        eprintln!("[ollama] /api/tags on :{port} — no models installed");
-        return None;
+}
+
+/// Whether a scheduled probe is due. A missing baseline or a model change makes
+/// it due immediately; otherwise it waits until `interval` has elapsed since
+/// the last attempt (successful or not — a failing runtime isn't hammered).
+pub(crate) fn probe_due(
+    has_baseline:      bool,
+    last_probed_model: Option<&str>,
+    model:             &str,
+    last_attempt:      Option<std::time::Instant>,
+    interval:          Duration,
+    now:               std::time::Instant,
+) -> bool {
+    if !has_baseline || last_probed_model != Some(model) {
+        return true;
     }
-    let name = models?
-        .first()?
-        .get("name")?
-        .as_str()?
-        .to_string();
-    eprintln!("[ollama] probe fallback — no model in /api/ps, discovered: {name}");
-    Some(name)
+    last_attempt.is_none_or(|t| now.saturating_duration_since(t) >= interval)
+}
+
+/// True when an Ollama `/api/ps` response lists `model` as currently loaded.
+fn ps_lists_model(ps: &serde_json::Value, model: &str) -> bool {
+    ps["models"].as_array().is_some_and(|arr| {
+        arr.iter().any(|m| m["name"].as_str() == Some(model) || m["model"].as_str() == Some(model))
+    })
+}
+
+/// Re-checks `/api/ps` immediately before a probe. The harvester's view can be
+/// up to 5 s old, and a generate request for a model that has just been
+/// evicted would make Ollama load it again (multi-GB, and it resets the
+/// keep_alive timer). Any failure is treated as "not resident" → skip.
+async fn ollama_model_resident(client: &reqwest::Client, port: u16, model: &str) -> bool {
+    let url = format!("http://127.0.0.1:{port}/api/ps");
+    match client.get(&url).timeout(Duration::from_secs(3)).send().await {
+        Ok(r) if r.status().is_success() => r
+            .json::<serde_json::Value>()
+            .await
+            .is_ok_and(|j| ps_lists_model(&j, model)),
+        _ => false,
+    }
 }
 
 /// Result of the 20-token Ollama probe — expanded from bare tok/s to include
@@ -92,12 +127,11 @@ async fn probe_ollama_tps(client: &reqwest::Client, port: u16, model: &str) -> O
     if let (Some(count), Some(dur_ns)) = (
         json["eval_count"].as_u64(),
         json["eval_duration"].as_u64(),
-    ) {
-        if count > 0 && dur_ns > 0 {
+    )
+        && count > 0 && dur_ns > 0 {
             let tps = count as f64 / (dur_ns as f64 / 1_000_000_000.0);
             if tps > 0.0 { result.tps = Some(tps as f32); }
         }
-    }
 
     // Prefill speed + TTFT (Phase 2: new)
     if let (Some(pe_count), Some(pe_dur_ns)) = (
@@ -151,14 +185,12 @@ async fn probe_vllm_tps(client: &reqwest::Client, port: u16, model: &str) -> Opt
     let elapsed = t0.elapsed().as_secs_f64();
     if elapsed <= 0.0 { return None; }
     let text = resp.text().await.ok()?;
-    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
-        if let Some(n) = json["usage"]["completion_tokens"].as_u64() {
-            if n > 0 {
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text)
+        && let Some(n) = json["usage"]["completion_tokens"].as_u64()
+            && n > 0 {
                 let tps = n as f64 / elapsed;
                 if tps > 0.0 { return Some(tps as f32); }
             }
-        }
-    }
     None
 }
 
@@ -187,6 +219,7 @@ pub(crate) fn start_ollama_harvester(
     proxy_arc: Option<Arc<ProxyState>>,
     port_rx: process_discovery::PortRx,
     runtime_config_cache: crate::runtime_config::RuntimeConfigCache,
+    probe_policy: ProbePolicy,
 ) -> (Arc<Mutex<OllamaMetrics>>, Arc<std::sync::atomic::AtomicBool>) {
     let shared = Arc::new(Mutex::new(OllamaMetrics::default()));
     // Atomic flag: true while the /api/generate probe is in-flight.
@@ -317,7 +350,8 @@ pub(crate) fn start_ollama_harvester(
                     last_user_request_ts:     prev_state.last_user_request_ts,
                     probe_caused_next_reset:  prev_state.probe_caused_next_reset,
                     validated_port:           prev_state.validated_port,
-                    // Carry forward probe-derived latency fields (set every ~30s by probe task)
+                    baseline_fresh_until:     prev_state.baseline_fresh_until,
+                    // Carry forward probe-derived latency fields (set by the scheduled probe task)
                     ollama_prompt_eval_tps:   prev_state.ollama_prompt_eval_tps,
                     ollama_ttft_ms:           prev_state.ollama_ttft_ms,
                     ollama_load_duration_ms:  prev_state.ollama_load_duration_ms,
@@ -333,13 +367,11 @@ pub(crate) fn start_ollama_harvester(
 
                 // Poll /api/ps for ALL loaded models and inference state.
                 let mut ps_models: Vec<serde_json::Value> = Vec::new();
-                if let Ok(resp) = client.get(format!("{base}/api/ps")).send().await {
-                    if let Ok(json) = resp.json::<serde_json::Value>().await {
-                        if let Some(arr) = json["models"].as_array() {
+                if let Ok(resp) = client.get(format!("{base}/api/ps")).send().await
+                    && let Ok(json) = resp.json::<serde_json::Value>().await
+                        && let Some(arr) = json["models"].as_array() {
                             ps_models = arr.clone();
                         }
-                    }
-                }
 
                 // Read per-model proxy stats (if proxy active).
                 let proxy_model_stats: std::collections::HashMap<String, (f32, u64, u64, u64, std::time::Instant)> =
@@ -375,11 +407,10 @@ pub(crate) fn start_ollama_harvester(
                     });
 
                     // Track most-recently-active model for singular field backwards compat
-                    if let Some(&(_, _, _, _, done_ts)) = proxy_model_stats.get(&name) {
-                        if most_recent_done.as_ref().map_or(true, |(_, t)| done_ts > *t) {
+                    if let Some(&(_, _, _, _, done_ts)) = proxy_model_stats.get(&name)
+                        && most_recent_done.as_ref().is_none_or(|(_, t)| done_ts > *t) {
                             most_recent_done = Some((name.clone(), done_ts));
                         }
-                    }
                 }
 
                 // Singular fields: use most-recently-active model (or first if no proxy stats).
@@ -400,8 +431,7 @@ pub(crate) fn start_ollama_harvester(
                         if let Ok(show_resp) = client.post(format!("{base}/api/show"))
                             .json(&serde_json::json!({ "name": model_name }))
                             .send().await
-                        {
-                            if let Ok(show_json) = show_resp.json::<serde_json::Value>().await {
+                            && let Ok(show_json) = show_resp.json::<serde_json::Value>().await {
                                 let mi = &show_json["model_info"];
                                 cached_context_length = mi["general.context_length"].as_u64()
                                     .or_else(|| mi["llama.context_length"].as_u64());
@@ -426,7 +456,6 @@ pub(crate) fn start_ollama_harvester(
                                     eprintln!("[runtime-config] ollama: cached config for {model_name}");
                                 }
                             }
-                        }
                     } else {
                         cached_context_length = None;
                         cached_parameter_count = None;
@@ -447,8 +476,8 @@ pub(crate) fn start_ollama_harvester(
                 // the pre-await snapshot mis-classified the probe's own reset
                 // as a user request (false 15s LIVE on idle nodes).
                 let mut expires_changed = false;
-                if let Some(first) = ps_models.first() {
-                    if let Some(exp_str) = first["expires_at"].as_str() {
+                if let Some(first) = ps_models.first()
+                    && let Some(exp_str) = first["expires_at"].as_str() {
                         let exp_owned = exp_str.to_string();
                         if prev_expires.as_deref() != Some(&exp_owned) {
                             last_infer_ts = Some(std::time::Instant::now());
@@ -456,7 +485,6 @@ pub(crate) fn start_ollama_harvester(
                         }
                         prev_expires = Some(exp_owned);
                     }
-                }
 
                 // Set active_models only when >1 model (no payload bloat for single model).
                 m.active_models = if live_models.len() > 1 { Some(live_models) } else { None };
@@ -466,17 +494,16 @@ pub(crate) fn start_ollama_harvester(
                 if let Some(ref ps) = proxy_main {
                     let proxy_active = ps.in_flight.load(std::sync::atomic::Ordering::Relaxed) > 0;
                     let since_done   = ps.last_done_ts.lock().unwrap()
-                        .map_or(false, |t| t.elapsed().as_secs() < 15);
+                        .is_some_and(|t| t.elapsed().as_secs() < 15);
                     m.ollama_inference_active = Some(proxy_active || since_done);
                     m.ollama_proxy_active = true;
 
                     // Most-recently-active model's tok/s for singular field
-                    if let Some((ref name, _)) = most_recent_done {
-                        if let Some(&(tps, _, _, _, _)) = proxy_model_stats.get(name) {
+                    if let Some((ref name, _)) = most_recent_done
+                        && let Some(&(tps, _, _, _, _)) = proxy_model_stats.get(name) {
                             m.ollama_tokens_per_second = Some(tps);
                             harvester_set_tps = true;
                         }
-                    }
 
                     // Aggregate across all models for singular proxy averages
                     let total_reqs: u64 = proxy_model_stats.values().map(|&(_, _, _, cnt, _)| cnt).sum();
@@ -496,7 +523,7 @@ pub(crate) fn start_ollama_harvester(
                 } else {
                     // No proxy — fall back to /api/ps timer for inference detection.
                     m.ollama_inference_active =
-                        Some(last_infer_ts.map_or(false, |t| t.elapsed().as_secs() < 15));
+                        Some(last_infer_ts.is_some_and(|t| t.elapsed().as_secs() < 15));
                 }
 
                 // Writeback. m was built from a snapshot taken BEFORE several
@@ -510,6 +537,7 @@ pub(crate) fn start_ollama_harvester(
                     // Probe-task-owned: always take the live values.
                     m.last_probe_start        = g.last_probe_start;
                     m.last_probe_end          = g.last_probe_end;
+                    m.baseline_fresh_until    = g.baseline_fresh_until;
                     m.ollama_prompt_eval_tps  = g.ollama_prompt_eval_tps;
                     m.ollama_ttft_ms          = g.ollama_ttft_ms;
                     m.ollama_load_duration_ms = g.ollama_load_duration_ms;
@@ -541,14 +569,25 @@ pub(crate) fn start_ollama_harvester(
         } // async move
     }); // supervise_until
 
-    // ── Probe task: scheduled 20-token benchmark every 30s ──────────────────
-    // Runs on all nodes (with or without proxy). When the proxy is active and
-    // has recent traffic (request in the last 60s), the probe skips — the proxy
-    // provides exact tok/s, TTFT, and latency from real done packets, making
-    // synthetic probes redundant and potentially disruptive.
-    // When the proxy is active but IDLE (no recent traffic), the probe fires
-    // to populate baseline TTFT, prefill speed, and load duration — fields the
-    // proxy never provides (they're probe-only metrics).
+    // ── Probe task: scheduled 20-token benchmark ─────────────────────────────
+    // Fires only against a model Ollama already has resident (never loads one
+    // just to measure it), and only when the baseline is missing, the model
+    // changed, or the last probe is older than `probe_policy.interval`.
+    // When the proxy is active and has recent traffic (request in the last
+    // 60s), the probe skips — the proxy provides exact tok/s, TTFT, and latency
+    // from real done packets, making synthetic probes redundant and disruptive.
+    // When the proxy is active but IDLE, the probe still populates baseline
+    // TTFT, prefill speed, and load duration — fields the proxy never provides.
+    //
+    // keep_alive is deliberately NOT sent: Ollama has no "leave expiry as is"
+    // value, so any explicit keep_alive would override the user's own
+    // OLLAMA_KEEP_ALIVE (e.g. shorten a "-1 = forever"). The probe resets the
+    // expiry to the server default at most once per interval; because it never
+    // targets an unloaded model, an idle model still unloads normally.
+    if !probe_policy.enabled {
+        eprintln!("[ollama] idle probe disabled ([probe] enabled = false)");
+        return (shared, probe_active);
+    }
     let proxy_for_probe = proxy_arc.clone();
     {
         let shared_probe = Arc::clone(&shared);
@@ -567,11 +606,13 @@ pub(crate) fn start_ollama_harvester(
             // also starts immediately and needs one HTTP round-trip to /api/ps
             // before ollama_active_model is populated.  Without this delay the
             // probe fires, finds ollama_active_model = None, skips, then waits
-            // a full 30 s before trying again — causing the visible startup lag.
+            // a full tick before trying again — causing the visible startup lag.
             // 7 s comfortably covers the /api/ps round-trip even on slow machines.
             tokio::time::sleep(Duration::from_secs(7)).await;
 
-            let mut interval = tokio::time::interval(Duration::from_secs(30));
+            let mut last_attempt:      Option<std::time::Instant> = None;
+            let mut last_probed_model: Option<String>             = None;
+            let mut interval = tokio::time::interval(PROBE_CHECK_TICK);
             loop {
                 interval.tick().await;
 
@@ -583,23 +624,24 @@ pub(crate) fn start_ollama_harvester(
                     continue;
                 };
 
-                // Model resolution order:
-                //   1. Currently loaded model from /api/ps  (preferred — already warm)
-                //   2. First installed model from /api/tags (fallback — handles the
-                //      restart case where keep_alive has already unloaded everything;
-                //      Ollama auto-loads the model when the generate request arrives)
-                //   3. None → skip this cycle (no models installed at all)
-                let current_model = shared_probe.lock().ok()
-                    .and_then(|g| if g.ollama_running { g.ollama_active_model.clone() } else { None });
-                let model = if current_model.is_some() {
-                    current_model
-                } else {
-                    discover_first_ollama_model(&probe_client, port).await
-                };
-                let Some(model) = model else {
-                    eprintln!("[ollama] probe skip — no model found (not loaded + /api/tags empty) on :{port}");
+                // Only a model already loaded (per the harvester's /api/ps poll)
+                // is eligible. No loaded model → nothing to measure; skip quietly.
+                let Some(model) = shared_probe.lock().ok()
+                    .and_then(|g| if g.ollama_running { g.ollama_active_model.clone() } else { None })
+                else {
                     continue;
                 };
+
+                // Skip unless the baseline is missing/stale or the model changed.
+                let has_baseline = shared_probe.lock().ok()
+                    .map(|g| g.ollama_tokens_per_second.is_some())
+                    .unwrap_or(false);
+                if !probe_due(
+                    has_baseline, last_probed_model.as_deref(), &model,
+                    last_attempt, probe_policy.interval, std::time::Instant::now(),
+                ) {
+                    continue;
+                }
 
                 // Read current GPU utilisation — NVIDIA takes priority, fall back to
                 // Apple Silicon. None means no GPU sensor available (CPU-only node).
@@ -617,15 +659,12 @@ pub(crate) fn start_ollama_harvester(
                 // the "retain cached" path has nothing to retain, leaving the UI blank.
                 // One probe under load is acceptable — it establishes the peak reference
                 // that all subsequent GPU-scaled estimates depend on.
-                let has_baseline = shared_probe.lock().ok()
-                    .map(|g| g.ollama_tokens_per_second.is_some())
-                    .unwrap_or(false);
                 if !has_baseline {
                     eprintln!(
                         "[ollama] no baseline yet — forcing initial probe despite GPU at {:.0}%",
                         gpu_util.unwrap_or(0.0),
                     );
-                } else if gpu_util.map_or(false, |u| u >= GPU_LOAD_THRESHOLD_PCT) {
+                } else if gpu_util.is_some_and(|u| u >= GPU_LOAD_THRESHOLD_PCT) {
                     eprintln!(
                         "[ollama] probe skipped — GPU at {:.0}% (≥{:.0}%), retaining cached baseline",
                         gpu_util.unwrap_or(0.0), GPU_LOAD_THRESHOLD_PCT,
@@ -637,11 +676,19 @@ pub(crate) fn start_ollama_harvester(
                 // exact tok/s from done packets; probing would interfere.
                 if let Some(ref ps) = proxy_for_probe {
                     let recent_req = ps.last_done_ts.lock().unwrap()
-                        .map_or(false, |t| t.elapsed().as_secs() < 60);
+                        .is_some_and(|t| t.elapsed().as_secs() < 60);
                     if recent_req {
                         continue; // proxy has fresh production data — no probe needed
                     }
                 }
+
+                // Final residency check right before firing — never trigger a load.
+                if !ollama_model_resident(&probe_client, port, &model).await {
+                    eprintln!("[ollama] probe skip — {model} no longer resident on :{port}");
+                    continue;
+                }
+                last_attempt      = Some(std::time::Instant::now());
+                last_probed_model = Some(model.clone());
 
                 // GPU is idle enough — fire the full 20-token benchmark.
                 // Set probe_active = true before the HTTP call; Drop guard resets it
@@ -666,7 +713,12 @@ pub(crate) fn start_ollama_harvester(
                     // lining the display AND force-triggering the next probe
                     // via the !has_baseline path regardless of GPU load). Same
                     // only-on-Some rule the vLLM probe already follows.
-                    if let Some(tps)  = probe_result.tps              { g.ollama_tokens_per_second = Some(tps); }
+                    if let Some(tps)  = probe_result.tps              {
+                        g.ollama_tokens_per_second = Some(tps);
+                        g.baseline_fresh_until = Some(
+                            std::time::Instant::now() + probe_policy.interval + BASELINE_FRESH_SLACK,
+                        );
+                    }
                     if let Some(pe)   = probe_result.prompt_eval_tps  { g.ollama_prompt_eval_tps   = Some(pe); }
                     if let Some(tt)   = probe_result.ttft_ms          { g.ollama_ttft_ms           = Some(tt); }
                     if let Some(ld)   = probe_result.load_duration_ms { g.ollama_load_duration_ms  = Some(ld); }
@@ -721,13 +773,10 @@ struct VllmHarvestResult {
 /// only changes when the engine restarts, so polling on every tick would
 /// be wasteful.  Network timeout 1 second; failures degrade gracefully
 /// to None and the frontend falls back to the conservative 8 192 default.
-async fn fetch_vllm_max_model_len(port: u16) -> Option<u64> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_millis(1_000))
-        .build()
-        .ok()?;
+async fn fetch_vllm_max_model_len(client: &reqwest::Client, port: u16) -> Option<u64> {
     let resp = client
         .get(format!("http://127.0.0.1:{port}/v1/models"))
+        .timeout(Duration::from_millis(1_000))
         .send()
         .await
         .ok()?;
@@ -741,15 +790,8 @@ async fn fetch_vllm_max_model_len(port: u16) -> Option<u64> {
 }
 
 /// Probe vLLM once on `port`. Never panics on malformed input.
-async fn harvest_vllm(port: u16) -> VllmHarvestResult {
-    let client = match reqwest::Client::builder()
-        .timeout(Duration::from_millis(500))
-        .build()
-    {
-        Ok(c)  => c,
-        Err(_) => return VllmHarvestResult::default(),
-    };
-
+/// `client` is built once per harvester task (500 ms timeout) and reused.
+async fn harvest_vllm(client: &reqwest::Client, port: u16) -> VllmHarvestResult {
     // Explicit 127.0.0.1 (not localhost) to avoid Windows resolving localhost → ::1.
     let resp = match client.get(format!("http://127.0.0.1:{port}/metrics")).send().await {
         Ok(r) if r.status().is_success() => r,
@@ -782,14 +824,13 @@ async fn harvest_vllm(port: u16) -> VllmHarvestResult {
         let value_f32: Option<f32> = raw_value.map(|v| v as f32);
 
         // Extract model_name="..." from the label string (first occurrence wins).
-        if r.model_name.is_none() {
-            if let Some(start) = line.find("model_name=\"") {
+        if r.model_name.is_none()
+            && let Some(start) = line.find("model_name=\"") {
                 let rest = &line[start + 12..];
                 if let Some(end) = rest.find('"') {
                     r.model_name = Some(rest[..end].to_string());
                 }
             }
-        }
 
         let parse_u32 = |v: Option<f32>| -> Option<u32> {
             v.and_then(|v| if v >= 0.0 && v < u32::MAX as f32 { Some(v as u32) } else { None })
@@ -851,7 +892,7 @@ async fn harvest_vllm(port: u16) -> VllmHarvestResult {
 /// Spawns a 2 s polling loop that watches for vLLM via the discovery channel,
 /// then polls the Prometheus /metrics endpoint on the discovered port.
 ///
-/// Also spawns a 30 s idle-probe task that fires `probe_vllm_tps` when the
+/// Also spawns a scheduled idle-probe task (see [`ProbePolicy`]) that fires `probe_vllm_tps` when the
 /// scheduler is idle (`num_requests_running == 0`) and the GPU is below the
 /// load threshold — the result populates `vllm_tokens_per_sec` as the IDLE-SPD
 /// baseline, exactly mirroring the Ollama probe behaviour.
@@ -864,6 +905,7 @@ pub(crate) fn start_vllm_harvester(
     // sees as num_requests_running=1 — without flagging it, Tier 1 of
     // compute_inference_state classified every idle-node probe as LIVE.
     probe_active: Arc<std::sync::atomic::AtomicBool>,
+    probe_policy: ProbePolicy,
 ) -> Arc<Mutex<VllmMetrics>> {
     let shared = Arc::new(Mutex::new(VllmMetrics::default()));
 
@@ -874,6 +916,12 @@ pub(crate) fn start_vllm_harvester(
         let shared_main = shared_main.clone();
         let mut port_rx_main = port_rx_main.clone();
         async move {
+        // One client per task: reusing it keeps the connection pool (and
+        // avoids rebuilding the TLS/DNS machinery) across 2 s ticks.
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_millis(500))
+            .build()
+            .unwrap_or_default();
         loop {
             // Wait until discovery reports vLLM is running.
             loop {
@@ -908,16 +956,15 @@ pub(crate) fn start_vllm_harvester(
                     }
                 }
 
-                let h = harvest_vllm(port).await;
+                let h = harvest_vllm(&client, port).await;
 
                 // Fetch /v1/models metadata once when the loaded model changes.
                 // Off the hot path on subsequent ticks for the same model.
-                if let Some(ref name) = h.model_name {
-                    if cached_model_name.as_deref() != Some(name.as_str()) {
-                        cached_max_ctx    = fetch_vllm_max_model_len(port).await;
+                if let Some(ref name) = h.model_name
+                    && cached_model_name.as_deref() != Some(name.as_str()) {
+                        cached_max_ctx    = fetch_vllm_max_model_len(&client, port).await;
                         cached_model_name = Some(name.clone());
                     }
-                }
 
                 if let Ok(mut g) = shared_main.lock() {
                     if !h.running {
@@ -984,7 +1031,13 @@ pub(crate) fn start_vllm_harvester(
         } // async move
     }); // supervise_until
 
-    // ── Probe task: 30 s idle tok/s measurement (IDLE-SPD baseline) ─────────
+    // ── Probe task: scheduled idle tok/s measurement (IDLE-SPD baseline) ────
+    // Same cadence rules as the Ollama probe: only when the baseline is
+    // missing, the served model changed, or `probe_policy.interval` elapsed.
+    if !probe_policy.enabled {
+        eprintln!("[vllm] idle probe disabled ([probe] enabled = false)");
+        return shared;
+    }
     let shared_probe = Arc::clone(&shared);
     let probe_active_probe = Arc::clone(&probe_active);
     tokio::spawn(async move {
@@ -998,7 +1051,9 @@ pub(crate) fn start_vllm_harvester(
         // Ollama probe delay; 7 s is generous for the 2 s main-task cycle.
         tokio::time::sleep(Duration::from_secs(7)).await;
 
-        let mut interval = tokio::time::interval(Duration::from_secs(30));
+        let mut last_attempt:      Option<std::time::Instant> = None;
+        let mut last_probed_model: Option<String>             = None;
+        let mut interval = tokio::time::interval(PROBE_CHECK_TICK);
         loop {
             interval.tick().await;
 
@@ -1006,26 +1061,34 @@ pub(crate) fn start_vllm_harvester(
             let (port, model) = {
                 let g = match shared_probe.lock() { Ok(g) => g, Err(_) => continue };
                 if !g.vllm_running { continue; }
-                if g.vllm_requests_running.map_or(false, |r| r > 0) { continue; }
+                if g.vllm_requests_running.is_some_and(|r| r > 0) { continue; }
                 let port  = match *port_rx.borrow() { Some(p) => p, None => continue };
                 let model = match g.vllm_model_name.clone() { Some(m) => m, None => continue };
                 (port, model)
             };
+
+            // Skip unless the baseline is missing/stale or the model changed.
+            let vllm_has_baseline = shared_probe.lock().ok()
+                .map(|g| g.vllm_tokens_per_sec.is_some())
+                .unwrap_or(false);
+            if !probe_due(
+                vllm_has_baseline, last_probed_model.as_deref(), &model,
+                last_attempt, probe_policy.interval, std::time::Instant::now(),
+            ) {
+                continue;
+            }
 
             // Skip when GPU is already under load — same gate as Ollama probe.
             // Exception: no baseline yet → force the first probe to establish a reference.
             let gpu_util: Option<f32> = nvidia.lock().ok()
                 .and_then(|g| g.nvidia_gpu_utilization_percent)
                 .or_else(|| apple.lock().ok().and_then(|g| g.gpu_utilization_percent));
-            let vllm_has_baseline = shared_probe.lock().ok()
-                .map(|g| g.vllm_tokens_per_sec.is_some())
-                .unwrap_or(false);
             if !vllm_has_baseline {
                 eprintln!(
                     "[vllm] no baseline yet — forcing initial probe despite GPU at {:.0}%",
                     gpu_util.unwrap_or(0.0),
                 );
-            } else if gpu_util.map_or(false, |u| u >= GPU_LOAD_THRESHOLD_PCT) {
+            } else if gpu_util.is_some_and(|u| u >= GPU_LOAD_THRESHOLD_PCT) {
                 eprintln!(
                     "[vllm] probe skipped — GPU at {:.0}% (≥{:.0}%), retaining cached baseline",
                     gpu_util.unwrap_or(0.0), GPU_LOAD_THRESHOLD_PCT
@@ -1033,6 +1096,8 @@ pub(crate) fn start_vllm_harvester(
                 continue; // retain last probe value — UI shows "last known: N tok/s"
             }
 
+            last_attempt      = Some(std::time::Instant::now());
+            last_probed_model = Some(model.clone());
             eprintln!("[vllm] probing idle tok/s on :{port} model={model}");
             // Flag the probe so Tier 1 (num_requests_running) doesn't classify
             // our own completion request as user inference. Drop guard clears
@@ -1046,6 +1111,9 @@ pub(crate) fn start_vllm_harvester(
                 if let Ok(mut g) = shared_probe.lock() {
                     g.vllm_tokens_per_sec = Some(tps);
                     g.last_probe_end = Some(std::time::Instant::now());
+                    g.baseline_fresh_until = Some(
+                        std::time::Instant::now() + probe_policy.interval + BASELINE_FRESH_SLACK,
+                    );
                 }
             }
         }
@@ -1058,15 +1126,8 @@ pub(crate) fn start_vllm_harvester(
 
 /// Poll llama.cpp's `/health?include_slots` endpoint.
 /// Returns (running, model_name, slots_processing).
-async fn harvest_llamacpp(port: u16) -> (bool, Option<String>, Option<u32>) {
-    let client = match reqwest::Client::builder()
-        .timeout(Duration::from_millis(500))
-        .build()
-    {
-        Ok(c)  => c,
-        Err(_) => return (false, None, None),
-    };
-
+/// `client` is built once per harvester task (500 ms timeout) and reused.
+async fn harvest_llamacpp(client: &reqwest::Client, port: u16) -> (bool, Option<String>, Option<u32>) {
     // /health?include_slots returns { "status": "ok", "slots_idle": N, "slots_processing": N }
     let resp = match client
         .get(format!("http://127.0.0.1:{port}/health?include_slots"))
@@ -1142,21 +1203,19 @@ async fn probe_llamacpp_tps(client: &reqwest::Client, port: u16, model: &str) ->
     let elapsed = t0.elapsed().as_secs_f64();
     if elapsed <= 0.0 { return None; }
     let text = resp.text().await.ok()?;
-    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
-        if let Some(n) = json["usage"]["completion_tokens"].as_u64() {
-            if n > 0 {
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text)
+        && let Some(n) = json["usage"]["completion_tokens"].as_u64()
+            && n > 0 {
                 let tps = n as f64 / elapsed;
                 if tps > 0.0 { return Some(tps as f32); }
             }
-        }
-    }
     None
 }
 
 /// Spawns a 2 s polling loop that watches for llama.cpp via the discovery channel,
 /// then polls the `/health?include_slots` endpoint on the discovered port.
 ///
-/// Also spawns a 30 s idle-probe task that fires `probe_llamacpp_tps` when the
+/// Also spawns a scheduled idle-probe task (see [`ProbePolicy`]) that fires `probe_llamacpp_tps` when the
 /// scheduler is idle (`slots_processing == 0`) and the GPU is below the
 /// load threshold — the result populates `llamacpp_tokens_per_sec` as the IDLE-SPD
 /// baseline, exactly mirroring the vLLM probe behaviour.
@@ -1167,6 +1226,7 @@ pub(crate) fn start_llamacpp_harvester(
     // Shared probe-in-flight flag — see start_vllm_harvester. Tier 1 reads
     // slots_processing, which counts our own probe request.
     probe_active: Arc<std::sync::atomic::AtomicBool>,
+    probe_policy: ProbePolicy,
 ) -> Arc<Mutex<LlamacppMetrics>> {
     let shared = Arc::new(Mutex::new(LlamacppMetrics::default()));
 
@@ -1177,6 +1237,11 @@ pub(crate) fn start_llamacpp_harvester(
         let shared_main = shared_main.clone();
         let mut port_rx_main = port_rx_main.clone();
         async move {
+        // One client per task, reused across 2 s ticks (see vLLM harvester).
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_millis(500))
+            .build()
+            .unwrap_or_default();
         loop {
             // Wait until discovery reports llama.cpp/llama-box is running.
             loop {
@@ -1203,7 +1268,7 @@ pub(crate) fn start_llamacpp_harvester(
                     }
                 }
 
-                let (running, model, slots) = harvest_llamacpp(port).await;
+                let (running, model, slots) = harvest_llamacpp(&client, port).await;
                 if let Ok(mut g) = shared_main.lock() {
                     if !running {
                         *g = LlamacppMetrics::default();
@@ -1218,7 +1283,13 @@ pub(crate) fn start_llamacpp_harvester(
         } // async move
     }); // supervise_until
 
-    // ── Probe task: 30 s idle tok/s measurement (IDLE-SPD baseline) ──────────
+    // ── Probe task: scheduled idle tok/s measurement (IDLE-SPD baseline) ─────
+    // Same cadence rules as the Ollama probe: only when the baseline is
+    // missing, the served model changed, or `probe_policy.interval` elapsed.
+    if !probe_policy.enabled {
+        eprintln!("[llamacpp] idle probe disabled ([probe] enabled = false)");
+        return shared;
+    }
     let shared_probe = Arc::clone(&shared);
     let probe_active_probe = Arc::clone(&probe_active);
     tokio::spawn(async move {
@@ -1230,7 +1301,9 @@ pub(crate) fn start_llamacpp_harvester(
         // Brief startup delay — gives the main task time to populate model name.
         tokio::time::sleep(Duration::from_secs(7)).await;
 
-        let mut interval = tokio::time::interval(Duration::from_secs(30));
+        let mut last_attempt:      Option<std::time::Instant> = None;
+        let mut last_probed_model: Option<String>             = None;
+        let mut interval = tokio::time::interval(PROBE_CHECK_TICK);
         loop {
             interval.tick().await;
 
@@ -1238,25 +1311,33 @@ pub(crate) fn start_llamacpp_harvester(
             let (port, model) = {
                 let g = match shared_probe.lock() { Ok(g) => g, Err(_) => continue };
                 if !g.llamacpp_running { continue; }
-                if g.llamacpp_slots_processing.map_or(false, |s| s > 0) { continue; }
+                if g.llamacpp_slots_processing.is_some_and(|s| s > 0) { continue; }
                 let port  = match *port_rx.borrow() { Some(p) => p, None => continue };
                 let model = match g.llamacpp_model_name.clone() { Some(m) => m, None => continue };
                 (port, model)
             };
 
+            // Skip unless the baseline is missing/stale or the model changed.
+            let has_baseline = shared_probe.lock().ok()
+                .map(|g| g.llamacpp_tokens_per_sec.is_some())
+                .unwrap_or(false);
+            if !probe_due(
+                has_baseline, last_probed_model.as_deref(), &model,
+                last_attempt, probe_policy.interval, std::time::Instant::now(),
+            ) {
+                continue;
+            }
+
             // Skip when GPU is already under load — same gate as vLLM probe.
             let gpu_util: Option<f32> = nvidia.lock().ok()
                 .and_then(|g| g.nvidia_gpu_utilization_percent)
                 .or_else(|| apple.lock().ok().and_then(|g| g.gpu_utilization_percent));
-            let has_baseline = shared_probe.lock().ok()
-                .map(|g| g.llamacpp_tokens_per_sec.is_some())
-                .unwrap_or(false);
             if !has_baseline {
                 eprintln!(
                     "[llamacpp] no baseline yet — forcing initial probe despite GPU at {:.0}%",
                     gpu_util.unwrap_or(0.0),
                 );
-            } else if gpu_util.map_or(false, |u| u >= GPU_LOAD_THRESHOLD_PCT) {
+            } else if gpu_util.is_some_and(|u| u >= GPU_LOAD_THRESHOLD_PCT) {
                 eprintln!(
                     "[llamacpp] probe skipped — GPU at {:.0}% (≥{:.0}%), retaining cached baseline",
                     gpu_util.unwrap_or(0.0), GPU_LOAD_THRESHOLD_PCT
@@ -1264,6 +1345,8 @@ pub(crate) fn start_llamacpp_harvester(
                 continue;
             }
 
+            last_attempt      = Some(std::time::Instant::now());
+            last_probed_model = Some(model.clone());
             eprintln!("[llamacpp] probing idle tok/s on :{port} model={model}");
             // Flag the probe so Tier 1 (slots_processing) doesn't classify our
             // own completion request as user inference.
@@ -1276,6 +1359,9 @@ pub(crate) fn start_llamacpp_harvester(
                 if let Ok(mut g) = shared_probe.lock() {
                     g.llamacpp_tokens_per_sec = Some(tps);
                     g.last_probe_end = Some(std::time::Instant::now());
+                    g.baseline_fresh_until = Some(
+                        std::time::Instant::now() + probe_policy.interval + BASELINE_FRESH_SLACK,
+                    );
                 }
             }
         }
@@ -1287,6 +1373,58 @@ pub(crate) fn start_llamacpp_harvester(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Probe scheduling ─────────────────────────────────────────────────────
+
+    const TEN_MIN: Duration = Duration::from_secs(600);
+
+    #[test]
+    fn probe_due_without_baseline() {
+        let now = std::time::Instant::now();
+        // Even right after an attempt: no baseline → keep trying each tick.
+        assert!(probe_due(false, Some("m"), "m", Some(now), TEN_MIN, now));
+    }
+
+    #[test]
+    fn probe_not_due_while_baseline_fresh() {
+        let now = std::time::Instant::now();
+        let last = now - Duration::from_secs(30);
+        assert!(!probe_due(true, Some("m"), "m", Some(last), TEN_MIN, now));
+    }
+
+    #[test]
+    fn probe_due_once_interval_elapsed() {
+        let now = std::time::Instant::now();
+        let last = now - TEN_MIN;
+        assert!(probe_due(true, Some("m"), "m", Some(last), TEN_MIN, now));
+    }
+
+    #[test]
+    fn probe_due_on_model_change() {
+        let now = std::time::Instant::now();
+        let last = now - Duration::from_secs(5);
+        assert!(probe_due(true, Some("old"), "new", Some(last), TEN_MIN, now));
+        // Baseline from a source other than our probe (e.g. vLLM live gauge).
+        assert!(probe_due(true, None, "m", None, TEN_MIN, now));
+    }
+
+    #[test]
+    fn ps_lists_model_matches_loaded_only() {
+        let ps = serde_json::json!({ "models": [
+            { "name": "llama3.2:3b", "model": "llama3.2:3b" }
+        ]});
+        assert!(ps_lists_model(&ps, "llama3.2:3b"));
+        assert!(!ps_lists_model(&ps, "qwen2.5:7b"));
+        assert!(!ps_lists_model(&serde_json::json!({ "models": [] }), "llama3.2:3b"));
+        assert!(!ps_lists_model(&serde_json::json!({}), "llama3.2:3b"));
+    }
+
+    #[test]
+    fn probe_policy_default_is_enabled_ten_minutes() {
+        let p = ProbePolicy::default();
+        assert!(p.enabled);
+        assert_eq!(p.interval, TEN_MIN);
+    }
 
     #[test]
     fn attribution_user_request_when_no_probe() {

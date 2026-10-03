@@ -15,13 +15,13 @@ Single Rust binary, embedded React dashboard, Apple Silicon deep metal telemetry
 NVIDIA/NVML support, fleet pairing, hosted fleet aggregation, SSE-based real-time streaming.
 
 ### Intelligence Layer
-WES (Wicklee Efficiency Score) — tokens per watt with thermal penalty. 18 hardware observation patterns across thermal, power, memory, bandwidth, and inference domains.
+WES (Wicklee Efficiency Score) — tokens per watt with thermal penalty. 20 observation patterns (18 agent-evaluated, 2 cloud-evaluated) across thermal, power, memory, bandwidth, and inference domains.
 
 ### Inference Metrics
-Ollama and vLLM runtime detection. Prompt eval speed, TTFT, queue depth, KV cache utilization. Optional transparent proxy for production request metrics.
+Ollama, vLLM, and llama.cpp runtime detection. Prompt eval speed, TTFT, queue depth, KV cache utilization. Optional transparent proxy for production request metrics.
 
 ### Cloud Infrastructure
-Postgres time-series storage, 5-minute rollups, tiered history retention (24h Community, 7d Pro, 90d Team, 365d Business, unlimited Enterprise), fleet alerting with per-node pattern suppression.
+Postgres time-series storage, 5-minute rollups, tiered history retention (24h Community, 90d Team, 12 months Enterprise; grandfathered Pro keeps 7d, Business 365d), fleet alerting with per-node pattern suppression.
 
 ### Platform Support
 macOS (Apple Silicon + Intel), Linux (x86_64 + aarch64), Windows, NVIDIA GPU builds with NVML.
@@ -39,7 +39,7 @@ REST API for fleet telemetry. AI agent discovery via `llms.txt`, OpenAPI spec, a
 User-configurable thresholds for TTFT regression, throughput, and thermal events. Slack, email, and PagerDuty notification channels. PagerDuty uses Events API v2 with auto-resolve on incident lifecycle.
 
 ### Cloud MCP Server
-Fleet-aggregated MCP endpoint (`POST wicklee.dev/mcp`) for remote AI agents. 6 tools: fleet status, WES scores, node detail, best route, fleet insights, fleet observations. 2 resources: fleet status summary, fleet thermal states. Team+ tier, Clerk JWT auth.
+Fleet-aggregated MCP endpoint (`POST wicklee.dev/mcp`) for remote AI agents. 6 tools at launch: fleet status, WES scores, node detail, best route, fleet insights, fleet observations (now 9, adding inference profile, explain_slowdown, and fleet model fit). 2 resources: fleet status summary, fleet thermal states. Team+ tier, Clerk JWT auth.
 
 ### Clerk Organizations (Shared Fleet)
 Team dashboard sharing via Clerk Organizations. Org members see the same fleet — nodes, observations, alerts, and history are all scoped to the organization. Org inherits creator's subscription tier; syncs on Paddle upgrade/downgrade. Solo users unaffected.
@@ -51,10 +51,27 @@ Events API v2 integration for Team+ tier. Trigger and resolve events with dedup 
 Immutable, append-only audit trail for sensitive fleet operations, Postgres-backed (`audit_log` table, no UPDATE/DELETE paths anywhere in the codebase). `GET /api/audit-log` (Clerk JWT auth, tenant-scoped, cursor-paginated via `before`, filterable by `action`) is gated to Business+ for reads; events are recorded for every tier via a fire-and-forget `audit()` helper that never delays or fails the request and resolves the actor email server-side. `org_id` comes from the verified JWT claim, never a client header. Nine instrumented actions: `node.paired` / `node.removed` / `node.updated`, `alert_rule.created`, `alert_channel.created`, `webhook.created`, `api_key.created` / `api_key.deleted`, `stream_tokens.revoked`. Surfaced as the Audit Log section in Settings (Business+; action filter, load-more pagination, upgrade-nudge for lower tiers).
 
 ### Per-Tier Node Limits
-Community: 3 nodes, Pro: 10 nodes, Team: 25 nodes (expandable), Business: 100 nodes (unlimited seats), Enterprise: unlimited. Enforced at pairing, fleet list, and SSE stream.
+Community: 3 nodes, Team: 10 or 25 nodes (`team_10` / `team`), Enterprise: unlimited. Grandfathered Pro (10) and Business (100) caps remain in `node_limit_for_tier()`. Enforced at pairing, fleet list, and SSE stream.
 
-### Five-Tier Pricing
+### Five-Tier Pricing (superseded September 2026 — see Team Plan Sizes below)
 Community (Free) → Pro ($29/mo) → Team ($49/seat/mo) → Business ($499/mo) → Enterprise (Contact Sales). Business adds 365-day history, unlimited seats, SSO/SAML, and audit logging. Paddle billing with webhook-driven tier sync.
+
+### Team Plan Sizes — 10 / 25 nodes (September 2026)
+Three tiers stayed (Community / Team / Enterprise) but Team now comes in two
+sizes priced by the value metric — nodes under management — rather than by
+seat or by feature: `team_10` ($99/mo, up to 10 nodes) and `team` ($200/mo, up
+to 25). Identical feature set; the upgrade is more GPUs. Above 25 is the
+Enterprise conversation. First-principles reasoning recorded in the PR: the
+retired $29 Pro served hobbyists (low WTP, high support), while the $0→$200
+cliff was losing the 5–8-GPU startup that grows into Team — so the cliff was
+lowered rather than a feature-stripped tier re-added. Shipped with:
+`node_limit_for_tier()` replacing three copy-pasted cap ladders (the roadmap's
+"thrice-copied tier-limit ladder"), a fix for two backend history gates and two
+Team-only gates that omitted `business`, the frontend `utils/tier.ts` replacing
+six hand-rolled `=== 'team'` chains, and the pricing-page correction from
+"Unlimited nodes" to the real 25-node cap. **Follow-up:** self-serve 10→25
+upgrade via Paddle `PATCH /subscriptions` (`/api/billing/upgrade`), once the
+first 10-node customer exists.
 
 ### Server-Side Pattern Evaluation (Phase 7)
 Migrated all 18 observation patterns from client-side TypeScript to server-side Rust. Agent evaluates 17 patterns against 10-min DuckDB buffer every 10s, pushes to cloud via telemetry. Cloud evaluates `fleet_load_imbalance`. Deleted `patternEngine.ts` (2,254 lines) and `useMetricHistory.ts` (284 lines).
@@ -77,7 +94,7 @@ Four DuckDB-backed intelligence endpoints on the agent + Cloud MCP tools. Infere
 19th observation pattern (info severity). Detects when a node sustains ≥65% of its theoretical memory-bandwidth ceiling for the loaded model+quant with GPU < 95% — explains "Low" tok/W as physics, not pathology. Per-chip bandwidth lookup (Apple M-series, NVIDIA H100/H200/A100/L40S/RTX, DGX Spark/GB10).
 
 ### Perplexity Tax — Empirical Quant Quality Cost
-Replaces the hand-tuned `QUALITY_DELTA` heuristics in `quantSweet.ts` and the coarse `quant_quality_factor()` multiplier in `cloud/main.rs` with empirical KL divergence + perplexity-delta data sourced from Unsloth Dynamic GGUF benchmarks and llama.cpp perplexity discussions. Single source of truth in `public/perplexity_baseline.json`; cloud embeds it via `include_str!` so frontend Quant Sweet Spot tiles and cloud-side fleet-discovery scoring agree.
+Replaces the hand-tuned `QUALITY_DELTA` heuristics in `quantSweet.ts` and the coarse `quant_quality_factor()` multiplier in `cloud/src/main.rs` with empirical KL divergence + perplexity-delta data sourced from Unsloth Dynamic GGUF benchmarks and llama.cpp perplexity discussions. Single source of truth in `public/perplexity_baseline.json`; cloud embeds it via `include_str!` so frontend Quant Sweet Spot tiles and cloud-side fleet-discovery scoring agree.
 
 Curated coverage for ~15 model families (Llama 3.1/3.2 8B-70B, Qwen 2.5 7B-72B, Mistral 7B, Mixtral 8x7B, Gemma 2 9B-27B, Phi-3 Mini, DeepSeek-R1 distills) with a "default" generic baseline as fallback. Lookup falls back: exact family → default → legacy heuristic. `quant_quality_factor()` becomes a continuous KLD-derived multiplier (0.0 at KLD=0.15, 1.0 at KLD=0). New "Perplexity Tax" block on ModelFitAnalysis detail view shows band label (Imperceptible / Mild / Noticeable / Severe / Unusable), KLD, and PPL delta. Quant Sweet Spot summary strip tile gains a Quality: line.
 
@@ -180,11 +197,11 @@ The July 2026 Teams/Enterprise review found the Team tier strong and differentia
 
 12. **Self-hosted control plane (Enterprise — v1 SHIPPED).** `deploy/self-hosted/docker-compose.yml`: TimescaleDB + the cloud binary + the nginx frontend (same images as wicklee.dev; `VITE_CLOUD_URL="/"` + `BACKEND_HOST=cloud:8081` so /api/* proxies same-origin). `SELF_HOSTED=true` → every tenant resolves to enterprise tier in `resolve_tier`/`resolve_node_tier` (no Paddle in the box — entitlement came with the license). `WICKLEE_LICENSE_KEY` is **soft-enforced**: masked boot log, `licensed` flag in `/health` (self-hosted only — the endpoint still leaks no platform stats), unlicensed = evaluation mode with a sales pointer — evals aren't bricked, production use is honest. `docs/SELF_HOSTING.md` covers quick start, the Clerk-or-DIY auth choice (DIY = API-only legacy sessions, no org/RBAC/SSO/UI — documented as such), agent pairing, a network-egress inventory for firewall policy, and backup surface (`pgdata` volume). cloud/Dockerfile runtime gained `wget` for the compose healthcheck. **Follow-ups:** cryptographic license validation + issuance flow (key is currently presence-checked); Helm chart (item 13 shares the packaging); versioned image publishing to a registry so self-hosters aren't building from source.
 13. **Kubernetes operator + Helm (Helm v1 SHIPPED; operator open).** `deploy/helm/wicklee` deploys the control plane: cloud Deployment (SELF_HOSTED=true, secretRef env, /health probes), frontend Deployment (nginx same-origin proxy via BACKEND_HOST + in-cluster RESOLVER), optional bundled TimescaleDB StatefulSet with PVC (or `postgresql.enabled=false` + `externalDatabaseUrl`), optional Ingress. `required` guards on images/passwords fail fast at template time; linted + all value paths template-validated. Drive-by production fix: nginx never proxied `/mcp` — the documented `POST wicklee.dev/mcp` Cloud MCP endpoint was returning index.html from the SPA catch-all; now proxied (fixes wicklee.dev on next deploy AND the chart). **Operator remains open, blocked on non-interactive enrollment:** pairing is an interactive 6-digit flow, so an agent DaemonSet can't self-enroll. Design sketch: pre-provisioned enrollment tokens (org-scoped, Admin-minted, RBAC + audit) the operator injects per node; agents on GPU hosts via install.sh until then (documented in SELF_HOSTING.md). Also still open: publishing versioned images to a registry (shared blocker with item 12's follow-up).
-14. **Grafana datasource plugin + prebuilt dashboards; Terraform provider.** Meet platform teams inside tools they already defend budget for. Prometheus scrape + OTel export already exist — the plugin/dashboards are packaging, not new telemetry.
+14. **Grafana datasource plugin + prebuilt dashboards; Terraform provider (dashboards SHIPPED; plugin + provider open).** Prometheus scrape + OTel export already existed, so the dashboards were packaging, as the original note said. `deploy/grafana/wicklee-fleet.json` imports into any Grafana (datasource taken as a `DS_PROMETHEUS` variable, node multi-select from `label_values`), covering fleet summary, WES + thermal penalty, throughput/TTFT, power/GPU/memory, and a per-node snapshot table over the seven gauges `/metrics` actually emits. `docs/GRAFANA.md` has the scrape config — note `extract_api_key` already falls back to `extract_bearer`, so stock Prometheus `authorization: Bearer` works with no `http_headers` block or proxy, and the 600 req/min paid-tier limit makes any scrape interval viable. Gaps are documented as idle rather than missing (WES needs throughput AND power AND penalty simultaneously; `spanNulls` is false on purpose). **Terraform is deliberately NOT built** — see docs/TERRAFORM.md: all six collection resources (alert channels/rules/silences, SLOs, webhooks, model policies) are create/list/delete only, with no `GET /:id` and no `PATCH`, so a provider would force destroy-then-create on every edit. That means coverage gaps mid-apply for rules and SLOs, and — worse — webhook HMAC secrets silently rotating on any unrelated field change, since the secret is returned only at creation. Fix the API first (`GET /:id` + `PATCH /:id`, secret rotation as its own action), then build the provider in its own repo. The datasource plugin and provider both need separate signed repos with their own release cadence. **Next:** submit the dashboard to grafana.com/grafana/dashboards — a listing is a distribution surface for one submission rather than a plugin build.
 
 **Phase 5 — AI-native moats**
 
-15. **Model governance.** Allowed-model registry per org; alert (or webhook) when an unapproved model appears on a tagged-prod node. The `model.changed` edge detection already exists in the webhook-subscription evaluator — this adds a policy table + a check in the same path. Compliance wedge for regulated industries.
+15. **Model governance (v1 SHIPPED).** Allow-list of approved models per tenant, fleet-wide or scoped to a node tag (`model_policies`, unique on `(tenant, lower(model), coalesce(lower(tag),''))`). Governance is ACTIVE ONLY for scopes with at least one entry — an empty list governs nothing rather than flagging the whole fleet. Matching is exact/case-insensitive with a trailing-`*` prefix form for quant variants, done in Rust so SQL wildcards stay literal; a bare `*` is rejected at the API and matches nothing in the evaluator. **Correction to the original premise: there was NO `model.changed` edge detection to build on.** `SUPPORTED_WEBHOOK_EVENTS` carries only thermal/inference/wes, and `/api/v1/fleet/model-switches` derives swaps retrospectively via a `LAG()` window over `metrics_raw` — an analytics query, not a signal. Live detection is new: `evaluate_model_policy` runs in the telemetry push path beside `evaluate_webhooks`, with `model_policy_state` tracking the per-node model so a violation fires once per (node, model) and resets when the node returns to an approved model. Violations write `model_policy_violations` + a `node_events` row (`model_policy_violation`, warn). API: `GET/POST /api/model-policy`, `DELETE /api/model-policy/{id}` (writes Admin-only, audited as `model_policy.created/deleted`), `GET /api/model-policy/violations`. Settings UI section, Enterprise-gated. 11 unit tests over the matching/scoping logic. Violations are deliberately NOT in `audit_log` (actor-keyed, no acting user), so they are not carried by the SIEM drain. **Follow-ups:** SIEM/webhook fan-out for violations, alert-channel notification, and prevention (this is detection only — nothing blocks a model from loading). See docs/MODEL_GOVERNANCE.md.
 16. **Governed agentic operations.** MCP tools that ACT (drain node, unload idle model, swap quant) behind RBAC approval, every action audit-logged. Builds directly on Phase 1 RBAC + audit; first governed write surface for AI-agent-driven infra ops.
 
 **Packaging target once Phases 1–3 land:** Business = SSO + RBAC + audit export + org keys + SLO reports + cost governance (justifies $499). Enterprise = + self-hosted control plane + SCIM + custom SLA.
@@ -197,7 +214,53 @@ Features whose primary value is distribution and enterprise awareness, identifie
 3. **Hardware-fit badge** — a tiny generator (SVG badge + link to wicklee.dev/fit/<model_id>) model authors paste into HF model cards / GitHub READMEs; the landing page runs the existing fit-check against the visitor's declared hardware. Every badge is a permanent inbound link on a high-intent page.
 4. **MSP / multi-org console (Business+)** — one login managing many client orgs (Clerk supports multi-org membership; needs an org-switcher rollup view + per-org billing attribution). Five MSP partners ≈ fifty enterprise deployments; this is the partnerships wedge.
 5. **Read-only fleet share links** — expiring, revocable, view-only dashboard URLs (a scoped stream token variant + a viewer route). "Look at our fleet" in a Slack channel is the viral loop.
-6. **FOCUS-format chargeback export (SHIPPED 2026-07-17).** `format=focus` on `/api/v1/fleet/chargeback`: day×node×model rows in the FinOps Foundation FOCUS column set (BilledCost/EffectiveCost/ListCost in USD, ConsumedQuantity in tokens, PricingQuantity in kWh, model in Tags, provider/service identity), formula-injection-hardened, audited as `chargeback.exported`. The credential for FinOps X / OpenCost ecosystem listing — remaining half of the tracker item is the listing/outreach itself.
+6. **★ FOCUS-format chargeback export (PROMOTED — strategic, not cosmetic).** The chargeback endpoint gains `format=focus`, emitting the FinOps Foundation's open billing spec. Cheap — one serializer over the existing report — and it is the credential for a FinOps X / OpenCost ecosystem listing.
+
+   **Why this was promoted (Aug 2026):** the standing objection to the cost positioning is that Wicklee cannot give a CFO a holistic view of AI spend, because it only sees self-hosted inference — not API spend, not coding-assistant licences, not rented GPU. That is true and it is not worth fixing by expansion: Finout, CloudZero and Vantage already own the whole-bill view, and competing there trades a defensible moat (watts AND tokens on the node) for a contested one. FOCUS export is the alternative answer. Rather than building the holistic view, Wicklee becomes the *correctly measured self-hosted line item inside* the tools that already aggregate it — the only source able to price that line from measured watts rather than a vendor TDP guess. It converts the scope limitation from a weakness into a distribution channel, and it is one serializer's worth of work. Treat it as the highest-leverage remaining cost-governance item, ahead of further depth in the reports themselves.
+
+7. **★ AI-gateway price feed (LiteLLM et al.) — "be the meter, not the dashboard".**
+   Most organisations will front their models with a gateway (LiteLLM, Portkey, Kong AI
+   Gateway, Cloudflare AI Gateway). The gateway becomes the highway: it brokers public
+   vs private models, holds virtual keys and per-team budgets, and attributes spend by
+   team/app/key.
+
+   **The gap it cannot close:** a gateway computes cost by multiplying token counts by a
+   *provider price list*. For a self-hosted model there is no price list — LiteLLM lets an
+   operator hand-enter `input_cost_per_token` / `output_cost_per_token`, which is a guess.
+   So a gateway's cost dashboard is accurate for OpenAI and fictional for the org's own
+   vLLM endpoint. Wicklee is the only thing that can produce that rate, because it comes
+   from measured watts against measured throughput.
+
+   **Build (small — the numbers already exist):** an endpoint returning measured
+   per-model $/1M tokens in a shape a gateway can consume directly as custom pricing,
+   derived from the same data behind `/api/v1/fleet/cost-by-model`. Ship it with a docs
+   page showing the LiteLLM `model_list` wiring. Two properties matter: the rate must
+   carry its basis (kWh rate, window, sample count) so it is auditable rather than
+   another magic number, and it must degrade honestly — no throughput samples means no
+   rate, not a fabricated one.
+
+   **Then, in order of depth:**
+   - *Routing signal.* `/api/v1/route/best` already returns the healthiest node by live
+     WES and thermal state. A gateway doing cost- or latency-weighted routing can consult
+     it — feeding the highway rather than competing with it.
+   - *Reconciliation.* The gateway knows tokens by team/app/key; Wicklee knows $/token by
+     model/node. Joined, that is **true cost per team including self-hosted** — the
+     holistic CFO view, delivered through the gateway instead of by building an
+     aggregator we would lose building.
+
+   **Why this is strategic, not an integration chore:** it is the same move as item 6
+   (FOCUS export) at a different layer. Wicklee does not win by owning the dashboard —
+   gateways and FinOps tools already own it. It wins by being the authoritative source
+   for the one number neither can compute. Every such integration also buys a durable,
+   zero-outreach distribution channel: a LiteLLM ecosystem listing reaches exactly the
+   teams running self-hosted models, the same way the Grafana catalog reaches platform
+   teams.
+
+   **Terminology note (Aug 2026):** this is also why positioning copy moved from "local
+   AI" to "self-hosted AI". Buyers' GPUs are increasingly their own hardware in a private
+   cloud or colo, not a machine under a desk. "Local" remains correct in the community
+   channel (r/LocalLLaMA, the blog, the "MPG for local AI" coinage) and undersells
+   everywhere else.
 
 ### ★ GTM Execution Tracker (non-code workstreams — see docs/GTM.md for strategy)
 Trackable checklist for the marketing motions. Check items off as they land; each is durable (stays live once done). Items marked **[draftable]** can be prepared by a coding session (copy, PR text, listing metadata, page builds) with only the final submit needing the founder's accounts.
@@ -233,13 +296,136 @@ Trackable checklist for the marketing motions. Check items off as they land; eac
 
 **Rock 6 — Enterprise credibility**
 - [x] Trust page on wicklee.dev (data-flow split, sovereignty story, RBAC/audit/SIEM, honest compliance posture) — **shipped 2026-07-16** (`/trust`, footer-linked, sitemap'd; cross-links design-partner program)
-- [x] FOCUS-format chargeback export — **shipped 2026-07-17**; OpenCost/FinOps ecosystem listing remains (founder submit)
+- [ ] **AI-gateway price feed + LiteLLM ecosystem listing (roadmap item 7)** — gateways guess the $/token for self-hosted models because no price list exists; we measure it. Same "be the meter, not the dashboard" play as FOCUS. **[draftable]**
+- [ ] **FOCUS-format chargeback export (roadmap item 6 — promoted)** + OpenCost/FinOps ecosystem listing. This is the answer to "we can't give a CFO the whole AI bill": be the accurate self-hosted line inside the tools that already show the whole bill, rather than trying to out-aggregate them.
 - [ ] Quarterly "State of Local Inference Efficiency" report #1 **[draftable once leaderboard data exists]**
 - [ ] Clerk / Railway / Ollama showcase submissions **[draftable]**
 
 **North star:** weekly paired-node activations. Review this tracker monthly; a motion that shipped gets its date noted, a motion skipped two months running gets deleted (the list must stay honest).
 
+### ★ Power-Cap Advisory — the missing cost lever
+
+**Why this exists (Aug 2026 review).** Reviewing whether the cost positioning is
+actually *actionable*, we enumerated the levers a team has on self-hosted inference
+spend. Most are already covered — unload idle models (idle-waste), quantization choice
+(quant sweet spot + perplexity tax), runtime config, route to the efficient node,
+consolidate (migration advisor), fix thermal throttling, defer the next purchase
+(capacity planner). One real lever is missing, and it is the most direct one: **capping
+GPU power draw.**
+
+GPUs run near the top of a steep efficiency curve. Capping to roughly 70–80% of rated
+power typically costs a few percent of throughput. That is a bill reduction that
+requires no hardware change, no model change, and no fleet change — the only lever on
+the list with that property.
+
+**We already give this advice, badly.** `agent/src/main.rs` emits
+`"Lower power limit: sudo nvidia-smi -pl <watts> (try 80% of TDP)"` — but only as a
+*thermal* remediation step inside the NVIDIA-redline observation, and "80% of TDP" is a
+generic heuristic, not a measurement. Wicklee is the one tool that can replace that
+guess with this node's own measured knee point.
+
+**What is already collected:** `nvidia_power_draw_w` per frame, throughput per frame,
+and history in `metrics_raw` / `metrics_5min` — i.e. a scatter of (watts, tok/s)
+operating points per node/model over time.
+
+**What is missing:**
+
+1. **The adjustable range.** NVML exposes the enforced power limit plus the min/max
+   constraint (`nvidia-smi --query-gpu=power.limit,power.min_limit,power.max_limit`).
+   None of it is captured today, so we cannot say what a node *could* be set to, only
+   what it currently draws. This is the one new telemetry field required.
+2. **The curve fit.** Derive tok/s-per-watt across observed operating points and
+   identify the knee — the cap below which throughput loss accelerates. Must be honest
+   about coverage: a fleet that has only ever run at stock power has no observations
+   below it, so the recommendation is an extrapolation and must say so rather than
+   presenting a fitted number as measured. Prefer "insufficient range observed" over a
+   confident guess.
+3. **The framing.** Present it as a cost lever with a projected $/mo saving at the
+   node's kWh rate and the estimated throughput cost, not as thermal advice. Same shape
+   as the idle-waste report: a number, an action, and what it recovers.
+
+**Caveats to state in the product, not discover later:** setting a power limit needs
+root (`sudo nvidia-smi -pl`) and does not persist across reboot without a systemd unit
+or persistence mode; it is NVIDIA-only, since Apple Silicon exposes no equivalent
+control; and on a latency-sensitive fleet a few percent of throughput may not be an
+acceptable trade — the advisory should surface the trade, not assume it.
+
+**Strategic note.** This is the lever that makes the cost story *actionable* rather than
+merely informative. The Aug 2026 review concluded the cost number's main value is
+decision support (justify the fleet, size the next purchase, choose in-house vs API)
+rather than bill reduction — which is a fine position, but it is stronger with at least
+one credible "do this and your bill drops" recommendation attached. This is that
+recommendation, and it comes from data nobody else is collecting.
+
+### ★ Code Health — structural debt (September 2026 full-codebase review)
+
+The September review measured rather than eyeballed: 67k lines across three
+binaries, clippy on both crates, knip + a project-aware tsc pass on the
+frontend, bundle composition by marker. Hygiene was already good (0
+`console.log`, 4 TODOs, 9 `any`). What it found instead was *structural*: the
+same few shapes repeated until they became load-bearing. Tier 1 (bundle split,
+dead code, lint + clippy gates, CI build step) shipped in one PR. These are the
+items that need a design decision, in the order they should land — each one
+makes the next cheaper.
+
+1. **Cloud auth extractor + ordered `Tier` enum (`cloud/src/main.rs`).** 11,589
+   lines, 72 routes, 116 handlers, 59 structs, one file, **zero** axum extractors.
+   The auth preamble — bearer → `clerk_keys.read()` → `require_user_and_org` →
+   401 → `resolve_tier` → tier gate — is copy-pasted **57 times**. An
+   `AuthedUser` `FromRequestParts` extractor deletes ~600 lines and moves tier
+   gating into the handler signature. Its gate parameter should be an ordered
+   `Tier` enum, because the *second* half of this item is that the internal tier
+   vocabulary is stale in exactly the way the public copy was: `is_pro_or_above`
+   (16 calls) and `is_business_or_above` (11) are named after retired tiers, with
+   48 string comparisons across three helpers and raw `"pro"`/`"business"`
+   literals scattered through. `tier >= Tier::Team` with grandfathered mapping
+   in one `FromStr` replaces all of it, and the compiler starts helping. The
+   extractor is also the natural first cut for splitting the file by domain
+   (auth, nodes, fleet, billing, governance, audit) — the route table already
+   groups them.
+
+2. **`Overview.tsx` decomposition + memoization (frontend).** 3,252 lines, 11
+   components in one file, main component body **1,930 lines** (l.1320–3252);
+   `FleetStatusRow` alone is 615. **0 `useMemo` in the file, 0 `React.memo` in
+   all 119 frontend files.** Fleet-wide derivations (WES leaderboard, l.1763)
+   run inline in render, so every 2s telemetry frame recomputes everything and
+   re-renders the whole tree. Not profiled — fine at 3–10 nodes, will show at
+   50+. The React Compiler lint rules (`set-state-in-effect` 45,
+   `static-components` 26 — components defined *inside* render, remounting per
+   frame — `purity` 25, `refs` 34) were measured and switched **off** in
+   `eslint.config.js` rather than left as 131 permanent warnings; this item is
+   where they get turned back on, file by file. Split the file, memoize derived
+   fleet data, `memo` row components keyed on `node_id`. Related debt from the
+   same review, cheap to fold in: 8 `exhaustive-deps` warnings (two look like
+   real bugs — `AIInsights` l.1098 missing `allNodeMetrics`, `TracesView` l.902
+   missing `fetchTraces`) and 37 unused locals left at warn level.
+
+3. **Agent params structs + Cargo workspace.** `agent/src/main.rs` is 8,120
+   lines with three functions taking **13, 18 and 20 parameters**
+   (`clippy::too_many_arguments` is allowed crate-wide for now, pointing here).
+   Params structs are the mechanical fix. The larger question in the same
+   territory: `scoring.rs` is **triplicated by copy script**
+   (`shared/` → `agent/`, `cloud/`) because Railway's Docker build context is
+   `cloud/` alone. A Cargo workspace with the Dockerfile at repo root removes
+   `sync-scoring.mjs` and its CI check — but it is a deploy-config change, so
+   it belongs with a deliberate Railway session, not a drive-by.
+
+4. **`TeamManagement.tsx` Clerk fallback never resolves (live bug — SHIPPED).**
+   The file loaded `OrganizationProfile` via `require('@clerk/clerk-react')`
+   inside a try/catch so agent builds would not break. In a Vite ESM bundle
+   `require` is undefined in the browser, so the call threw, the catch
+   swallowed it, `ClerkOrgProfile` stayed `null`, and the cloud branch was never
+   taken — the Clerk org-management UI never rendered on wicklee.dev and
+   Team-tier users always saw the fallback. Fixed with a dynamic `import()`
+   behind a build-time ternary on `IS_AGENT || IS_DEMO`; the ternary folds, so
+   the import is eliminated from the agent and demo bundles (measured: the
+   agent's shared Clerk chunk stays at its 87 kB baseline — a bare
+   `React.lazy(() => import(…))` had grown it to 109 kB because Rollup keeps
+   the call as a possible side effect). **Remaining:** end-to-end check against
+   a live Clerk org — the environment that shipped this has no publishable key.
+
 ### Security Review — Required Follow-ups (from June 2026 Pass 1 & 2)
+
 Carried over from the cloud auth/tenancy review (Pass 1, shipped) and the agent concurrency review (Pass 2, partially shipped). These are the remaining **required** hardening items, in priority order:
 
 1. **Agent task supervision (Pass 2, HIGH — SHIPPED).** Fire-and-forget `tokio::spawn` loops swallowed panics, so a dead subsystem left the agent running but silent. `agent/src/supervisor.rs` provides `supervise(name, factory)` (restart on panic/return, exponential backoff 1s→30s with reset after a 60s healthy run) and `supervise_until(name, factory)` (future returns `ControlFlow`; `Break` = deliberate permanent stop, not restarted). All four critical loops are now supervised: the metrics broadcast loop (`supervise`), and the Ollama / vLLM / llama.cpp harvester main loops + `cloud_push` (`supervise_until`, with their terminal exits — `port_rx.changed()` watch-close and 410-Gone — returning `Break` so shutdown doesn't restart-spin). Each wrap uses a compiler-checked clone-per-restart prelude with the body unchanged. Unit-tested (restart-on-panic, restart-on-return, no-restart-on-Break). Remaining nicety: the harvester *probe* sub-tasks (idle baseline measurement) are non-critical and still unsupervised — low priority.
@@ -253,7 +439,7 @@ Pre-existing-population note from Pass 1: nodes paired before the 64-bit node-ID
 ### Full-Codebase Review — remaining MEDIUMs (June 2026; HIGHs all shipped)
 The mid-June four-surface review's HIGHs landed in five merged chunks (pairing hijack, Prometheus auth, org-tenancy sweep, agent races, frontend HIGHs, dead-code pass — see progress.md). Remaining verified MEDIUMs, roughly by value:
 1. **Cloud calculation fixes — SHIPPED** (wes_for_payload Apple SoC power, rollup straddling-bucket loss, the 24h hole in 7d+ charts, qf² in variant selection, plus the WES-drift evaluator that could never fire — its recent-24h window read metrics_5min, which never contains the last 24h). Still open from this group: OTel `export_interval_s` stored but ignored (fixed 30s tick).
-2. **Cloud perf/hardening**: N+1 per-node aggregation loops in wes-history / metrics-history / fleet-duty (single GROUP BY query instead); `auth_rate_limits` IP keys never evicted (slow leak; also trusts spoofable XFF); `/api/agent/version` hits the GitHub API uncached per request (60/hr anonymous limit — cache ~10 min); CSV export escaping (newlines/quotes/formula injection); signup runs bcrypt before the duplicate-email check (timing oracle + wasted work); duplicate `MAX_FREE_NODES`/`FREE_NODE_LIMIT` constants and the thrice-copied tier-limit ladder (`node_limit_for_tier()`); node session-token compare not constant-time (main.rs ~2294).
+2. **Cloud perf/hardening**: N+1 per-node aggregation loops in wes-history / metrics-history / fleet-duty (single GROUP BY query instead); `auth_rate_limits` IP keys never evicted (slow leak; the spoofable-XFF read was fixed in PR #61 via `TRUSTED_PROXY_HOPS`); `/api/agent/version` hits the GitHub API uncached per request (60/hr anonymous limit — cache ~10 min); CSV export escaping (newlines/quotes/formula injection); signup runs bcrypt before the duplicate-email check (timing oracle + wasted work); duplicate `MAX_FREE_NODES`/`FREE_NODE_LIMIT` constants and the thrice-copied tier-limit ladder (`node_limit_for_tier()`); node session-token compare not constant-time (main.rs ~2294).
 3. **Agent**: Apple Silicon power double-counted in all DuckDB cost/WES queries (`Sample.gpu_power_w` holds SoC total, consumers add `cpu_power_w` on top; CPU-only Linux nodes get NULL → $0 cost) — fix at `BroadcastFrame::into_sample` with a canonical `total_power_w`; `/api/model-candidates` runs the "24h background" catalog refresh inline on the request path (first request of the day hangs minutes — spawn the documented background task); `[pm_raw]` debug dump on every powermetrics cycle into unrotated `/var/log/wicklee.log` + missing `MissedTickBehavior::Skip` makes powermetrics sample continuously; Windows blocking `wmic` in async loops every 2s (tokio::process + cache the failure); `sc create` binPath unquoted (classic unquoted-service-path; the validator defers to "quoting at the call site" that doesn't exist); Pattern P slope ×6 vs the correct ×60 on 1Hz data (fires ~10× late; Pattern R is correct); audit-export dismissals ignore the date window; CSV `model` column unescaped (client-controlled via proxy).
 4. **Frontend**: `allNodeMetrics`/`lastSeenMsMap` never drop removed nodes (ghost data; defeats `pruneBuffers`); `useFleetCounts` hardcodes `status: 'online'` (counts are fiction — derive from `last_seen_ms`); `useFleetDuty` hardcodes `https://wicklee.dev` bypassing `cloudUrl.ts` (check if the hook is even still consumed after the Overview duty removal); audio regex `/\bsts?\b/` matches `st`/`sts` not `tts`/`stt` (modelCategory.ts); benchmark reports use `ollama_quantization` for vLLM runs and compute WES without PUE; `useInsightDismiss` state stales on key change; FleetModelDiscovery/ModelDiscoveryCard ~600-line copy-paste twins (already drifting) + the duplicated Active-Models VRAM panel inside Overview; the 1Hz Overview chart re-renders up to 3600 recharts points per SSE frame (downsample); `useSettings` runs side effects inside state updaters (StrictMode double-fire); `userApiKey` naming actually holds an Ollama base URL (SecurityView); index keys on shifting alert/violation lists; `efficiency.ts` doc comment teaches the wrong WES formula above a correct tooltip; two same-named `quantFamily()` functions with different semantics (rename one `quantSpeedBucket`).
 
@@ -279,7 +465,7 @@ Stage 1 (shipped) captures `max_model_len` from vLLM's `/v1/models`, but exact `
 "Is this model right for this hardware?" Auto-computed from VRAM headroom, tok/s vs model size ratio, thermal behavior under load, swap pressure. Returns score + recommendation (e.g., "62/100 — VRAM tight, consider Q3_K_M or smaller variant").
 
 ### Kubernetes Operator
-Helm chart and operator for automated Wicklee agent deployment across GPU node pools.
+Operator for automated Wicklee agent deployment across GPU node pools (the control-plane Helm chart shipped in `deploy/helm/wicklee`; agent enrollment is the blocker — see `docs/SELF_HOSTING.md`).
 
 ### Install Telemetry
 Anonymous install event tracking (OS, arch, version) via fire-and-forget ping from `install.sh` to cloud endpoint. Powers activation funnel metrics without collecting PII.
@@ -292,4 +478,4 @@ Anonymous hardware benchmark submissions with public ranking. "MPG for AI" — c
 
 ## Contributing
 
-Issues and PRs welcome. See the [README](../README.md) for build instructions.
+Issues welcome; pull requests are not accepted at this time (see [CONTRIBUTING](../CONTRIBUTING.md)). See the [README](../README.md) for build instructions.

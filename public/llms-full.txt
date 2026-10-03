@@ -467,7 +467,7 @@ Immutable, append-only audit trail of sensitive fleet operations. Clerk JWT auth
 ```
 
 ### GET /api/audit-log/export
-Full-history audit export (Business+). Params: `format=csv|json` (default json), `action` (exact-match filter), `from`/`to` (ts_ms range). Chronological, capped at 100k rows, served with `Content-Disposition: attachment`. CSV is RFC-4180 quoted with spreadsheet formula-injection hardening (`= + - @` prefixed cells are neutralized). Every export is itself audited as `audit_log.exported`. Retention: at least 365 days on Business; unlimited on Enterprise.
+Full-history audit export (Business+). Params: `format=csv|json` (default json), `action` (exact-match filter), `from`/`to` (ts_ms range). Chronological, capped at 100k rows, served with `Content-Disposition: attachment`. CSV is RFC-4180 quoted with spreadsheet formula-injection hardening (`= + - @` prefixed cells are neutralized). Every export is itself audited as `audit_log.exported`. Retention: unlimited — audit entries are never pruned.
 
 ### GET/PUT/DELETE /api/audit-log/drain
 SIEM drain (Business+; PUT/DELETE are org-Admin-only). One drain per tenant. PUT `{ "url": "https://..." }` returns the HMAC secret ONCE (re-PUT rotates it) and starts the delivery cursor at the current max audit id — the drain streams NEW events; use the export endpoint for backfill. A background loop ships batches (≤500 events) every 60s as JSON, HMAC-SHA256 signed via `X-Wicklee-Signature: sha256=<hex>` (same scheme as threshold webhooks). Auto-disables after 20 consecutive delivery failures; re-PUT re-enables. Tier is re-checked at delivery time. Drain config changes are audited (`audit_drain.created` / `audit_drain.deleted`).
@@ -534,7 +534,7 @@ The full telemetry payload sent every 1-2 seconds. All fields are optional (null
 - `vllm_tokens_per_sec`: f32
 
 ### Latency & Queue (v0.7.10+)
-- `ollama_ttft_ms`: f32 — Time to first token (probe baseline, ~30s)
+- `ollama_ttft_ms`: f32 — Time to first token (probe baseline, ≤ every 10 min)
 - `ollama_prompt_eval_tps`: f32 — Prompt processing speed (tok/s)
 - `ollama_load_duration_ms`: f32 — Model load time
 - `vllm_avg_ttft_ms`: f32 — TTFT from Prometheus histogram (production)
@@ -623,14 +623,14 @@ Community (9):
 - **power_jitter:** Power CV > 20% during inference
 - **swap_io_pressure:** Swap write > 2 MB/s sustained (model spilling to disk)
 - **clock_drift:** Clock throttle > 15% with Normal thermal
-- **nvidia_thermal_redline:** GPU temp > 85C sustained or > 90C instant
+- **pcie_lane_degradation:** PCIe link width below rated max (NVIDIA only)
 - **vram_overcommit:** Model size > 90% of VRAM capacity
 
 Pro (9):
 - **power_gpu_decoupling:** High power + low GPU% during inference
 - **bandwidth_saturation:** Low GPU% + high VRAM + dropping WES
 - **efficiency_drag:** WES penalty > 30% with Normal thermal
-- **pcie_lane_degradation:** PCIe link width below rated max (NVIDIA only)
+- **nvidia_thermal_redline:** GPU temp > 85C sustained or > 90C instant
 - **vllm_kv_cache_saturation:** KV cache > 90% sustained
 - **ttft_regression:** TTFT slope > +5 ms/min with mean > 100 ms
 - **latency_spike:** Recent E2E latency > 1.5x baseline and > 500 ms
@@ -663,7 +663,7 @@ Evaluated by the cloud backend every 60 seconds.
 | Apple Silicon power | 5s window | powermetrics (requires root) |
 | NVIDIA GPU | 1 Hz | NVML API (zero-privilege) |
 | Ollama harvester | 2s | GET /api/ps (models, VRAM, expires_at) |
-| Ollama probe | ~30s | 20-token POST /api/generate (disabled when proxy active) |
+| Ollama probe | ≤10 min | 20-token POST /api/generate against an already-loaded model (disabled when proxy active or `[probe] enabled = false`) |
 | vLLM harvester | 2s | GET /metrics (Prometheus gauges + histograms) |
 | WES thermal sampler | 2s | 30-sample rolling window |
 | DuckDB local store | 2s | Batch INSERT, WAL mode |
@@ -683,13 +683,16 @@ Evaluated by the cloud backend every 60 seconds.
 
 ## Pricing
 
-| Tier | Price | Nodes | History | Patterns & features |
-|------|-------|-------|---------|---------------------|
-| Community | Free | 3 | 24h | 9 patterns |
-| Pro | $29/mo | 10 | 7 days | 20 patterns + custom alerts (Slack/email), threshold webhooks |
-| Team | $49/seat/mo | 25 (+$2/node over 25) | 90 days | + shared dashboards, PagerDuty, Cloud MCP, OTel/Prometheus export |
-| Business | $499/mo | 100 (unlimited seats) | 365 days | + SSO/SAML, audit logging |
-| Enterprise | Contact sales | Unlimited | Unlimited | + sovereign deployment, custom SLA |
+| Tier | Price | Nodes in fleet view | History | Features |
+|------|-------|---------------------|---------|----------|
+| Community | Free | 3 | 24h | Unlimited local nodes, 9 patterns, local API + MCP, Fleet API core endpoints (60 req/min), Ollama proxy, community support |
+| Team | $99/mo ($990/yr) for 10 nodes · $200/mo ($2,000/yr) for 25 | 10 or 25 | 90 days | 20 patterns, custom alerts (Slack/email/PagerDuty), threshold webhooks, shared dashboards, Fleet API at 600 req/min + analytics endpoints, Cloud MCP, OTel/Prometheus export, chargeback, idle-waste, capacity planner, migration advisor, SLOs with error budgets, benchmark export, email support |
+| Enterprise | Custom | Unlimited | 12 months | Everything in Team + self-hosted control plane (Docker Compose or Helm), SSO/SAML, audit log export + SIEM drain, SLA + dedicated support, custom deployment support |
+
+Contact for Team or Enterprise: jeff@wicklee.dev. `pro` and `business` remain
+valid `SubscriptionTier` values for existing accounts but are not sold; "Pro+"
+annotations elsewhere in this file are available on Team, and "Business+"
+annotations mean Enterprise.
 
 ### Organization RBAC
 

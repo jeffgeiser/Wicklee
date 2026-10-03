@@ -1,25 +1,26 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { Thermometer, Database, Zap, Activity, Cloud, CloudLightning, Download, Terminal, Plus, ChevronDown, BrainCircuit, Check, DollarSign, Server, Star, AlertTriangle, Info, ExternalLink, Cpu, Lock, Fingerprint, Clock, HardDrive } from 'lucide-react';
+import { Thermometer, Database, Zap, Activity, Download, Terminal, Plus, ChevronDown, Check, DollarSign, AlertTriangle, ExternalLink, Cpu, Lock, Fingerprint, Clock} from 'lucide-react';
 import { computeWES, computeRawWES, thermalCostPct, thermalSourceLabel, formatWES, wesColorClass } from '../utils/wes';
 import { computeModelFitScore } from '../utils/modelFit';
-import { calculateFleetHealthPct, calculateTotalVramMb, calculateTotalVramCapacityMb, fleetVramSubtitle, calculateCostPer1kTokens, calculateTokensPerWatt, WES_TOOLTIP, INFERENCE_VRAM_THRESHOLD_MB, ELECTRICITY_RATE_USD_PER_KWH } from '../utils/efficiency';
+import { calculateFleetHealthPct, calculateTotalVramMb, calculateTotalVramCapacityMb, fleetVramSubtitle, calculateCostPer1kTokens, WES_TOOLTIP, INFERENCE_VRAM_THRESHOLD_MB, ELECTRICITY_RATE_USD_PER_KWH } from '../utils/efficiency';
 import { getNodePowerW, hasPowerData } from '../utils/power';
 import { pushAndGetSmoothed, pruneBuffers } from '../utils/sharedSmoothing';
-import { CLOUD_URL } from '../utils/cloudUrl';
-import { NODE_REACHABLE_MS, fmtAgo as fmtNodeAgo } from '../utils/time';
+
+import { NODE_REACHABLE_MS, fmtAgo } from '../utils/time';
 import { NodeAgent, PairingInfo, SentinelMetrics, ObservabilityNavParams } from '../types';
 import ModelFitSummaryStrip from './insights/ModelFitSummaryStrip';
 import { useFleetStream } from '../contexts/FleetStreamContext';
 import { useNodeRollingMetrics, useRollingBuffer, FLEET_ROLLING_WINDOW, FLEET_ROW_ROLLING_WINDOW, NODE_ROLLING_WINDOW } from '../hooks/useRollingMetrics';
 import { useFleetCounts } from '../hooks/useFleetCounts';
 import { useLocalEvents } from '../hooks/useLocalEvents';
-import { thermalColour, derivedNvidiaThermal } from './NodeHardwarePanel';
+import { useLocalMetricsStream } from '../hooks/useLocalMetricsStream';
+import { thermalColour, derivedNvidiaThermal } from '../utils/thermal';
 import EventFeed from './EventFeed';
 import MetricTooltip from './MetricTooltip';
 import RuntimeConfigModal from './RuntimeConfigModal';
 
-const isLocalHost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+import { IS_LOCAL_HOST as isLocalHost, IS_AGENT as isLocalMode } from '../utils/buildTarget'; // isLocalMode: Cockpit vs Mission Control, a build-time flag
 
 /**
  * GPU utilisation thresholds for the four-state TOK/S display:
@@ -33,7 +34,6 @@ const isLocalHost = window.location.hostname === 'localhost' || window.location.
  * For pre-v0.4.37 agents (field absent), the frontend falls back to computed logic.
  * GPU_BUSY_THRESHOLD is used only by the fallback path.
  */
-const GPU_IDLE_THRESHOLD = 15;
 const GPU_BUSY_THRESHOLD = 20;
 
 /**
@@ -69,23 +69,16 @@ function estimateTps(
   return rawTps;
 }
 
-// Build-time flag: true when compiled for the local agent binary (VITE_BUILD_TARGET=agent).
-// Controls Cockpit vs Mission Control rendering mode. Never derived from runtime auth state.
-const isLocalMode = (import.meta.env.VITE_BUILD_TARGET as string) === 'agent';
-
 interface OverviewProps {
   nodes: NodeAgent[];
   /** True while the initial /api/fleet fetch is in-flight. Suppresses EmptyFleetState flash on refresh. */
   nodesLoading?: boolean;
-  isPro?: boolean;
   pairingInfo?: PairingInfo | null;
   onOpenPairing?: () => void;
   onAddNode?: () => void;
   onUpgrade?: () => void;
   getNodeSettings?: (nodeId: string) => { pue: number; kwhRate: number; currency: string };
   fleetKwhRate?: number;
-  /** Auth token getter for cloud API calls. */
-  getToken?: () => Promise<string | null>;
   /** Cross-nav to Observability tab with optional node pre-filter. */
   onNavigateToObservability?: (params?: ObservabilityNavParams) => void;
   /**
@@ -139,13 +132,6 @@ const InsightTile: React.FC<InsightTileProps> = ({ label, value, valueCls, value
     </div>
   </div>
 );
-
-const fmtAgo = (ms: number): string => {
-  const s = Math.floor((Date.now() - ms) / 1000);
-  if (s < 60)   return `${s}s ago`;
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  return `${Math.floor(s / 3600)}h ago`;
-};
 
 // ── Fleet Status grid ────────────────────────────────────────────────────────
 // Full column set (md+): NODE · MEMORY · VRAM · MODEL · WES · TOK/W · TOK/S · W/1K · WATTS · TTFT · GPU% · THERMAL · SPACER
@@ -322,11 +308,10 @@ interface NodeRowProps {
   /** Session peak tok/s for this node — from peakTpsMap in FleetStreamContext. */
   peakTps?: number;
   restricted?: boolean;
-  onUpgrade?: () => void;
   onOpenConfig?: (modelName: string) => void;
 }
 
-const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, lastSeenMs, pue = 1.0, peakTps, restricted = false, onUpgrade, onOpenConfig }) => {
+const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, lastSeenMs, pue = 1.0, peakTps, restricted = false, onOpenConfig }) => {
   const [expanded, setExpanded] = useState(false);
   const isOnline = m !== null;
 
@@ -347,7 +332,7 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
       : 'pending';
   const dotTooltip =
     dotState === 'online'  ? 'Online · last seen just now' :
-    dotState === 'offline' ? `Unreachable · last seen ${fmtNodeAgo(lastSeenMs!)}` :
+    dotState === 'offline' ? `Unreachable · last seen ${fmtAgo(lastSeenMs!)}` :
     'Pending · waiting for first report';
 
   // Combine Ollama and vLLM tok/s — both runtimes can run simultaneously.
@@ -1317,7 +1302,7 @@ const DiagnosticRail: React.FC<{
 };
 
 // ── Main component ─────────────────────────────────────────────────────────────
-const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro, pairingInfo, onOpenPairing, onAddNode, onUpgrade, getNodeSettings, fleetKwhRate = ELECTRICITY_RATE_USD_PER_KWH, getToken, onNavigateToObservability, onNavigateToInsights }) => {
+const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairingInfo, onOpenPairing, onAddNode, onUpgrade, getNodeSettings, fleetKwhRate = ELECTRICITY_RATE_USD_PER_KWH, onNavigateToObservability, onNavigateToInsights }) => {
   const {
     allNodeMetrics: cloudMetrics,
     lastSeenMsMap: cloudLastSeen,
@@ -1325,15 +1310,16 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     fleetEvents,
     connected: cloudConnected,
     transport: cloudTransport,
-    connectionState,
   } = useFleetStream();
 
   // Local-only state (used when isLocalHost for WS/SSE to the local agent)
   const [sentinel, setSentinel] = useState<SentinelMetrics | null>(null);
   // v0.9.0: Runtime Config modal — null when closed, otherwise the model name to inspect.
   const [runtimeConfigModel, setRuntimeConfigModel] = useState<string | null>(null);
-  const [localConnected, setLocalConnected] = useState(false);
-  const [localTransport, setLocalTransport] = useState<'ws' | 'sse' | null>(null);
+  // Shared local-agent stream (WS primary, SSE fallback) — see useLocalMetricsStream.
+  // handleMetrics is declared below; it is only called from stream callbacks.
+  const { connected: localConnected, transport: localTransport } =
+    useLocalMetricsStream(data => handleMetrics(data));
 
   type MetricKey = 'gpu' | 'cpu' | 'mem' | 'power' | 'tps';
   interface HistoryPoint { time: string; gpu: number | null; cpu: number; mem: number | null; power: number | null; tps: number | null; }
@@ -1354,7 +1340,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     if (!isLocalMode) return;
     const fetchCost = async () => {
       try {
-        const res = await fetch(`http://localhost:7700/api/cost-by-model?hours=24`);
+        const res = await fetch('/api/cost-by-model?hours=24');
         if (!res.ok) return;
         const data = await res.json();
         setCostByModel(data.models ?? []);
@@ -1364,10 +1350,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     fetchCost();
     const id = setInterval(fetchCost, 60_000); // refresh every 60s
     return () => clearInterval(id);
-  }, [isLocalMode]);
-
-  const wsRef = useRef<WebSocket | null>(null);
-  const esRef = useRef<EventSource | null>(null);
+  }, []);
 
   // Local peak tok/s tracker — mirrors FleetStreamContext's peakTpsRef but for the
   // local WS node, which never passes through the fleet SSE loop.
@@ -1384,11 +1367,9 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   // Steadier metrics (raw watts, power cost): default node window (8) is fine.
   const fleetTpsBuf     = useRollingBuffer(FLEET_ROLLING_WINDOW); // Tile 1: fleet throughput
   const wattPer1kBuf    = useRollingBuffer(4);                    // Tile 6: W / 1k tokens — short window; converges quickly when fleet composition changes
-  const costPer1kBuf    = useRollingBuffer(FLEET_ROLLING_WINDOW); // Tile 7: $ / 1M — tok/s-derived
   const fleetWesBuf     = useRollingBuffer(FLEET_ROLLING_WINDOW); // Tile 5 + Fleet Intelligence WES card
   const fleetTokWBuf    = useRollingBuffer(FLEET_ROLLING_WINDOW); // Tile 8: tok/W (raw, no penalty)
   const costPer1kNewBuf = useRollingBuffer(FLEET_ROLLING_WINDOW); // Fleet Intelligence cost card
-  const fleetWattsBuf   = useRollingBuffer();                     // Fleet Intelligence Tokens Per Watt (watts-only, steadier)
 
   // Per-node cost rolling average — keyed by nodeId, managed via Map ref so
   // hook count doesn't grow with fleet size (hooks must be called unconditionally).
@@ -1432,7 +1413,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
 
   const handleMetrics = useCallback((data: SentinelMetrics) => {
     setSentinel(data);
-    setLocalConnected(true);
     pushHistoryPoint(data);
 
     // Update local peak tok/s so DiagnosticRail estimateTps can apply the GPU boost.
@@ -1447,63 +1427,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     }
   }, [pushHistoryPoint]);
 
-  // Local WS/SSE connection — only active on localhost.
-  useEffect(() => {
-    if (!isLocalHost) return;
-
-    let retryWs:  ReturnType<typeof setTimeout>;
-    let retrySse: ReturnType<typeof setTimeout>;
-    let wsFailed = false;
-
-    const connectSSE = () => {
-      if (wsRef.current?.readyState === WebSocket.OPEN) return;
-      const es = new EventSource('/api/metrics');
-      esRef.current = es;
-      es.onopen    = () => setLocalTransport('sse');
-      es.onmessage = (ev) => {
-        try { handleMetrics(JSON.parse(ev.data) as SentinelMetrics); setLocalTransport('sse'); }
-        catch { /* malformed frame */ }
-      };
-      es.onerror = () => {
-        setLocalConnected(false);
-        es.close();
-        esRef.current = null;
-        retrySse = setTimeout(connectSSE, 3000);
-      };
-    };
-
-    const connectWS = () => {
-      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const ws = new WebSocket(`${proto}//${window.location.host}/ws`);
-      wsRef.current = ws;
-      ws.onmessage = (ev) => {
-        try {
-          handleMetrics(JSON.parse(ev.data as string) as SentinelMetrics);
-          setLocalTransport('ws');
-          if (esRef.current) { esRef.current.close(); esRef.current = null; }
-        } catch { /* malformed frame */ }
-      };
-      ws.onerror = () => { wsFailed = true; };
-      ws.onclose = () => {
-        wsRef.current = null;
-        setLocalConnected(false);
-        if (wsFailed) { connectSSE(); }
-        else {
-          if (!esRef.current) connectSSE();
-          retryWs = setTimeout(() => { wsFailed = false; connectWS(); }, 3000);
-        }
-      };
-    };
-
-    connectWS();
-
-    return () => {
-      clearTimeout(retryWs);
-      clearTimeout(retrySse);
-      wsRef.current?.close();
-      esRef.current?.close();
-    };
-  }, [handleMetrics]);
 
   // Feed cloud metrics into the history buffer for the System Performance chart.
   // Fleet-wide aggregation: average CPU/GPU/mem across all reporting nodes, sum power.
@@ -1658,8 +1581,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
       : (m.ollama_inference_active === true && m.ollama_is_probing !== true) ||
         (m.vllm_running === true && (m.vllm_requests_running ?? 0) > 0)
   );
-  // Whether any inferring node has the Wicklee proxy active (exact tok/s, not estimated)
-  const anyProxyActive = tpsNodes.some(m => m.ollama_proxy_active === true);
 
   // Three-state throughput label for the single-node cockpit THROUGHPUT tile.
   // Mirrors the DiagnosticRail / FleetStatusRow logic — reuses sentinel so no new data needed.
@@ -1754,11 +1675,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     ? Math.round(sentinel.memory_pressure_percent)
     : fleetMemPressure;
 
-  // Tile 4 — FLEET NODES: online / total
-  // fleetTotalCount — all registered nodes (single source via useFleetCounts)
-  // fleetLiveCount  — set below, after reachableNodeIds is computed
-  const fleetTotalCount = isLocalHost ? (sentinel != null ? 1 : 0) : counts.total;
-
   // Tiles 5-7 — WES leaderboard + fleet average
   interface WESEntry { nodeId: string; hostname: string; activeModel: string | null; wes: number | null; rawWes: number | null; tcPct: number; tps: number | null; watts: number | null; thermalState: string | null; thermalSource: string | null; nullReason: string; costPer1mRaw: number | null; kwhRate: number; }
   const wesEntries: WESEntry[] = effectiveMetrics.map(m => {
@@ -1792,8 +1708,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     const activeModel   = rawModel ? (rawModel.split('/').pop() ?? rawModel) : null;
     return { nodeId: m.node_id, hostname: displayName, activeModel, wes, rawWes, tcPct, tps, watts, thermalState: m.thermal_state, thermalSource: m.thermal_source ?? null, nullReason, costPer1mRaw, kwhRate };
   });
-  const pueValues = effectiveMetrics.map(m => getNodeSettings?.(m.node_id)?.pue ?? 1.0);
-  const hasPerNodePueDiversity = new Set(pueValues).size > 1;
   const sortedWES  = [...wesEntries].sort((a, b) => {
     if (a.wes != null && b.wes != null) return b.wes - a.wes;
     if (a.wes != null) return -1;
@@ -1806,8 +1720,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
   const rankedTokW     = sortedWES.filter(e => e.rawWes != null);
   const fleetAvgTokW   = rankedTokW.length > 0
     ? rankedTokW.reduce((acc, e) => acc + e.rawWes!, 0) / rankedTokW.length : null;
-  const efficiencyRatio = rankedWES.length >= 2
-    ? rankedWES[0].wes! / rankedWES[rankedWES.length - 1].wes! : null;
 
   // Honest empty-state reason for the power-derived tiles (WES, tok/W).
   // A node can be actively inferring with no power telemetry (e.g. Apple
@@ -1849,7 +1761,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     if (state) thermalCounts[state] = (thermalCounts[state] ?? 0) + 1;
   });
   const allNormal      = effectiveMetrics.length > 0 && Object.keys(thermalCounts).every(s => ['normal', 'nominal'].includes(s.toLowerCase()));
-  const hasThrottling  = Object.keys(thermalCounts).some(s => ['serious', 'critical'].includes(s.toLowerCase()));
 
   // ── Best Route Now ──────────────────────────────────────────────────────────
   const activeEntries    = wesEntries.filter(e => e.tps != null && e.tps > 0);
@@ -1895,35 +1806,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     return (totalPowerW / fleetTps) * 1000;
   })();
 
-  // Tile 7 — COST / 1M TOKENS derived from energy per 1k tokens.
-  // wattPer1k is in J/k·tok (Joules per 1k tokens). To convert to $/k·tok:
-  //   J/k·tok × (1 kWh / 3,600,000 J) × ($/kWh) = $/k·tok
-  // The display then multiplies by 1000 to show $/1M tokens.
-  // NOTE: the old formula used /1000 instead of /3,600,000 — a ×3600 unit error.
-  const costPer1k = wattPer1k != null ? (wattPer1k * fleetKwhRate) / 3_600_000 : null;
-
-  // Tile 8 — FLEET POWER COST / DAY: ∑ watts_i × pue_i × 24h × rate_i
-  // Covers all nodes that report power data.
-  // We intentionally do NOT filter by inference activity here: ollama_tokens_per_second
-  // is a 30-second probe value that persists after inference stops, making any
-  // "is actively inferring" check unreliable — it would exclude the entire fleet.
-  // This tile represents the always-on infrastructure electricity cost.
-  const idleFleetCostPerDay = (() => {
-    const withPower = effectiveMetrics.filter(m => hasPowerData(m));
-    if (withPower.length === 0) return null;
-    return withPower.reduce((acc, m) => {
-      const ns = getNodeSettings?.(m.node_id);
-      const pue = ns?.pue ?? 1.0;
-      const rate = ns?.kwhRate ?? fleetKwhRate;
-      const watts = (getNodePowerW(m) ?? 0) + (ns?.systemIdleW ?? 0);
-      return acc + watts * pue * 24 * (rate / 1000);
-    }, 0);
-  })();
-  const idlePowerNodes = effectiveMetrics.filter(m => hasPowerData(m));
-  const avgPue = effectiveMetrics.length > 0
-    ? effectiveMetrics.reduce((acc, m) => acc + (getNodeSettings?.(m.node_id)?.pue ?? 1.0), 0) / effectiveMetrics.length
-    : 1.0;
-
   // Fleet Intelligence — Cost Efficiency + Tokens Per Watt
   // Only over inference-active nodes (tpsNodes) so PUE + rate apply to actual workload.
   const fleetHourlyCostUsd = (() => {
@@ -1943,14 +1825,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     ? calculateCostPer1kTokens(fleetTps, fleetHourlyCostUsd)
     : null;
 
-  const totalPowerOfTpsNodes = (() => {
-    const powerNodes = tpsNodes.filter(m => hasPowerData(m));
-    if (powerNodes.length === 0) return null;
-    return powerNodes.reduce((acc, m) =>
-      acc + (getNodePowerW(m) ?? 0), 0);
-  })();
-  const tokensPerWattVal = calculateTokensPerWatt(fleetTps, totalPowerOfTpsNodes);
-
   // ── Rolling-average display values ──────────────────────────────────────────
   // Use the highest timestamp_ms across all reporting nodes as the dedup key so
   // that each SSE frame is pushed exactly once even across React strict-mode
@@ -1960,16 +1834,9 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     : 0;
   const displayFleetTps     = fleetTpsBuf.push(fleetTps,              fleetTs);
   const displayWattPer1k    = wattPer1kBuf.push(wattPer1k,            fleetTs);
-  const displayCostPer1k    = costPer1kBuf.push(costPer1k,            fleetTs);
   const displayFleetAvgWES  = fleetWesBuf.push(fleetAvgWES,           fleetTs);
   const displayFleetAvgTokW = fleetTokWBuf.push(fleetAvgTokW,         fleetTs);
   const displayCostPer1kNew = costPer1kNewBuf.push(costPer1kTokensNew, fleetTs);
-  // Smoothed fleet total watts — same node set as fleetTps (tpsNodes with power data).
-  const displayFleetWatts   = fleetWattsBuf.push(totalPowerOfTpsNodes, fleetTs);
-  // Fleet Tokens Per Watt — tok/s ÷ (kW) — consistent formula with Fleet Status table column.
-  const displayTokPerKW = (displayFleetTps != null && displayFleetWatts != null && displayFleetWatts > 0)
-    ? displayFleetTps / displayFleetWatts
-    : null;
   // ── SSE connection indicator (3-state) ──────────────────────────────────────
   const sseNow = Date.now();
 
@@ -1981,11 +1848,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     : Object.keys(lastSeenMsMap).filter(id => sseNow - (lastSeenMsMap[id] ?? 0) <= NODE_REACHABLE_MS);
   const localNodeStale = isLocalHost && sentinel != null && sseNow - (sentinel.timestamp_ms ?? 0) > NODE_REACHABLE_MS;
 
-  // fleetLiveCount — uses lastSeenMsMap reachability (same logic as SSE indicator) so the
-  // FLEET NODES tile stays consistent with the amber "unreachable" indicators in the UI.
-  // counts.online is NOT used here because the backend sets status='online' at pair time and
-  // never reverts it, so it would always equal counts.total regardless of actual liveness.
-  const fleetLiveCount = isLocalHost ? effectiveMetrics.length : reachableNodeIds.length;
   const localNodeId = sentinel?.hostname ?? 'local node';
 
   const sseState: 'green' | 'amber' | 'red' = !connected
@@ -2008,8 +1870,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
     ? 'SSE stream disconnected · attempting to reconnect'
     : sseState === 'amber'
     ? isLocalHost
-      ? `SSE connected · ${localNodeId} last seen ${fmtAgo(sentinel?.timestamp_ms ?? 0)}`
-      : `SSE connected · ${unreachableNodeIds.map(id => `${id} last seen ${fmtAgo(lastSeenMsMap[id])}`).join(' · ')}`
+      ? `SSE connected · ${localNodeId} last seen ${fmtAgo(sentinel?.timestamp_ms ?? 0, { seconds: true })}`
+      : `SSE connected · ${unreachableNodeIds.map(id => `${id} last seen ${fmtAgo(lastSeenMsMap[id], { seconds: true })}`).join(' · ')}`
     : isLocalHost
     ? `SSE connected · ${localNodeId} live`
     : `SSE connected · ${reachableNodeIds.join(' ')} all live`;
@@ -2036,7 +1898,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, isPro,
           pue: ns?.pue ?? 1.0,
           peakTps: peakTpsMap[n.id],
           restricted: n.restricted ?? false,
-          onUpgrade,
         };
       });
 

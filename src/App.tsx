@@ -1,45 +1,77 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { version } from '../package.json';
-import { LayoutGrid, Server, Activity, Terminal, BrainCircuit, ShieldCheck, Thermometer, Cpu, Wifi, WifiOff, RefreshCw } from 'lucide-react';
+import { WifiOff, RefreshCw } from 'lucide-react';
 // NOTE: @clerk/clerk-react is NOT imported here. It's lazy-loaded via
 // CloudApp.tsx to prevent Clerk's module init from running in agent builds.
-import { ConnectionState, DashboardTab, FleetNode, NodeAgent, PairingInfo, Tenant, User as UserType, SubscriptionTier, ObservabilityNavParams } from './types';
-import { NODE_REACHABLE_MS, fmtAgo as fmtNodeAgo } from './utils/time';
+import { DashboardTab, FleetNode, NodeAgent, PairingInfo, Tenant, User as UserType, SubscriptionTier, ObservabilityNavParams } from './types';
+import { NODE_REACHABLE_MS, fmtAgo } from './utils/time';
 import { FleetStreamProvider, useFleetStream } from './contexts/FleetStreamContext';
 import { CLOUD_URL } from './utils/cloudUrl';
+import { hasClerkSessionHint } from './utils/clerkHint';
+import { perfMark } from './utils/perfMark';
+import { loadPaddle } from './utils/loadPaddle';
 import Sidebar from './components/Sidebar';
 import MobileTabBar from './components/MobileTabBar';
 import Header from './components/Header';
-import Overview from './components/Overview';
-import ModelsPage from './components/ModelsPage';
-import NodesList from './components/NodesList';
-import TracesView from './components/TracesView';
-import ScaffoldingView from './components/ScaffoldingView';
-import AIInsights from './components/AIInsights';
-import TeamManagement from './components/TeamManagement';
+// ── Dashboard code-split ─────────────────────────────────────────────────
+// Every component below is only reachable after sign-in (or on localhost),
+// yet they were statically imported, which hoisted the entire dashboard —
+// recharts included — into the same chunk as the landing page. The
+// LazyCloudApp boundary further down never helped: CloudApp is a 19-line
+// Clerk wrapper that receives AppCore as a prop, so the split was defeated
+// before it began. A first-time visitor to / was downloading ~1.6 MB to
+// read marketing copy — and that is what made the prerender block flash.
+//
+// Marketing pages (LandingPage, PricingPage, DocsPage, …) stay static: they
+// ARE the entry. renderContent() is wrapped in Suspense below.
+const Overview = React.lazy(() => import('./components/Overview'));
+const ModelsPage = React.lazy(() => import('./components/ModelsPage'));
+const NodesList = React.lazy(() => import('./components/NodesList'));
+const TracesView = React.lazy(() => import('./components/TracesView'));
+const AIInsights = React.lazy(() => import('./components/AIInsights'));
+const TeamManagement = React.lazy(() => import('./components/TeamManagement'));
 import LandingPage from './components/LandingPage';
 // SignInPage/SignUpPage import @clerk/clerk-react — lazy-load to keep Clerk
 // out of the agent bundle.
 const SignInPage = React.lazy(() => import('./components/SignInPage'));
 const SignUpPage = React.lazy(() => import('./components/SignUpPage'));
-import ProfileView from './components/ProfileView';
-import SecurityView from './components/SecurityView';
 const APIKeysView = React.lazy(() => import('./components/APIKeysView'));
-import PreferencesView from './components/PreferencesView';
-import SettingsView from './components/SettingsView';
+const SettingsView = React.lazy(() => import('./components/SettingsView'));
 import { useSettings } from './hooks/useSettings';
 import PricingPage from './components/PricingPage';
-import MetricsPage from './pages/MetricsPage';
-import DocsPage from './pages/DocsPage';
-import LegalPage from './pages/LegalPage';
-import TrustPage from './pages/TrustPage';
-import DesignPartnersPage from './pages/DesignPartnersPage';
-import AIProvidersView from './components/AIProvidersView';
+// ── Marketing-route code split ───────────────────────────────────────────
+// Measured on a simulated slow-4G phone: the entry chunk took 1.3 s to
+// download and ~1 s to parse before /pricing could paint, and 55% of it was
+// pages the visitor was not on — DocsPage alone was 28% (181 kB raw), with
+// marked + DOMPurify (64 kB) that only the docs and blog use. Each of these
+// is now its own chunk, fetched on first visit.
+//
+// LandingPage and PricingPage stay in the entry on purpose: they are the two
+// most-visited pages (62 kB raw together), so they pay no extra round-trip —
+// and on / the prerendered block is replaced the moment React mounts, so a
+// lazy LandingPage would reintroduce a blank gap there.
+const MetricsPage        = React.lazy(() => import('./pages/MetricsPage'));
+const DocsPage           = React.lazy(() => import('./pages/DocsPage'));
+const LegalPage          = React.lazy(() => import('./pages/LegalPage'));
+const TrustPage          = React.lazy(() => import('./pages/TrustPage'));
+const DesignPartnersPage = React.lazy(() => import('./pages/DesignPartnersPage'));
 import PairingModal from './components/PairingModal';
 const AddNodeModal = React.lazy(() => import('./components/AddNodeModal'));
 import { usePermissions } from './hooks/usePermissions';
-import BlogListing from './components/BlogListing';
-import BlogPost from './components/BlogPost';
+const BlogListing        = React.lazy(() => import('./components/BlogListing'));
+const BlogPost           = React.lazy(() => import('./components/BlogPost'));
+
+/** Shown while a lazy marketing page's chunk is in flight. Deliberately not
+ *  null: on the prerendered routes React has already cleared the static
+ *  block by the time this renders, and a blank page reads as broken. */
+const PageFallback: React.FC = () => (
+  <div className="min-h-screen bg-gray-900 flex items-center justify-center" aria-busy="true" aria-live="polite">
+    <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+  </div>
+);
+const lazyPage = (el: React.ReactElement) => (
+  <React.Suspense fallback={<PageFallback />}>{el}</React.Suspense>
+);
 import { X, Sparkles, Zap, Shield, Globe } from 'lucide-react';
 import { STATIC_PAGE_META, setPageMeta, normalizePath } from './utils/pageMeta';
 
@@ -59,15 +91,16 @@ const UpgradeModal: React.FC<{ isOpen: boolean; onClose: () => void; onUpgrade: 
           </div>
 
           <div className="space-y-2">
-            <h2 className="text-2xl font-bold text-white">Unlock Wicklee Pro</h2>
+            <h2 className="text-2xl font-bold text-white">Unlock Wicklee Team</h2>
             <p className="text-gray-400 text-sm">
-              Upgrade to Wicklee Pro to connect unlimited nodes and unlock Accelerator-tier patterns across your entire fleet.
+              Upgrade to Wicklee Team — 10 or 25 nodes in the cloud fleet view, the full
+              pattern engine, cost reporting, and Fleet API across your entire fleet.
             </p>
           </div>
 
           <div className="grid grid-cols-1 gap-3 text-left">
             {[
-              { icon: Zap, title: 'Unlimited Fleet Nodes', desc: 'Connect 4+ nodes — no restrictions on active fleet size.' },
+              { icon: Zap, title: 'Up to 25 Fleet Nodes', desc: 'Grow past Community\'s 3 nodes — pick a 10- or 25-node plan.' },
               { icon: Shield, title: 'Full Alert Wiring', desc: 'Slack + email alerts for all pattern engine events.' },
               { icon: Globe, title: 'API Access (600 req/min)', desc: 'Build automation on live fleet telemetry via REST API.' }
             ].map((item, i) => (
@@ -88,7 +121,7 @@ const UpgradeModal: React.FC<{ isOpen: boolean; onClose: () => void; onUpgrade: 
               onClick={onUpgrade}
               className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-2xl transition-all shadow-lg shadow-blue-500/20"
             >
-              Upgrade to Pro
+              See Team plans
             </button>
             <button onClick={onClose} className="text-xs text-gray-500 hover:text-gray-300 transition-colors">
               Maybe later
@@ -114,15 +147,13 @@ const LOCAL_USER: UserType = {
   isPro: false,
 };
 
-const isLocalHost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+import { IS_AGENT, IS_DEMO, IS_LOCAL_HOST as isLocalHost } from './utils/buildTarget';
 
 // Cloud backend URL — env var takes precedence; falls back to the known Railway service.
 // Resolution rules + rationale documented in src/utils/cloudUrl.ts (single source of truth).
 
-// Build-time flag: true in the agent binary where ClerkProvider is absent.
-// Hoisted to module scope so it's available to both AppCore and the export shim.
-const IS_AGENT = (import.meta.env.VITE_BUILD_TARGET as string) === 'agent';
-const IS_DEMO  = (import.meta.env.VITE_BUILD_TARGET as string) === 'demo';
+// IS_AGENT / IS_DEMO / isLocalHost come from src/utils/buildTarget (imported
+// above) — module scope, so they reach both AppCore and the export shim.
 
 interface AppCoreProps {
   isSignedIn: boolean | undefined;
@@ -141,6 +172,8 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
 
   const [currentPath, setCurrentPath] = useState(() => window.location.pathname);
   const [activeTab, setActiveTab] = useState<DashboardTab>(DashboardTab.OVERVIEW);
+  // First commit of the app tree — React is on screen from here.
+  useEffect(() => { perfMark('wk:app-mounted'); }, []);
   const [observabilityNav, setObservabilityNav] = useState<ObservabilityNavParams | undefined>(undefined);
   /**
    * Deep-link target for cross-tab navigation into Insights.
@@ -171,19 +204,20 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
         isPro: clerkTier !== 'community',
         tier: clerkTier,
       };
-  const [byokMode, setByokMode] = useState(false);
-  const [userApiKey, setUserApiKey] = useState('');
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const [pairingInfo, setPairingInfo] = useState<PairingInfo | null>(null);
   const [isPairingModalOpen, setIsPairingModalOpen] = useState(false);
   const [isAddNodeModalOpen, setIsAddNodeModalOpen] = useState(false);
   // Dark mode only — "Hardware-Centric Dark" design language.
-  const theme: 'dark' = 'dark';
+  const theme = 'dark' as const;
   const { settings, savedToast, getNodeSettings, updateFleet, setNodeOverride, clearAllOverridesForField, clearAllNodeOverrides } = useSettings();
 
   const navigate = useCallback((path: string) => {
     window.history.pushState(null, '', path);
-    setCurrentPath(path);
+    // Route on the pathname only — `path` may carry a query string
+    // (/sign-up?redirect_url=…, /pricing?plan=…), which must not break the
+    // exact-match route checks below.
+    setCurrentPath(window.location.pathname);
   }, []);
 
   useEffect(() => {
@@ -200,17 +234,30 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
     if (meta) setPageMeta(meta);
   }, [currentPath]);
 
-  // Warm the Perplexity Tax baseline cache on app startup.  Failure is
-  // non-fatal — tiles fall back to the existing heuristic copy.
+  // Warm the Perplexity Tax baseline cache for the dashboard. Failure is
+  // non-fatal — tiles fall back to the existing heuristic copy. Skipped on
+  // the marketing routes: it was two extra requests on every visit to
+  // /pricing for data only the fleet tiles read.
   useEffect(() => {
+    if (!isSignedIn && !isLocalHost) return;
     void import('./utils/perplexity').then(m => m.loadPerplexityBaseline());
-  }, []);
+  }, [isSignedIn]);
 
+
+  // Latest getToken without making it a dependency: the demo build passes an
+  // inline arrow (new identity every render), which would re-run the fetch
+  // effect below on every render.
+  const getTokenRef = useRef(getToken);
+  getTokenRef.current = getToken;
+  // Each fetch takes a sequence number; only the newest may write, so a slow
+  // response for the previous org can't overwrite the new org's list.
+  const fleetFetchSeqRef = useRef(0);
 
   // Called after a node is successfully paired via AddNodeModal; fetch updated fleet list.
   const handleNodeAdded = useCallback(async () => {
+    const seq = ++fleetFetchSeqRef.current;
     try {
-      const token = isLocalHost ? null : await getToken();
+      const token = isLocalHost ? null : await getTokenRef.current();
       const r = await fetch(`${CLOUD_URL}/api/fleet`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
@@ -232,20 +279,31 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
           sentinelActive: false,
           restricted: n.restricted ?? false,
         }));
-        setNodes(mappedNodes);
+        if (seq === fleetFetchSeqRef.current) setNodes(mappedNodes);
       }
     } catch {
       // Fetch failed — still mark loading done so empty state can render if truly zero nodes.
     } finally {
-      setNodesLoading(false);
+      if (seq === fleetFetchSeqRef.current) setNodesLoading(false);
     }
   }, []);
 
-  // Fetch paired nodes from cloud on sign-in (hosted only).
+  // Fetch paired nodes from cloud on sign-in and on org switch (hosted only).
+  // The previous fleet's list is cleared first so it never shows under the
+  // new org (or after sign-out) while the fetch is in flight.
+  const prevFleetScopeRef = useRef(`${isSignedIn}:${orgId}`);
   useEffect(() => {
-    if (isLocalHost || !isSignedIn) return;
+    if (isLocalHost) return;
+    const scope = `${isSignedIn}:${orgId}`;
+    if (prevFleetScopeRef.current !== scope) {
+      prevFleetScopeRef.current = scope;
+      fleetFetchSeqRef.current++; // invalidate any in-flight fetch for the old scope
+      setNodes([]);
+      setNodesLoading(isSignedIn);
+    }
+    if (!isSignedIn) return;
     handleNodeAdded();
-  }, [isSignedIn, handleNodeAdded]);
+  }, [isSignedIn, orgId, handleNodeAdded]);
 
   // Bootstrap local node on localhost — pairingInfo provides the node_id, and
   // /api/metrics provides hostname + hardware data.  Without this, nodes[] stays
@@ -272,32 +330,36 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
         restricted: false,
       }];
     });
-  }, [isLocalHost, pairingInfo?.node_id]);
+  }, [pairingInfo?.node_id]);
 
   // Callback for FleetStreamProvider — patches node hostnames and restricted flag when real metrics arrive.
+  // Runs on every SSE frame, so it returns `prev` itself when nothing changed —
+  // a fresh array each frame re-rendered AppCore and every tab that takes `nodes`.
   const handleNodesSnapshot = useCallback((snapshot: FleetNode[]) => {
-    setNodes(prev => prev.map(node => {
-      const match = snapshot.find(n => n.node_id === node.id);
-      if (!match) return node;
-      const updates: Partial<typeof node> = {};
-      // Prefer display_name (Pro+ custom name) > metrics.hostname > node_id
-      const resolvedHostname = match.display_name ?? match.metrics?.hostname ?? node.id;
-      if (resolvedHostname !== node.hostname) {
-        updates.hostname = resolvedHostname;
-      }
-      if (match.restricted !== undefined && match.restricted !== node.restricted) {
-        updates.restricted = match.restricted;
-      }
-      return Object.keys(updates).length > 0 ? { ...node, ...updates } : node;
-    }));
+    setNodes(prev => {
+      const byId = new Map(snapshot.map(n => [n.node_id, n]));
+      let changed = false;
+      const next = prev.map(node => {
+        const match = byId.get(node.id);
+        if (!match) return node;
+        const updates: Partial<typeof node> = {};
+        // Prefer display_name (Pro+ custom name) > metrics.hostname > node_id
+        const resolvedHostname = match.display_name ?? match.metrics?.hostname ?? node.id;
+        if (resolvedHostname !== node.hostname) {
+          updates.hostname = resolvedHostname;
+        }
+        if (match.restricted !== undefined && match.restricted !== node.restricted) {
+          updates.restricted = match.restricted;
+        }
+        if (Object.keys(updates).length === 0) return node;
+        changed = true;
+        return { ...node, ...updates };
+      });
+      return changed ? next : prev;
+    });
   }, []);
 
   const permissions = usePermissions(currentUser);
-  // Build-time flag: true when compiled for the local agent binary (VITE_BUILD_TARGET=agent).
-  // This is the sole source of truth for Cockpit vs Mission Control mode — never derived
-  // from runtime auth state or pairing status.
-  const isLocalMode = (import.meta.env.VITE_BUILD_TARGET as string) === 'agent';
-
   const fetchPairingStatus = useCallback(async () => {
     // /api/pair/status only exists on the agent (localhost:7700).
     // On wicklee.dev this endpoint 404s — skip entirely.
@@ -340,25 +402,54 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
   const isLoggedIn = isLocalHost || !!isSignedIn;
 
 
-  const handleCheckoutTier = useCallback(async (tier: 'pro' | 'team') => {
+  // Open Paddle checkout for Team.
+  //
+  // Team is the only self-serve tier: Community is free and Enterprise is a
+  // conversation. The server decides whether checkout may run at all — it
+  // returns `checkout_enabled` only when PADDLE_CHECKOUT_ENABLED=true AND a
+  // real (non-placeholder) Team price is configured. A price ID looks the same
+  // whether it points at the current $200 plan or the retired $49 one, so that
+  // flag is an explicit operator assertion, not something either side can infer.
+  //
+  // Resolves false when checkout can't run, so the caller (the Team card on
+  // PricingPage) falls back to its contact CTA rather than billing the wrong
+  // amount or failing silently.
+  const openTeamCheckout = useCallback(async (
+    cycle: 'monthly' | 'annual' = 'monthly',
+    plan: 'team_10' | 'team' = 'team',
+  ): Promise<boolean> => {
     try {
       const token = await getToken();
       const r = await fetch(`${CLOUD_URL}/api/billing/config`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (!r.ok) return;
+      if (!r.ok) return false;
       const config = await r.json() as {
         environment: 'sandbox' | 'production';
         client_token: string;
-        prices: { pro: string; team: string };
+        checkout_enabled?: boolean;
+        prices: { team_10?: string; team_10_annual?: string; team?: string; team_annual?: string };
         custom_data: { user_id: string };
         customer_email: string | null;
       };
 
-      const Paddle = window.Paddle;
-      if (!Paddle) {
-        console.error('[billing] Paddle.js not loaded');
-        return;
+      if (!config.checkout_enabled) return false;
+
+      const priceId = plan === 'team_10'
+        ? (cycle === 'annual' ? config.prices.team_10_annual : config.prices.team_10)
+        : (cycle === 'annual' ? config.prices.team_annual    : config.prices.team);
+      if (!priceId) {
+        console.warn(`[billing] no Paddle price configured for ${plan} ${cycle}`);
+        return false;
+      }
+
+      // Paddle.js is injected on first checkout rather than on every page.
+      let Paddle: PaddleInstance;
+      try {
+        Paddle = await loadPaddle();
+      } catch (e) {
+        console.error('[billing] Paddle.js not loaded:', e);
+        return false;
       }
 
       // Initialize Paddle with client token (idempotent).
@@ -366,9 +457,11 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
       Paddle.Environment.set(config.environment);
       Paddle.Initialize({ token: config.client_token });
 
-      const priceId = tier === 'team' ? config.prices.team : config.prices.pro;
+      // quantity 1: both Team sizes are flat prices ($99 / $200), not the old
+      // $49/seat with a 3-seat minimum. The size is a different price ID, not
+      // a quantity.
       Paddle.Checkout.open({
-        items: [{ priceId, quantity: tier === 'team' ? 3 : 1 }],
+        items: [{ priceId, quantity: 1 }],
         customData: config.custom_data,
         customer: currentUser.email ? { email: currentUser.email } : undefined,
         settings: {
@@ -377,21 +470,24 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
           successUrl: `${window.location.origin}/dashboard?upgraded=1`,
         },
       });
+      return true;
     } catch (e) {
       console.error('[billing] checkout failed:', e);
+      return false;
     }
-  }, [getToken]);
+  }, [getToken, currentUser.email]);
 
-  const handleUpgrade = useCallback(async () => {
+  // Self-serve checkout starts only from the Team card on /pricing, where the
+  // size and billing period are chosen explicitly. Builds without cloud
+  // billing (agent binary, demo, localhost) get the contact CTA only.
+  const teamCheckout = IS_AGENT || IS_DEMO || isLocalHost ? undefined : openTeamCheckout;
+
+  // The upgrade modal sends people to /pricing to pick a size and billing
+  // period; it used to open a 25-node monthly checkout directly.
+  const handleUpgrade = useCallback(() => {
     setIsUpgradeModalOpen(false);
-    await handleCheckoutTier('pro');
-  }, [handleCheckoutTier]);
-
-  const handleToggleSentinel = (nodeId: string) => {
-    setNodes(prev => prev.map(node => 
-      node.id === nodeId ? { ...node, sentinelActive: !node.sentinelActive } : node
-    ));
-  };
+    navigate('/pricing');
+  }, [navigate]);
 
   const handleTabChange = (tab: DashboardTab) => {
     setActiveTab(tab);
@@ -417,31 +513,31 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
     currentPath === '/metrics-reference' || currentPath === '/metrics-reference/' ||
     currentPath === '/metrics' || currentPath === '/metrics/'
   ) {
-    return <MetricsPage onNavigate={navigate} />;
+    return lazyPage(<MetricsPage onNavigate={navigate} />);
   }
 
   // Documentation route — public, no auth required (trailing slash tolerant)
   if (currentPath === '/docs' || currentPath === '/docs/') {
-    return <DocsPage onNavigate={navigate} />;
+    return lazyPage(<DocsPage onNavigate={navigate} />);
   }
 
   // Trust & design-partner routes — public, no auth required
   if (currentPath === '/trust' || currentPath === '/trust/') {
-    return <TrustPage onNavigate={navigate} />;
+    return lazyPage(<TrustPage onNavigate={navigate} />);
   }
   if (currentPath === '/design-partners' || currentPath === '/design-partners/') {
-    return <DesignPartnersPage onNavigate={navigate} />;
+    return lazyPage(<DesignPartnersPage onNavigate={navigate} />);
   }
 
   // Legal routes — public, no auth required
   if (currentPath === '/terms' || currentPath === '/terms/') {
-    return <LegalPage onNavigate={navigate} initialTab="terms" />;
+    return lazyPage(<LegalPage onNavigate={navigate} initialTab="terms" />);
   }
   if (currentPath === '/privacy' || currentPath === '/privacy/') {
-    return <LegalPage onNavigate={navigate} initialTab="privacy" />;
+    return lazyPage(<LegalPage onNavigate={navigate} initialTab="privacy" />);
   }
   if (currentPath === '/refund' || currentPath === '/refund/') {
-    return <LegalPage onNavigate={navigate} initialTab="refund" />;
+    return lazyPage(<LegalPage onNavigate={navigate} initialTab="refund" />);
   }
 
   // Pricing route — public, accessible logged in or out
@@ -451,39 +547,48 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
         currentTier={permissions.subscriptionTier}
         isLoggedIn={isLoggedIn}
         onNavigate={navigate}
-        onCheckout={handleCheckoutTier}
         onSignIn={() => navigate('/sign-in')}
         onSignUp={() => navigate('/sign-up')}
+        onTeamCheckout={teamCheckout}
       />
     );
   }
 
   // Blog routes — public, no auth required
   if (currentPath === '/blog' || currentPath === '/blog/') {
-    return (
+    return lazyPage(
       <BlogListing
         onNavigate={navigate}
         onSignIn={() => navigate('/sign-in')}
         onSignUp={() => navigate('/sign-up')}
-      />
+      />,
     );
   }
   // Trailing-slash tolerant — the prerendered static pages live at
   // /blog/{slug}/index.html, so links may carry a trailing slash.
   const blogPostMatch = currentPath.match(/^\/blog\/([^/]+?)\/?$/);
   if (blogPostMatch) {
-    return (
+    return lazyPage(
       <BlogPost
         slug={blogPostMatch[1]}
         onNavigate={navigate}
         onSignIn={() => navigate('/sign-in')}
         onSignUp={() => navigate('/sign-up')}
-      />
+      />,
     );
   }
 
-  // Wait for Clerk to determine auth state (prevents flash)
-  if (!isLocalHost && !isLoaded) return null;
+  // Wait for Clerk before choosing landing-vs-dashboard — but only when there
+  // is evidence of a session to protect. This gate exists so a signed-in user
+  // never sees the landing page flash before the dashboard. It also made every
+  // signed-OUT visitor to / wait for ClerkJS to download from clerk.wicklee.dev
+  // and round-trip to Clerk's API to learn there is no session — a blank
+  // screen for the length of that on a phone, since React mounting has
+  // already replaced the prerendered block. Clerk leaves cookies on the app
+  // domain when a session exists; with none present, render the landing page
+  // now. If the hint is ever wrong, the failure mode is the old brief flash,
+  // not a broken page. See utils/clerkHint.ts.
+  if (!isLocalHost && !isLoaded && hasClerkSessionHint(document.cookie)) return null;
 
   if (!isLoggedIn) {
     return (
@@ -498,15 +603,13 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
   const renderContent = () => {
     switch (activeTab) {
       case DashboardTab.OVERVIEW:
-        return <Overview nodes={nodes} nodesLoading={nodesLoading} isPro={currentUser.isPro} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} onUpgrade={() => setIsUpgradeModalOpen(true)} getNodeSettings={getNodeSettings} fleetKwhRate={settings.fleet.kwhRate} getToken={isLocalHost ? undefined : getToken} onNavigateToObservability={(params?: ObservabilityNavParams) => { setObservabilityNav(params); setActiveTab(DashboardTab.TRACES); }} onNavigateToInsights={(tab, scrollTo) => { setInsightsDeepLink({ tab, scrollTo }); setActiveTab(DashboardTab.AI_INSIGHTS); }} />;
+        return <Overview nodes={nodes} nodesLoading={nodesLoading} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} onUpgrade={() => setIsUpgradeModalOpen(true)} getNodeSettings={getNodeSettings} fleetKwhRate={settings.fleet.kwhRate} onNavigateToObservability={(params?: ObservabilityNavParams) => { setObservabilityNav(params); setActiveTab(DashboardTab.TRACES); }} onNavigateToInsights={(tab, scrollTo) => { setInsightsDeepLink({ tab, scrollTo }); setActiveTab(DashboardTab.AI_INSIGHTS); }} />;
       case DashboardTab.MODELS:
         return <ModelsPage isLocalHost={isLocalHost} getToken={isLocalHost ? undefined : getToken} nodes={nodes} onNavigateToInsightsPerformance={permissions.canRunAIAnalysis ? () => { setInsightsDeepLink({ tab: 'performance' }); setActiveTab(DashboardTab.AI_INSIGHTS); } : undefined} />;
       case DashboardTab.NODES:
         return <NodesList nodes={nodes} getNodeSettings={getNodeSettings} onNavigateToSettings={() => setActiveTab(DashboardTab.SETTINGS)} pairingInfo={pairingInfo} getToken={isLocalHost ? undefined : getToken} cloudUrl={isLocalHost ? undefined : CLOUD_URL} onNodesRemoved={handleNodeAdded} />;
       case DashboardTab.TRACES:
         return <TracesView nodes={nodes} tenantId={currentTenant.id} pairingInfo={pairingInfo} getToken={isLocalHost ? undefined : getToken} subscriptionTier={permissions.subscriptionTier} getNodeSettings={getNodeSettings} navParams={observabilityNav} onNavConsumed={() => setObservabilityNav(undefined)} />;
-      case DashboardTab.SCAFFOLDING:
-        return permissions.canViewScaffolding ? <ScaffoldingView /> : <div className="text-center py-20 text-gray-500">Unauthorized Access</div>;
       case DashboardTab.AI_INSIGHTS:
         return permissions.canRunAIAnalysis ? (
           <AIInsights
@@ -523,12 +626,13 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
             deepLink={insightsDeepLink}
             onDeepLinkConsumed={() => setInsightsDeepLink(undefined)}
             onNavigateToModels={() => setActiveTab(DashboardTab.MODELS)}
+            onNavigateToPricing={() => navigate('/pricing')}
           />
         ) : (
           <div className="text-center py-20 text-gray-500">Unauthorized Access</div>
         );
       case DashboardTab.TEAM:
-        return permissions.canManageTeam ? <TeamManagement tenantId={currentTenant.id} currentUser={currentUser} /> : <div className="text-center py-20 text-gray-500">Unauthorized Access</div>;
+        return permissions.canManageTeam ? <TeamManagement tenantId={currentTenant.id} currentUser={currentUser} orgId={orgId} /> : <div className="text-center py-20 text-gray-500">Unauthorized Access</div>;
       case DashboardTab.SETTINGS:
         return <SettingsView
           nodes={nodes}
@@ -539,8 +643,6 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
           setNodeOverride={setNodeOverride}
           clearAllOverridesForField={clearAllOverridesForField}
           clearAllNodeOverrides={clearAllNodeOverrides}
-          theme={theme}
-          onThemeChange={() => {}} // Dark mode only
           onNavigateToManagement={() => setActiveTab(DashboardTab.NODES)}
           onNavigateToApiKeys={() => setActiveTab(DashboardTab.API_KEYS)}
           onNavigateToPricing={() => navigate('/pricing')}
@@ -549,20 +651,12 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
           subscriptionTier={clerkTier}
           isLocalHost={isLocalHost}
         />;
-      case DashboardTab.PROFILE:
-        return <ProfileView currentUser={currentUser} />;
-      case DashboardTab.SECURITY:
-        return <SecurityView byokMode={byokMode} setByokMode={setByokMode} userApiKey={userApiKey} setUserApiKey={setUserApiKey} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onGenerateCode={generatePairingCode} onDisconnect={disconnectFleet} />;
       case DashboardTab.API_KEYS:
         return <React.Suspense fallback={null}><APIKeysView /></React.Suspense>;
-      case DashboardTab.PREFERENCES:
-        return <PreferencesView currentTenant={currentTenant} theme={theme} />;
       case DashboardTab.PRICING:
-        return <PricingPage currentTier={permissions.subscriptionTier} isLoggedIn={isLoggedIn} onNavigate={navigate} onCheckout={handleCheckoutTier} embedded />;
-      case DashboardTab.AI_PROVIDERS:
-        return <AIProvidersView />;
+        return <PricingPage currentTier={permissions.subscriptionTier} isLoggedIn={isLoggedIn} onNavigate={navigate} onTeamCheckout={teamCheckout} embedded />;
       case DashboardTab.BILLING:
-        return <PricingPage currentTier={permissions.subscriptionTier} isLoggedIn={isLoggedIn} onNavigate={navigate} onCheckout={handleCheckoutTier} embedded />;
+        return <PricingPage currentTier={permissions.subscriptionTier} isLoggedIn={isLoggedIn} onNavigate={navigate} onTeamCheckout={teamCheckout} embedded />;
       default:
         return <Overview nodes={nodes} nodesLoading={nodesLoading} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} onUpgrade={() => setIsUpgradeModalOpen(true)} getNodeSettings={getNodeSettings} fleetKwhRate={settings.fleet.kwhRate} />;
     }
@@ -585,7 +679,6 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
         setCurrentTenant={setCurrentTenant}
         theme={theme}
         toggleTheme={toggleTheme}
-        isLocalMode={isLocalMode}
         pairingInfo={pairingInfo}
         permissions={permissions}
         settings={settings}
@@ -595,10 +688,6 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
         setNodeOverride={setNodeOverride}
         clearAllOverridesForField={clearAllOverridesForField}
         clearAllNodeOverrides={clearAllNodeOverrides}
-        byokMode={byokMode}
-        setByokMode={setByokMode}
-        userApiKey={userApiKey}
-        setUserApiKey={setUserApiKey}
         isUpgradeModalOpen={isUpgradeModalOpen}
         setIsUpgradeModalOpen={setIsUpgradeModalOpen}
         handleUpgrade={handleUpgrade}
@@ -616,12 +705,13 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
   );
 };
 
-// Lazy-loaded Clerk bridge — keeps @clerk/clerk-react out of the agent bundle.
-const LazyCloudApp = React.lazy(() => import('./components/CloudApp'));
-
 // Exported root component.
 // Agent builds: skip Clerk hooks entirely and render with local-mode defaults.
-// Cloud builds: delegate to CloudApp which calls hooks within ClerkProvider.
+// Cloud builds: index.tsx imports CloudApp (the Clerk-hooks bridge) alongside
+// @clerk/clerk-react and passes it in, so this file never references the Clerk
+// package and the agent bundle stays free of it. It is passed as a prop rather
+// than React.lazy'd here because a lazy boundary commits a null fallback and
+// React then throttles the reveal by ~300 ms on every cold load (see index.tsx).
 // Demo build: signed-in Team-tier user, no Clerk anywhere. The object only
 // needs the fields AppCore reads off the Clerk user (id, publicMetadata.tier,
 // primaryEmailAddress, fullName).
@@ -632,12 +722,20 @@ const DEMO_USER = {
   fullName: 'Demo Operator',
 };
 
-const App: React.FC = () =>
-  IS_DEMO
-    ? <AppCore isSignedIn={true} isLoaded={true} getToken={() => Promise.resolve('demo')} user={DEMO_USER} orgId={null} />
-    : IS_AGENT
-    ? <AppCore isSignedIn={false} isLoaded={true} getToken={() => Promise.resolve(null)} user={null} />
-    : <React.Suspense fallback={null}><LazyCloudApp AppCore={AppCore} /></React.Suspense>;
+interface AppProps {
+  /** Cloud builds only: the Clerk-hooks bridge from components/CloudApp. */
+  cloudApp?: React.FC<{ AppCore: React.FC<AppCoreProps> }>;
+}
+
+const App: React.FC<AppProps> = ({ cloudApp: CloudApp }) => {
+  if (IS_DEMO) {
+    return <AppCore isSignedIn={true} isLoaded={true} getToken={() => Promise.resolve('demo')} user={DEMO_USER} orgId={null} />;
+  }
+  if (IS_AGENT || !CloudApp) {
+    return <AppCore isSignedIn={false} isLoaded={true} getToken={() => Promise.resolve(null)} user={null} />;
+  }
+  return <CloudApp AppCore={AppCore} />;
+};
 
 // ── DashboardShell ────────────────────────────────────────────────────────────
 // Inner component that lives inside FleetStreamProvider so it can call useFleetStream().
@@ -653,7 +751,6 @@ interface DashboardShellProps {
   setCurrentTenant: (t: Tenant) => void;
   theme: 'light' | 'dark';
   toggleTheme: () => void;
-  isLocalMode: boolean;
   pairingInfo: PairingInfo | null;
   permissions: ReturnType<typeof usePermissions>;
   settings: ReturnType<typeof useSettings>['settings'];
@@ -663,10 +760,6 @@ interface DashboardShellProps {
   setNodeOverride: ReturnType<typeof useSettings>['setNodeOverride'];
   clearAllOverridesForField: ReturnType<typeof useSettings>['clearAllOverridesForField'];
   clearAllNodeOverrides: ReturnType<typeof useSettings>['clearAllNodeOverrides'];
-  byokMode: boolean;
-  setByokMode: (v: boolean) => void;
-  userApiKey: string;
-  setUserApiKey: (v: string) => void;
   isUpgradeModalOpen: boolean;
   setIsUpgradeModalOpen: (v: boolean) => void;
   handleUpgrade: () => void;
@@ -689,7 +782,8 @@ const DashboardShell: React.FC<DashboardShellProps> = (props) => {
   const [localAgentVersionDirect, setLocalAgentVersionDirect] = useState<string | undefined>();
   useEffect(() => {
     if (!isLocalHost) return;
-    fetch('/api/metrics')
+    // /api/metrics is an SSE stream; the snapshot is its latest frame as JSON.
+    fetch('/api/metrics/snapshot')
       .then(r => r.ok ? r.json() : null)
       .then((d: Record<string, unknown> | null) => {
         if (d && typeof d.agent_version === 'string') {
@@ -710,7 +804,7 @@ const DashboardShell: React.FC<DashboardShellProps> = (props) => {
   const {
     nodes, activeTab, handleTabChange, setActiveTab,
     currentUser, currentTenant, setCurrentTenant,
-    theme, toggleTheme, isLocalMode, pairingInfo,
+    theme, toggleTheme, pairingInfo,
     isUpgradeModalOpen, setIsUpgradeModalOpen, handleUpgrade,
     isPairingModalOpen, setIsPairingModalOpen,
     isAddNodeModalOpen, setIsAddNodeModalOpen, handleNodeAdded,
@@ -746,7 +840,6 @@ const DashboardShell: React.FC<DashboardShellProps> = (props) => {
         onUserChange={() => {}}
         connectionState={connectionState}
         theme={theme}
-        isLocalMode={isLocalMode}
         isLocalHost={isLocalHost}
         pairingInfo={pairingInfo}
         onOpenPairing={() => setIsPairingModalOpen(true)}
@@ -808,7 +901,9 @@ const DashboardShell: React.FC<DashboardShellProps> = (props) => {
                 </div>
               </div>
             )}
-            <div key={activeTab}>{renderContent()}</div>
+            <React.Suspense fallback={null}>
+              <div key={activeTab}>{renderContent()}</div>
+            </React.Suspense>
           </div>
         </div>
 
@@ -839,7 +934,7 @@ const DashboardShell: React.FC<DashboardShellProps> = (props) => {
                   const ls = lastSeenMsMap[n.id];
                   const alive = ls != null && ftNow - ls <= NODE_REACHABLE_MS;
                   const label = ls != null
-                    ? alive ? '● online' : `● offline · last seen ${fmtNodeAgo(ls)}`
+                    ? alive ? '● online' : `● offline · last seen ${fmtAgo(ls)}`
                     : '● pending';
                   return `${n.hostname !== n.id ? n.hostname : n.id}  ${label}`;
                 }).join('\n');

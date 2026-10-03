@@ -26,7 +26,7 @@ export interface DiscoveryHoverRow {
   accent?: 'cyan' | 'emerald' | 'amber' | 'red' | 'gray';
 }
 
-export interface DiscoveryHoverCardProps {
+interface DiscoveryHoverCardProps {
   /** Bold heading shown at the top. */
   heading: string;
   /** One-line description in muted text. Keep under ~110 chars. */
