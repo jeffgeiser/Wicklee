@@ -21,6 +21,21 @@ smoke-tests a running local agent (`bash scripts/qa_agent.sh`).*
       (no second checkout).
 - [ ] A Team-gated endpoint called with a Community key returns **402** with
       `"tier_required": "team"` and `"upgrade": true`.
+- [ ] **All** upgrade CTAs (in-app, marketing pages, emails, 402 copy) point to
+      `/pricing` — none to a retired plan, a contact form or a stale URL.
+- [ ] Paddle overlay for each of the four Team combinations — **10 monthly,
+      10 annual, 25 monthly, 25 annual** — opens at the price shown on the card
+      and shows **no "Test"/sandbox badge** (i.e. live Paddle, live price IDs).
+- [ ] Webhook: a purchase sets the account tier to `team_10` (10 nodes) or
+      `team` (25 nodes) to match the size bought; cancelling (immediate)
+      returns it to `community`.
+- [ ] When canceling a subscription for a customer in the Paddle dashboard,
+      choose **"At end of billing period"** (Paddle has no default setting);
+      immediate cancel drops them to Community at once, contradicting the Terms.
+- [ ] Node cap: pairing the **11th** node on Team · 10 and the **26th** on
+      Team · 25 returns **402** with the upgrade message ("Move to Team
+      (25 nodes) to add more." / "Above 25 nodes, talk to us about
+      Enterprise.").
 
 ## Billing (after any change to billing code or Paddle config)
 - [ ] Sandbox purchase of each size/period → Railway log
