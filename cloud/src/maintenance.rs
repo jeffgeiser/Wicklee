@@ -6,7 +6,24 @@ use crate::*;
 
 pub(crate) async fn run_rollup(pool: &sqlx::PgPool) {
     // Aggregate metrics_raw rows older than 24h into 5-minute buckets.
-    let result = sqlx::query(
+    let result = sqlx::query(&rollup_sql()).execute(pool).await;
+
+    match result {
+        Ok(r) => println!("[rollup] inserted {} 5-min aggregates", r.rows_affected()),
+        Err(e) => eprintln!("[rollup] insert failed: {e}"),
+    }
+
+    delete_rolled_up_raw(pool).await;
+    println!("[rollup] complete");
+}
+
+/// The rollup INSERT. Besides the per-bucket averages it stores the
+/// time-integrated totals (covered_s, energy_wh, live_energy_wh, live_s,
+/// tokens_est) — each raw row weighted by its real duration (energy::
+/// raw_dt_sql: time to the node's next row, capped). `sample_count` is a row
+/// count at the ~2 s push cadence, NOT a count of 30 s periods.
+pub(crate) fn rollup_sql() -> String {
+    format!(
         "INSERT INTO metrics_5min (ts, node_id, tenant_id,
             tok_s_avg, tok_s_p50, tok_s_p95,
             watts_avg, wes_raw_avg, wes_penalized_avg, wes_penalized_min,
@@ -14,7 +31,8 @@ pub(crate) async fn run_rollup(pool: &sqlx::PgPool) {
             mem_pressure_pct_avg, mem_pressure_pct_max, gpu_pct_avg,
             inference_duty_pct, swap_write_avg,
             sample_count, wes_version, wes_version_count, agent_version,
-            ollama_active_model)
+            ollama_active_model,
+            covered_s, energy_wh, live_energy_wh, live_s, tokens_est)
         SELECT
             to_timestamp(floor(EXTRACT(EPOCH FROM ts) / 300) * 300) AS bucket,
             node_id, tenant_id,
@@ -40,8 +58,20 @@ pub(crate) async fn run_rollup(pool: &sqlx::PgPool) {
             COUNT(DISTINCT wes_version)::smallint,
             MIN(agent_version),
             -- Last non-null model name observed in the 5-minute window.
-            (array_agg(ollama_active_model ORDER BY ts DESC) FILTER (WHERE ollama_active_model IS NOT NULL))[1]
-        FROM metrics_raw
+            (array_agg(ollama_active_model ORDER BY ts DESC) FILTER (WHERE ollama_active_model IS NOT NULL))[1],
+            SUM(dt_s)::real,
+            (SUM(COALESCE(watts, 0) * dt_s) / 3600.0)::real,
+            (SUM(CASE WHEN inference_state = 'live' THEN COALESCE(watts, 0) * dt_s ELSE 0 END) / 3600.0)::real,
+            SUM(CASE WHEN inference_state = 'live' THEN dt_s ELSE 0 END)::real,
+            SUM(CASE WHEN inference_state = 'live' THEN COALESCE(tok_s, 0) * dt_s ELSE 0 END)::real
+        -- dt is computed over a slightly wider slice than the cutoff so each
+        -- bucket's last row sees its successor.
+        FROM (
+            SELECT r.*, {dt} AS dt_s
+            FROM metrics_raw r
+            WHERE ts < to_timestamp(floor(EXTRACT(EPOCH FROM NOW() - INTERVAL '24 hours') / 300) * 300)
+                       + make_interval(secs => {gap})
+        ) metrics_raw
         -- Cutoff floored to a 5-min bucket boundary so only COMPLETE buckets
         -- are aggregated. With a raw NOW()-24h cutoff, the straddling bucket
         -- was inserted from partial data; an hour later its remaining rows
@@ -50,14 +80,13 @@ pub(crate) async fn run_rollup(pool: &sqlx::PgPool) {
         -- systematically undercounted bucket per node per run.
         WHERE ts < to_timestamp(floor(EXTRACT(EPOCH FROM NOW() - INTERVAL '24 hours') / 300) * 300)
         GROUP BY bucket, node_id, tenant_id
-        ON CONFLICT DO NOTHING"
-    ).execute(pool).await;
+        ON CONFLICT DO NOTHING",
+        dt = raw_dt_sql(),
+        gap = MAX_SAMPLE_GAP_S,
+    )
+}
 
-    match result {
-        Ok(r) => println!("[rollup] inserted {} 5-min aggregates", r.rows_affected()),
-        Err(e) => eprintln!("[rollup] insert failed: {e}"),
-    }
-
+async fn delete_rolled_up_raw(pool: &sqlx::PgPool) {
     // Delete rolled-up raw rows. TimescaleDB retention policy also handles this,
     // but explicit deletion ensures data is rolled up first.
     let _ = sqlx::query(
@@ -70,8 +99,6 @@ pub(crate) async fn run_rollup(pool: &sqlx::PgPool) {
                  AND m.ts        = to_timestamp(floor(EXTRACT(EPOCH FROM metrics_raw.ts) / 300) * 300)
            )"
     ).execute(pool).await;
-
-    println!("[rollup] complete");
 }
 
 /// Nightly maintenance: prune old data, VACUUM ANALYZE.

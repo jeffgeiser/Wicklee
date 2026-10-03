@@ -384,11 +384,11 @@ Cross-node model swap events. Uses Postgres `LAG()` window function over
 }
 ```
 `gap_ms` is the time between consecutive `metrics_raw` samples — a proxy
-for the visible swap duration. Sub-30s swaps will round to a single sample
-interval since `metrics_raw` is at 30s cadence.
+for the visible swap duration. Swaps shorter than the ~2 s push cadence round to a single sample
+interval.
 
 ### GET /api/v1/fleet/chargeback?days=30&kwh_rate=0.16
-Chargeback/showback (Team+, Clerk JWT). Cost + token attribution by team tag, model, and node, plus a daily trend — from MEASURED energy (watts × time at the given rate; 5-min rollup UNION raw trailing-day tail, same conventions as cost-by-model) and tokens estimated from sampled throughput (tok/s × covered seconds). `usd_per_mtok` is the headline: $ per million tokens, the number requiring watts AND tokens in one store. Tag rows overlap when a node carries multiple tags (showback, not double-billing); untagged nodes fold into `(untagged)`. Window 1–90 days. `&format=csv&group=tag|model|node|daily` downloads one grouping as formula-injection-hardened CSV, audited as `chargeback.exported`.
+Chargeback/showback (Team+, Clerk JWT). Cost + token attribution by team tag, model, and node, plus a daily trend — from MEASURED energy (Σ watts × each sample's real duration at the given rate; 5-min rollup UNION raw trailing-day tail, same conventions as cost-by-model) and tokens estimated from sampled throughput while live (tok/s × seconds inferring). `usd_per_mtok` is the headline: $ per million tokens, the number requiring watts AND tokens in one store. Tag rows overlap when a node carries multiple tags (showback, not double-billing); untagged nodes fold into `(untagged)`. Window 1–90 days. `&format=csv&group=tag|model|node|daily` downloads one grouping as formula-injection-hardened CSV, audited as `chargeback.exported`.
 
 ### GET /api/v1/fleet/idle-waste?days=30&kwh_rate=0.16
 Idle-waste & right-sizing report (Team+, Clerk JWT). Phantom load = a model held in memory while the node is NOT inferring — power burned for nothing. Idle/active energy split uses per-sample `inference_state` on raw rows and `inference_duty_pct` on 5-min rollups (same 30s-cadence energy conventions as chargeback). Actions: `unload_idle_model` per node×model (with `recovers_usd_month`, normalized so 7d and 30d reports advise consistently) and `consolidate` for nodes inferring <10% of the window. Quant-swap savings are a documented follow-up (needs agent Quant Sweet Spot data on the wire).

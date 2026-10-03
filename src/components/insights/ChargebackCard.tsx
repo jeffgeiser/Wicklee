@@ -217,7 +217,7 @@ const ChargebackCard: React.FC<Props> = ({ getToken, subscriptionTier, onNavigat
       )}
 
       <p className="text-[9px] text-gray-600 leading-relaxed">
-        Cost = measured watts × time at ${report?.kwh_rate ?? 0.16}/kWh. Tokens estimated from sampled throughput. Tag rows overlap when a node carries multiple tags — showback, not double-billing. CSV downloads are audit-logged.
+        Cost = measured watts × time at ${report?.kwh_rate ?? 0.16}/kWh. Tokens estimated from sampled throughput while inferring (live). Tag rows overlap when a node carries multiple tags — showback, not double-billing. CSV downloads are audit-logged.
       </p>
     </div>
   );

@@ -57,6 +57,8 @@ mod catalog;
 use catalog::*;
 mod alerts;
 use alerts::*;
+mod energy;
+use energy::*;
 mod reports;
 use reports::*;
 mod slo;
