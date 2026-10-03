@@ -127,7 +127,7 @@ const TIERS: TierDef[] = [
       'WES v2 + tok/W diagnostics',
       'Local API + MCP server (localhost, no auth)',
       'Fleet API (/api/v1/*) — core endpoints, 60 req/min',
-      'Open-source agent',
+      'Open-source agent and local dashboard (Apache 2.0)',
       'Community support — GitHub issues',
     ],
     highlight: false,

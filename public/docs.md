@@ -1168,6 +1168,13 @@ Wicklee is sovereign by default:
 
 ---
 
+## Licensing
+
+- Agent and local dashboard (`agent/`, the `localhost:7700` UI, metric calculations including WES): open source, Apache 2.0.
+- Fleet control plane (`cloud/`, `src/cloud/`, `src/site/`, control-plane deployment files): source-available, FSL-1.1-Apache-2.0 — free to read, run, modify and self-host except to offer a competing fleet monitoring service; each release converts to Apache 2.0 after four years.
+- "Wicklee" and the logo are trademarks, not covered by either licence.
+- Map: https://github.com/jeffgeiser/Wicklee/blob/main/LICENSING.md
+
 ## Pricing
 
 | | Community | Team | Enterprise |

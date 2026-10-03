@@ -1,6 +1,8 @@
 # Contributing
 
-Wicklee is a source-available project (FSL-1.1).
+The Wicklee agent and local dashboard are open source (Apache 2.0); the fleet
+control plane is source-available (FSL-1.1-Apache-2.0). See
+[LICENSING.md](LICENSING.md).
 
 We don't accept pull requests at this time. If you have a bug report,
 feature request, or question, please open an issue. Issues are reviewed

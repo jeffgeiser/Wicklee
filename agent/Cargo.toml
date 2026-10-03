@@ -2,6 +2,7 @@
 name = "wicklee-agent"
 version = "0.11.1"
 edition = "2024"
+license = "Apache-2.0"
 
 # `no_nvml` is a custom cfg set by the release workflow's musl/static build
 # (RUSTFLAGS='--cfg no_nvml') to strip the NVML wrapper. Register it so the

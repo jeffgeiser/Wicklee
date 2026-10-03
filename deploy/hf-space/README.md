@@ -8,7 +8,7 @@ app_file: index.html
 pinned: false
 license: other
 license_name: fsl-1.1-apache-2.0
-license_link: https://github.com/jeffgeiser/Wicklee/blob/main/LICENSE
+license_link: https://github.com/jeffgeiser/Wicklee/blob/main/cloud/LICENSE
 short_description: Hardware-aware observability for private AI fleets
 tags:
   - observability
@@ -41,5 +41,8 @@ Install on your own nodes:
 ```bash
 curl -fsSL https://wicklee.dev/install.sh | bash
 ```
+
+The agent and its local dashboard are open source (Apache 2.0). This demo is
+the fleet dashboard, which is source-available (FSL-1.1-Apache-2.0).
 
 → [wicklee.dev](https://wicklee.dev) · [Trust & data flow](https://wicklee.dev/trust) · [Design-partner program](https://wicklee.dev/design-partners)
