@@ -29,6 +29,9 @@ smoke-tests a running local agent (`bash scripts/qa_agent.sh`).*
 - [ ] Webhook: a purchase sets the account tier to `team_10` (10 nodes) or
       `team` (25 nodes) to match the size bought; cancelling (immediate)
       returns it to `community`.
+- [ ] When canceling a subscription for a customer in the Paddle dashboard,
+      choose **"At end of billing period"** (Paddle has no default setting);
+      immediate cancel drops them to Community at once, contradicting the Terms.
 - [ ] Node cap: pairing the **11th** node on Team · 10 and the **26th** on
       Team · 25 returns **402** with the upgrade message ("Move to Team
       (25 nodes) to add more." / "Above 25 nodes, talk to us about
