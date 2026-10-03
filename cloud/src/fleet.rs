@@ -200,6 +200,31 @@ pub(crate) async fn handle_fleet_model_switches(
     })).into_response()
 }
 
+/// Per-model cost over metrics_raw. Rows land every ~2 s (agent push
+/// cadence), not 30 s: weight each row by its real duration (energy::raw_dt_sql) — dt is computed before the
+/// model filter so a model's last row still sees the node's next row.
+pub(crate) fn cost_by_model_sql() -> String {
+    format!(
+        "WITH raw AS (
+            SELECT ollama_active_model, tok_s, watts, {dt} AS dt_s
+            FROM metrics_raw
+            WHERE tenant_id = $1
+              AND ts > NOW() - $2::INTERVAL
+         )
+         SELECT
+            ollama_active_model,
+            AVG(tok_s)::REAL  AS tok_s_avg,
+            AVG(watts)::REAL  AS avg_watts,
+            (SUM(dt_s) / 3600.0)::DOUBLE PRECISION AS hours_active,
+            (SUM(COALESCE(watts, 0) * dt_s) / 3600.0)::DOUBLE PRECISION AS energy_wh,
+            COUNT(*)::BIGINT  AS sample_count
+         FROM raw
+         WHERE ollama_active_model IS NOT NULL
+         GROUP BY ollama_active_model
+         ORDER BY hours_active DESC",
+        dt = raw_dt_sql())
+}
+
 /// GET /api/v1/fleet/cost-by-model?hours=24
 /// Per-model cost rollup over the past N hours. Uses metrics_raw for
 /// short windows (24h × ~12 nodes is manageable).
@@ -230,31 +255,15 @@ pub(crate) async fn handle_fleet_cost_by_model(
     let kwh_rate = DEFAULT_KWH_RATE_USD;
     let interval = format!("{hours} hours");
 
-    // Sample interval ~30s in metrics_raw → hours_active = COUNT(*) * 30 / 3600.
-    let rows: Vec<(String, Option<f32>, Option<f32>, Option<f64>, i64)> = sqlx::query_as(
-        "SELECT
-            ollama_active_model,
-            AVG(tok_s)::REAL  AS tok_s_avg,
-            AVG(watts)::REAL  AS avg_watts,
-            (COUNT(*) * 30.0 / 3600.0)::DOUBLE PRECISION AS hours_active,
-            COUNT(*)::BIGINT  AS sample_count
-         FROM metrics_raw
-         WHERE tenant_id = $1
-           AND ts > NOW() - $2::INTERVAL
-           AND ollama_active_model IS NOT NULL
-         GROUP BY ollama_active_model
-         ORDER BY hours_active DESC"
-    )
+    let sql = cost_by_model_sql();
+    let rows: Vec<(String, Option<f32>, Option<f32>, Option<f64>, Option<f64>, i64)> = sqlx::query_as(&sql)
     .bind(&tenant_id).bind(&interval)
     .fetch_all(&state.pool).await.unwrap_or_default();
 
     let mut total_cost_usd: f64 = 0.0;
-    let models: Vec<serde_json::Value> = rows.into_iter().map(|(model, tok_s, watts, hours_active, samples)| {
+    let models: Vec<serde_json::Value> = rows.into_iter().map(|(model, tok_s, watts, hours_active, energy_wh, samples)| {
         let hours_active = hours_active.unwrap_or(0.0);
-        let cost_usd = match watts {
-            Some(w) if w > 0.0 => (w as f64) * hours_active * (kwh_rate as f64) / 1000.0,
-            _ => 0.0,
-        };
+        let cost_usd = energy_wh.unwrap_or(0.0).max(0.0) / 1000.0 * (kwh_rate as f64);
         total_cost_usd += cost_usd;
         serde_json::json!({
             "model":        model,

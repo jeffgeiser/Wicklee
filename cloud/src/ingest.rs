@@ -1084,6 +1084,9 @@ pub(crate) async fn flush_batch(pool: &sqlx::PgPool, batch: &[MetricsRow]) {
 }
 
 /// Background task: drain the metrics channel and flush every 30 s.
+/// (30 s is the batch FLUSH interval only — each row is one agent push,
+/// ~2 s apart. Never treat a metrics_raw row as a 30 s sample; integrate
+/// with energy::raw_dt_sql.)
 pub(crate) async fn metrics_writer_task(mut rx: mpsc::Receiver<MetricsRow>, pool: sqlx::PgPool) {
     let mut buffer: Vec<MetricsRow> = Vec::with_capacity(256);
     let mut flush_interval = tokio::time::interval(Duration::from_secs(30));

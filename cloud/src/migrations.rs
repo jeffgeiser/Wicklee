@@ -323,6 +323,14 @@ pub(crate) async fn run_pg_migrations(pool: &sqlx::PgPool) {
     sqlx::query("ALTER TABLE metrics_5min ADD COLUMN IF NOT EXISTS ollama_active_model TEXT")
         .execute(pool).await.ok();
 
+    // Time-integrated per-bucket totals (energy::*): each raw row weighted by
+    // its real duration instead of a fixed 30 s. NULL on rows written before
+    // these columns existed — readers fall back to watts_avg × bucket.
+    for col in ["covered_s", "energy_wh", "live_energy_wh", "live_s", "tokens_est"] {
+        sqlx::query(&format!("ALTER TABLE metrics_5min ADD COLUMN IF NOT EXISTS {col} REAL"))
+            .execute(pool).await.ok();
+    }
+
     sqlx::query(
         "SELECT create_hypertable('metrics_5min', 'ts', if_not_exists => true)"
     ).execute(pool).await.ok();

@@ -4,35 +4,11 @@ use crate::*;
 
 // ── Chargeback / showback (Team+) ────────────────────────────────────────────
 
-/// Shared base CTE for chargeback: per-sample energy/token estimates from the
-/// 5-min rollup (older than 24h) UNION the raw tail (trailing 24h — the
-/// rollup only populates past 24h). Conventions match cost-by-model exactly:
-/// raw cadence ~30s, energy = watts × hours ÷ 1000, tokens ≈ tok/s × seconds.
-/// $1 = tenant, $2 = window interval string ("30 days").
-pub(crate) const CHARGEBACK_BASE: &str = "
-    WITH base AS (
-        SELECT node_id,
-               COALESCE(ollama_active_model, '(none)') AS model,
-               date_trunc('day', ts) AS day,
-               (COALESCE(watts_avg, 0) * sample_count * 30.0 / 3600.0 / 1000.0)::float8 AS energy_kwh,
-               (COALESCE(tok_s_avg, 0) * sample_count * 30.0)::float8 AS tokens,
-               (sample_count * 30.0 / 3600.0)::float8 AS hours_covered
-        FROM metrics_5min
-        WHERE tenant_id = $1
-          AND ts >= NOW() - ($2)::interval
-          AND ts <  NOW() - INTERVAL '24 hours'
-        UNION ALL
-        SELECT node_id,
-               COALESCE(ollama_active_model, '(none)'),
-               date_trunc('day', ts),
-               (COALESCE(watts, 0) * 30.0 / 3600.0 / 1000.0)::float8,
-               (COALESCE(tok_s, 0) * 30.0)::float8,
-               (30.0 / 3600.0)::float8
-        FROM metrics_raw
-        WHERE tenant_id = $1
-          AND ts >= NOW() - ($2)::interval
-          AND ts >= NOW() - INTERVAL '24 hours'
-    )";
+/// Shared base CTE for chargeback — see `energy::energy_base_cte`: per-row
+/// energy/token integrals over each sample's real duration (rows land every
+/// ~2 s, not 30 s), from the 5-min rollup UNION the not-yet-rolled-up raw
+/// tail. $1 = tenant, $2 = window interval string ("30 days").
+pub(crate) fn chargeback_base() -> String { energy_base_cte() }
 
 /// Build one chargeback row: measured energy → cost at the given rate,
 /// estimated tokens → $/1M tokens (the number nobody else can produce,
@@ -51,38 +27,9 @@ pub(crate) fn chargeback_row(key: &str, energy_kwh: f64, tokens: f64, hours: f64
 //
 // "Fleet burned $X idle last 30d; these N changes recover $Y." Phantom load =
 // a model held in memory while the node is NOT inferring — power burned for
-// nothing. Energy conventions match CHARGEBACK_BASE (30s cadence); the
-// idle/active split uses per-sample inference_state on raw rows and
-// inference_duty_pct on 5-min rollups.
-pub(crate) const IDLE_WASTE_BASE: &str = "
-    WITH base AS (
-        SELECT node_id,
-               COALESCE(ollama_active_model, '(none)') AS model,
-               (COALESCE(watts_avg, 0) * sample_count * 30.0 / 3600.0 / 1000.0
-                  * (1.0 - COALESCE(inference_duty_pct, 0) / 100.0))::float8 AS idle_kwh,
-               (COALESCE(watts_avg, 0) * sample_count * 30.0 / 3600.0 / 1000.0
-                  * (COALESCE(inference_duty_pct, 0) / 100.0))::float8 AS active_kwh,
-               (sample_count * 30.0 / 3600.0
-                  * (1.0 - COALESCE(inference_duty_pct, 0) / 100.0))::float8 AS idle_hours,
-               (sample_count * 30.0 / 3600.0)::float8 AS hours_covered
-        FROM metrics_5min
-        WHERE tenant_id = $1
-          AND ts >= NOW() - ($2)::interval
-          AND ts <  NOW() - INTERVAL '24 hours'
-        UNION ALL
-        SELECT node_id,
-               COALESCE(ollama_active_model, '(none)'),
-               (CASE WHEN inference_state = 'live' THEN 0.0
-                     ELSE COALESCE(watts, 0) * 30.0 / 3600.0 / 1000.0 END)::float8,
-               (CASE WHEN inference_state = 'live' THEN COALESCE(watts, 0) * 30.0 / 3600.0 / 1000.0
-                     ELSE 0.0 END)::float8,
-               (CASE WHEN inference_state = 'live' THEN 0.0 ELSE 30.0 / 3600.0 END)::float8,
-               (30.0 / 3600.0)::float8
-        FROM metrics_raw
-        WHERE tenant_id = $1
-          AND ts >= NOW() - ($2)::interval
-          AND ts >= NOW() - INTERVAL '24 hours'
-    )";
+// nothing. Uses the same base CTE as chargeback (energy::energy_base_cte), so
+// the two reports always agree on energy: idle = total − live, both
+// integrated over real sample durations.
 
 /// Compute the idle-waste report for one tenant. Shared by the HTTP handler
 /// and the weekly digest task so both always agree.
@@ -96,10 +43,11 @@ pub(crate) async fn compute_idle_waste(
 
     // Per node × model: idle energy attributable to a loaded-but-idle model
     // (phantom load) vs idle with nothing loaded (baseline idle, context only).
-    let rows_sql = format!("{IDLE_WASTE_BASE}
+    let rows_sql = format!("{base}
         SELECT node_id, model,
-               SUM(idle_kwh), SUM(active_kwh), SUM(idle_hours), SUM(hours_covered)
-        FROM base GROUP BY node_id, model");
+               SUM(energy_kwh - active_kwh)::float8, SUM(active_kwh)::float8,
+               SUM(hours_covered - live_hours)::float8, SUM(hours_covered)::float8
+        FROM base GROUP BY node_id, model", base = energy_base_cte());
     let rows: Vec<(String, String, f64, f64, f64, f64)> = sqlx::query_as(&rows_sql)
         .bind(tval).bind(&window)
         .fetch_all(pool).await.unwrap_or_default();
@@ -664,9 +612,10 @@ pub(crate) async fn handle_fleet_chargeback(
     let (_tcol, tval) = tenant_scope(&user_id, &org_id);
     let window = format!("{days} days");
 
+    let base = chargeback_base();
     // Tags overlap by design; empty-string fragments from stray commas fold
     // into (untagged) via NULLIF.
-    let by_tag_sql = format!("{CHARGEBACK_BASE}
+    let by_tag_sql = format!("{base}
         SELECT COALESCE(NULLIF(t.tag, ''), '(untagged)') AS key,
                SUM(b.energy_kwh), SUM(b.tokens), SUM(b.hours_covered)
         FROM base b
@@ -675,13 +624,13 @@ pub(crate) async fn handle_fleet_chargeback(
             FROM nodes n WHERE n.wk_id = b.node_id AND n.tags IS NOT NULL AND n.tags <> ''
         ) t ON true
         GROUP BY 1 ORDER BY 2 DESC LIMIT 100");
-    let by_model_sql = format!("{CHARGEBACK_BASE}
+    let by_model_sql = format!("{base}
         SELECT model, SUM(energy_kwh), SUM(tokens), SUM(hours_covered)
         FROM base GROUP BY model ORDER BY 2 DESC LIMIT 100");
-    let by_node_sql = format!("{CHARGEBACK_BASE}
+    let by_node_sql = format!("{base}
         SELECT node_id, SUM(energy_kwh), SUM(tokens), SUM(hours_covered)
         FROM base GROUP BY node_id ORDER BY 2 DESC LIMIT 100");
-    let daily_sql = format!("{CHARGEBACK_BASE}
+    let daily_sql = format!("{base}
         SELECT to_char(day, 'YYYY-MM-DD'), SUM(energy_kwh), SUM(tokens), SUM(hours_covered)
         FROM base GROUP BY day ORDER BY day ASC");
 
