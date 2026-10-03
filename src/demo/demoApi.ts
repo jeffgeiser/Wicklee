@@ -20,13 +20,14 @@ function json(body: unknown, status = 200, headers: Record<string, string> = {})
   });
 }
 
-const RANGE_HOURS: Record<string, number> = { '1h': 1, '24h': 24, '7d': 168, '30d': 720, '90d': 2160 };
+const RANGE_HOURS: Record<string, number> = { '1h': 1, '24h': 24, '7d': 168, '30d': 720, '90d': 2160, '1y': 8760 };
 
 function historyStep(hours: number): number {
   if (hours <= 1) return 1;        // 1-min buckets
   if (hours <= 24) return 5;
   if (hours <= 168) return 30;
-  return 120;
+  if (hours <= 2160) return 120;
+  return 1440;                     // 1y → daily buckets
 }
 
 const now = () => Date.now();

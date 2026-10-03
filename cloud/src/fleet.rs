@@ -366,7 +366,23 @@ pub(crate) fn time_bucket_for_range(range: &str) -> (i64, &str, bool) {
         "7d"  => (1800,   "7 days",   false),
         "30d" => (7200,   "30 days",  false),
         "90d" => (21600,  "90 days",  false),
+        // Daily buckets over the full metrics_5min retention (nightly prune
+        // keeps 365 days) — 365 points per node.
+        "1y"  => (86400,  "365 days", false),
         _     => (300,    "24 hours",  true),
+    }
+}
+
+/// Tier gate for the history range selector. `None` = allowed; otherwise the
+/// plan the paywall should name. 12-month history is the Enterprise claim
+/// (grandfathered Business keeps it); 30d/90d are Team.
+pub(crate) fn range_upgrade_plan(tier: &str, range: &str) -> Option<UpgradePlan> {
+    match range {
+        "1y" if !is_business_or_above(tier) => Some(UpgradePlan::Enterprise),
+        "30d" | "90d" if !is_team_or_above(tier) => Some(UpgradePlan::Team),
+        "7d" if !is_pro_or_above(tier) => Some(UpgradePlan::Team),
+        // Unknown ranges fall back to 24h in time_bucket_for_range.
+        _ => None,
     }
 }
 
@@ -399,11 +415,8 @@ pub(crate) async fn handle_wes_history(
 
     // Was `match tier { "team" | "enterprise" => true, .. }`, which left
     // Business out of 30d/90d and would have left team_10 out too.
-    let allowed = if is_team_or_above(&tier) { true }
-        else if tier == "pro" { !matches!(range.as_str(), "30d" | "90d") }
-        else { matches!(range.as_str(), "1h" | "24h") };
-    if !allowed {
-        return upgrade_required(&format!("Range '{range}'"), UpgradePlan::Team);
+    if let Some(plan) = range_upgrade_plan(&tier, &range) {
+        return upgrade_required(&format!("Range '{range}'"), plan);
     }
 
     // Enumerate user's nodes
@@ -753,11 +766,8 @@ pub(crate) async fn handle_metrics_history(
 
     // Was `match tier { "team" | "enterprise" => true, .. }`, which left
     // Business out of 30d/90d and would have left team_10 out too.
-    let allowed = if is_team_or_above(&tier) { true }
-        else if tier == "pro" { !matches!(range.as_str(), "30d" | "90d") }
-        else { matches!(range.as_str(), "1h" | "24h") };
-    if !allowed {
-        return upgrade_required(&format!("Range '{range}'"), UpgradePlan::Team);
+    if let Some(plan) = range_upgrade_plan(&tier, &range) {
+        return upgrade_required(&format!("Range '{range}'"), plan);
     }
 
     let (tcol, tval) = tenant_scope(&user_id, &org_id);
@@ -1108,5 +1118,27 @@ pub(crate) async fn handle_update_node(
         }
         None => (StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": "Node not found" }))).into_response(),
+    }
+}
+
+#[cfg(test)]
+mod range_gate_tests {
+    use super::*;
+
+    #[test]
+    fn one_year_range_is_enterprise_with_business_grandfathered() {
+        for tier in ["community", "pro", "team_10", "team"] {
+            assert!(matches!(range_upgrade_plan(tier, "1y"), Some(UpgradePlan::Enterprise)), "{tier}");
+        }
+        assert!(range_upgrade_plan("business", "1y").is_none());
+        assert!(range_upgrade_plan("enterprise", "1y").is_none());
+        // Existing ladder is unchanged.
+        assert!(range_upgrade_plan("community", "24h").is_none());
+        assert!(matches!(range_upgrade_plan("community", "7d"), Some(UpgradePlan::Team)));
+        assert!(range_upgrade_plan("pro", "7d").is_none());
+        assert!(matches!(range_upgrade_plan("pro", "90d"), Some(UpgradePlan::Team)));
+        assert!(range_upgrade_plan("team_10", "90d").is_none());
+        // Daily buckets across the full 365-day metrics_5min retention.
+        assert_eq!(time_bucket_for_range("1y"), (86400, "365 days", false));
     }
 }
