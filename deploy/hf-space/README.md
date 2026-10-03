@@ -9,7 +9,7 @@ pinned: false
 license: other
 license_name: fsl-1.1-apache-2.0
 license_link: https://github.com/jeffgeiser/Wicklee/blob/main/LICENSE
-short_description: Live demo of Wicklee — hardware-aware observability for private AI fleets
+short_description: Hardware-aware observability for private AI fleets
 tags:
   - observability
   - local-llm
