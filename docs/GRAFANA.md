@@ -79,7 +79,9 @@ For **Grafana Alloy** or the OpenTelemetry Collector, the same job works as a
 ## Import the dashboard
 
 1. Grafana → **Dashboards → New → Import**.
-2. Upload `deploy/grafana/wicklee-fleet.json` (or paste its contents).
+2. Enter dashboard ID **25854** in *Find and import dashboards for common
+   applications* and click **Load** ([grafana.com listing](https://grafana.com/grafana/dashboards/25854-wicklee-fleet-efficiency/)),
+   or upload `deploy/grafana/wicklee-fleet.json` (or paste its contents).
 3. Grafana then shows an import form with a **Prometheus** dropdown — pick the
    datasource that scrapes Wicklee and click **Import**.
 
