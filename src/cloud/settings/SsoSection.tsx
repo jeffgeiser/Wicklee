@@ -23,7 +23,7 @@
 import React, { useEffect, useState } from 'react';
 import { KeyRound, Lock, ExternalLink } from 'lucide-react';
 import { CLOUD_URL } from '../../utils/cloudUrl';
-import { CONTACT_EMAIL, mailto } from '../../utils/contact';
+import { CONTACT_EMAIL, mailto } from '../../site/utils/contact';
 
 interface Props {
   subscriptionTier: string;

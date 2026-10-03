@@ -6,7 +6,8 @@ import { CLOUD_URL } from '../utils/cloudUrl';
 import { useFleetStream } from '../contexts/FleetStreamContext';
 import { useLocalMetricsStream } from '../hooks/useLocalMetricsStream';
 import ModelDiscoveryCard from './insights/ModelDiscoveryCard';
-import FleetModelDiscovery from './insights/FleetModelDiscovery';
+import FleetModelDiscovery from '../cloud/insights/FleetModelDiscovery';
+import { IS_AGENT } from '../utils/buildTarget';
 
 interface ModelsPageProps {
   isLocalHost: boolean;
@@ -519,7 +520,7 @@ const BrowseSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
   <Section eyebrow="Browse" meta="HuggingFace GGUF catalog scored against your hardware">
     {isLocalHost ? (
       <ModelDiscoveryCard isLocalHost={isLocalHost} />
-    ) : getToken ? (
+    ) : !IS_AGENT && getToken ? (
       <FleetModelDiscovery getToken={getToken} />
     ) : (
       <EmptyState>Sign in to use Fleet Model Discovery.</EmptyState>

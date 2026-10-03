@@ -7,9 +7,10 @@ import { DashboardTab, FleetNode, NodeAgent, PairingInfo, Tenant, User as UserTy
 import { NODE_REACHABLE_MS, fmtAgo } from './utils/time';
 import { FleetStreamProvider, useFleetStream } from './contexts/FleetStreamContext';
 import { CLOUD_URL } from './utils/cloudUrl';
-import { hasClerkSessionHint } from './utils/clerkHint';
+import { hasClerkSessionHint } from './cloud/utils/clerkHint';
 import { perfMark } from './utils/perfMark';
-import { loadPaddle } from './utils/loadPaddle';
+import { IS_AGENT, IS_DEMO, IS_LOCAL_HOST as isLocalHost, SITE_URL } from './utils/buildTarget';
+import { loadPaddle } from './cloud/utils/loadPaddle';
 import Sidebar from './components/Sidebar';
 import MobileTabBar from './components/MobileTabBar';
 import Header from './components/Header';
@@ -24,21 +25,30 @@ import Header from './components/Header';
 //
 // Marketing pages (LandingPage, PricingPage, DocsPage, …) stay static: they
 // ARE the entry. renderContent() is wrapped in Suspense below.
+//
+// ── Agent build: cloud and site pages are absent ─────────────────────────
+// src/cloud (paid fleet UI, Clerk, Paddle) and src/site (marketing) must not
+// ship in the agent binary. A bare React.lazy(() => import(...)) is not
+// enough — Rollup keeps the import() as a possible side effect even when the
+// component is never rendered — so each one is written as a ternary on
+// IS_AGENT, which folds at build time and removes the import() with it.
+// `Absent` only satisfies the type; every render site is behind !IS_AGENT.
+const Absent = (() => null) as never;
 const Overview = React.lazy(() => import('./components/Overview'));
 const ModelsPage = React.lazy(() => import('./components/ModelsPage'));
 const NodesList = React.lazy(() => import('./components/NodesList'));
 const TracesView = React.lazy(() => import('./components/TracesView'));
 const AIInsights = React.lazy(() => import('./components/AIInsights'));
-const TeamManagement = React.lazy(() => import('./components/TeamManagement'));
-import LandingPage from './components/LandingPage';
+const TeamManagement = IS_AGENT ? Absent : React.lazy(() => import('./cloud/TeamManagement'));
+import LandingPage from './site/LandingPage';
 // SignInPage/SignUpPage import @clerk/clerk-react — lazy-load to keep Clerk
 // out of the agent bundle.
-const SignInPage = React.lazy(() => import('./components/SignInPage'));
-const SignUpPage = React.lazy(() => import('./components/SignUpPage'));
-const APIKeysView = React.lazy(() => import('./components/APIKeysView'));
+const SignInPage = IS_AGENT ? Absent : React.lazy(() => import('./cloud/SignInPage'));
+const SignUpPage = IS_AGENT ? Absent : React.lazy(() => import('./cloud/SignUpPage'));
+const APIKeysView = IS_AGENT ? Absent : React.lazy(() => import('./cloud/APIKeysView'));
 const SettingsView = React.lazy(() => import('./components/SettingsView'));
 import { useSettings } from './hooks/useSettings';
-import PricingPage from './components/PricingPage';
+import PricingPage from './site/PricingPage';
 // ── Marketing-route code split ───────────────────────────────────────────
 // Measured on a simulated slow-4G phone: the entry chunk took 1.3 s to
 // download and ~1 s to parse before /pricing could paint, and 55% of it was
@@ -51,15 +61,15 @@ import PricingPage from './components/PricingPage';
 // and on / the prerendered block is replaced the moment React mounts, so a
 // lazy LandingPage would reintroduce a blank gap there.
 const MetricsPage        = React.lazy(() => import('./pages/MetricsPage'));
-const DocsPage           = React.lazy(() => import('./pages/DocsPage'));
-const LegalPage          = React.lazy(() => import('./pages/LegalPage'));
-const TrustPage          = React.lazy(() => import('./pages/TrustPage'));
-const DesignPartnersPage = React.lazy(() => import('./pages/DesignPartnersPage'));
+const DocsPage           = IS_AGENT ? Absent : React.lazy(() => import('./site/DocsPage'));
+const LegalPage          = IS_AGENT ? Absent : React.lazy(() => import('./site/LegalPage'));
+const TrustPage          = IS_AGENT ? Absent : React.lazy(() => import('./site/TrustPage'));
+const DesignPartnersPage = IS_AGENT ? Absent : React.lazy(() => import('./site/DesignPartnersPage'));
 import PairingModal from './components/PairingModal';
-const AddNodeModal = React.lazy(() => import('./components/AddNodeModal'));
+const AddNodeModal = IS_AGENT ? Absent : React.lazy(() => import('./cloud/AddNodeModal'));
 import { usePermissions } from './hooks/usePermissions';
-const BlogListing        = React.lazy(() => import('./components/BlogListing'));
-const BlogPost           = React.lazy(() => import('./components/BlogPost'));
+const BlogListing        = IS_AGENT ? Absent : React.lazy(() => import('./site/BlogListing'));
+const BlogPost           = IS_AGENT ? Absent : React.lazy(() => import('./site/BlogPost'));
 
 /** Shown while a lazy marketing page's chunk is in flight. Deliberately not
  *  null: on the prerendered routes React has already cleared the static
@@ -147,7 +157,6 @@ const LOCAL_USER: UserType = {
   isPro: false,
 };
 
-import { IS_AGENT, IS_DEMO, IS_LOCAL_HOST as isLocalHost } from './utils/buildTarget';
 
 // Cloud backend URL — env var takes precedence; falls back to the known Railway service.
 // Resolution rules + rationale documented in src/utils/cloudUrl.ts (single source of truth).
@@ -213,6 +222,14 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
   const { settings, savedToast, getNodeSettings, updateFleet, setNodeOverride, clearAllOverridesForField, clearAllNodeOverrides } = useSettings();
 
   const navigate = useCallback((path: string) => {
+    // The agent build ships only the dashboard and the metrics reference.
+    // Everything else (pricing, docs, blog, sign-in, legal) lives on the
+    // public site, so open it there instead of routing to a page that is
+    // not in this bundle.
+    if (IS_AGENT && path !== '/' && !path.startsWith('/metrics')) {
+      window.open(`${SITE_URL}${path}`, '_blank', 'noopener');
+      return;
+    }
     window.history.pushState(null, '', path);
     // Route on the pathname only — `path` may carry a query string
     // (/sign-up?redirect_url=…, /pricing?plan=…), which must not break the
@@ -418,6 +435,8 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
     cycle: 'monthly' | 'annual' = 'monthly',
     plan: 'team_10' | 'team' = 'team',
   ): Promise<boolean> => {
+    // No billing in the agent build — this also drops Paddle from its bundle.
+    if (IS_AGENT) return false;
     try {
       const token = await getToken();
       const r = await fetch(`${CLOUD_URL}/api/billing/config`, {
@@ -495,14 +514,6 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
 
   const toggleTheme = () => {}; // Dark mode only — no-op
 
-  // Clerk sign-in / sign-up routes
-  if (currentPath === '/sign-in' || currentPath.startsWith('/sign-in/')) {
-    return <React.Suspense fallback={null}><SignInPage onNavigate={navigate} /></React.Suspense>;
-  }
-  if (currentPath === '/sign-up' || currentPath.startsWith('/sign-up/')) {
-    return <React.Suspense fallback={null}><SignUpPage onNavigate={navigate} /></React.Suspense>;
-  }
-
   // Metrics reference route — public, no auth required
   // Metrics reference lives at /metrics-reference: on wicklee.dev, nginx
   // exact-matches /metrics to the cloud's Prometheus scrape endpoint, so a
@@ -516,66 +527,78 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
     return lazyPage(<MetricsPage onNavigate={navigate} />);
   }
 
-  // Documentation route — public, no auth required (trailing slash tolerant)
-  if (currentPath === '/docs' || currentPath === '/docs/') {
-    return lazyPage(<DocsPage onNavigate={navigate} />);
-  }
+  // Site and sign-in routes — absent from the agent build (see the Absent
+  // note at the top of this file); IS_AGENT folds this whole block away.
+  if (!IS_AGENT) {
+    // Clerk sign-in / sign-up routes
+    if (currentPath === '/sign-in' || currentPath.startsWith('/sign-in/')) {
+      return <React.Suspense fallback={null}><SignInPage onNavigate={navigate} /></React.Suspense>;
+    }
+    if (currentPath === '/sign-up' || currentPath.startsWith('/sign-up/')) {
+      return <React.Suspense fallback={null}><SignUpPage onNavigate={navigate} /></React.Suspense>;
+    }
 
-  // Trust & design-partner routes — public, no auth required
-  if (currentPath === '/trust' || currentPath === '/trust/') {
-    return lazyPage(<TrustPage onNavigate={navigate} />);
-  }
-  if (currentPath === '/design-partners' || currentPath === '/design-partners/') {
-    return lazyPage(<DesignPartnersPage onNavigate={navigate} />);
-  }
+    // Documentation route — public, no auth required (trailing slash tolerant)
+    if (currentPath === '/docs' || currentPath === '/docs/') {
+      return lazyPage(<DocsPage onNavigate={navigate} />);
+    }
 
-  // Legal routes — public, no auth required
-  if (currentPath === '/terms' || currentPath === '/terms/') {
-    return lazyPage(<LegalPage onNavigate={navigate} initialTab="terms" />);
-  }
-  if (currentPath === '/privacy' || currentPath === '/privacy/') {
-    return lazyPage(<LegalPage onNavigate={navigate} initialTab="privacy" />);
-  }
-  if (currentPath === '/refund' || currentPath === '/refund/') {
-    return lazyPage(<LegalPage onNavigate={navigate} initialTab="refund" />);
-  }
+    // Trust & design-partner routes — public, no auth required
+    if (currentPath === '/trust' || currentPath === '/trust/') {
+      return lazyPage(<TrustPage onNavigate={navigate} />);
+    }
+    if (currentPath === '/design-partners' || currentPath === '/design-partners/') {
+      return lazyPage(<DesignPartnersPage onNavigate={navigate} />);
+    }
 
-  // Pricing route — public, accessible logged in or out
-  if (currentPath === '/pricing' || currentPath === '/pricing/') {
-    return (
-      <PricingPage
-        currentTier={permissions.subscriptionTier}
-        isLoggedIn={isLoggedIn}
-        onNavigate={navigate}
-        onSignIn={() => navigate('/sign-in')}
-        onSignUp={() => navigate('/sign-up')}
-        onTeamCheckout={teamCheckout}
-      />
-    );
-  }
+    // Legal routes — public, no auth required
+    if (currentPath === '/terms' || currentPath === '/terms/') {
+      return lazyPage(<LegalPage onNavigate={navigate} initialTab="terms" />);
+    }
+    if (currentPath === '/privacy' || currentPath === '/privacy/') {
+      return lazyPage(<LegalPage onNavigate={navigate} initialTab="privacy" />);
+    }
+    if (currentPath === '/refund' || currentPath === '/refund/') {
+      return lazyPage(<LegalPage onNavigate={navigate} initialTab="refund" />);
+    }
 
-  // Blog routes — public, no auth required
-  if (currentPath === '/blog' || currentPath === '/blog/') {
-    return lazyPage(
-      <BlogListing
-        onNavigate={navigate}
-        onSignIn={() => navigate('/sign-in')}
-        onSignUp={() => navigate('/sign-up')}
-      />,
-    );
-  }
-  // Trailing-slash tolerant — the prerendered static pages live at
-  // /blog/{slug}/index.html, so links may carry a trailing slash.
-  const blogPostMatch = currentPath.match(/^\/blog\/([^/]+?)\/?$/);
-  if (blogPostMatch) {
-    return lazyPage(
-      <BlogPost
-        slug={blogPostMatch[1]}
-        onNavigate={navigate}
-        onSignIn={() => navigate('/sign-in')}
-        onSignUp={() => navigate('/sign-up')}
-      />,
-    );
+    // Pricing route — public, accessible logged in or out
+    if (currentPath === '/pricing' || currentPath === '/pricing/') {
+      return (
+        <PricingPage
+          currentTier={permissions.subscriptionTier}
+          isLoggedIn={isLoggedIn}
+          onNavigate={navigate}
+          onSignIn={() => navigate('/sign-in')}
+          onSignUp={() => navigate('/sign-up')}
+          onTeamCheckout={teamCheckout}
+        />
+      );
+    }
+
+    // Blog routes — public, no auth required
+    if (currentPath === '/blog' || currentPath === '/blog/') {
+      return lazyPage(
+        <BlogListing
+          onNavigate={navigate}
+          onSignIn={() => navigate('/sign-in')}
+          onSignUp={() => navigate('/sign-up')}
+        />,
+      );
+    }
+    // Trailing-slash tolerant — the prerendered static pages live at
+    // /blog/{slug}/index.html, so links may carry a trailing slash.
+    const blogPostMatch = currentPath.match(/^\/blog\/([^/]+?)\/?$/);
+    if (blogPostMatch) {
+      return lazyPage(
+        <BlogPost
+          slug={blogPostMatch[1]}
+          onNavigate={navigate}
+          onSignIn={() => navigate('/sign-in')}
+          onSignUp={() => navigate('/sign-up')}
+        />,
+      );
+    }
   }
 
   // Wait for Clerk before choosing landing-vs-dashboard — but only when there
@@ -587,10 +610,10 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
   // already replaced the prerendered block. Clerk leaves cookies on the app
   // domain when a session exists; with none present, render the landing page
   // now. If the hint is ever wrong, the failure mode is the old brief flash,
-  // not a broken page. See utils/clerkHint.ts.
+  // not a broken page. See cloud/utils/clerkHint.ts.
   if (!isLocalHost && !isLoaded && hasClerkSessionHint(document.cookie)) return null;
 
-  if (!isLoggedIn) {
+  if (!IS_AGENT && !isLoggedIn) {
     return (
       <LandingPage
         onSignIn={() => navigate('/sign-in')}
@@ -632,7 +655,7 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
           <div className="text-center py-20 text-gray-500">Unauthorized Access</div>
         );
       case DashboardTab.TEAM:
-        return permissions.canManageTeam ? <TeamManagement tenantId={currentTenant.id} currentUser={currentUser} orgId={orgId} /> : <div className="text-center py-20 text-gray-500">Unauthorized Access</div>;
+        return !IS_AGENT && permissions.canManageTeam ? <TeamManagement tenantId={currentTenant.id} currentUser={currentUser} orgId={orgId} /> : <div className="text-center py-20 text-gray-500">Unauthorized Access</div>;
       case DashboardTab.SETTINGS:
         return <SettingsView
           nodes={nodes}
@@ -652,11 +675,11 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
           isLocalHost={isLocalHost}
         />;
       case DashboardTab.API_KEYS:
-        return <React.Suspense fallback={null}><APIKeysView /></React.Suspense>;
+        return IS_AGENT ? null : <React.Suspense fallback={null}><APIKeysView /></React.Suspense>;
       case DashboardTab.PRICING:
-        return <PricingPage currentTier={permissions.subscriptionTier} isLoggedIn={isLoggedIn} onNavigate={navigate} onTeamCheckout={teamCheckout} embedded />;
+        return IS_AGENT ? null : <PricingPage currentTier={permissions.subscriptionTier} isLoggedIn={isLoggedIn} onNavigate={navigate} onTeamCheckout={teamCheckout} embedded />;
       case DashboardTab.BILLING:
-        return <PricingPage currentTier={permissions.subscriptionTier} isLoggedIn={isLoggedIn} onNavigate={navigate} onTeamCheckout={teamCheckout} embedded />;
+        return IS_AGENT ? null : <PricingPage currentTier={permissions.subscriptionTier} isLoggedIn={isLoggedIn} onNavigate={navigate} onTeamCheckout={teamCheckout} embedded />;
       default:
         return <Overview nodes={nodes} nodesLoading={nodesLoading} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} onUpgrade={() => setIsUpgradeModalOpen(true)} getNodeSettings={getNodeSettings} fleetKwhRate={settings.fleet.kwhRate} />;
     }
@@ -723,7 +746,7 @@ const DEMO_USER = {
 };
 
 interface AppProps {
-  /** Cloud builds only: the Clerk-hooks bridge from components/CloudApp. */
+  /** Cloud builds only: the Clerk-hooks bridge from cloud/CloudApp. */
   cloudApp?: React.FC<{ AppCore: React.FC<AppCoreProps> }>;
 }
 

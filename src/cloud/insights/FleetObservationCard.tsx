@@ -18,8 +18,8 @@
 
 import React, { useState, useMemo } from 'react';
 import { ChevronDown, CheckCircle, Activity, Lightbulb, ListChecks, Cpu } from 'lucide-react';
-import type { FleetObservation } from '../../hooks/useFleetObservations';
-import { patternIcon, hookColor } from './ObservationCard';
+import type { FleetObservation } from '../hooks/useFleetObservations';
+import { patternIcon, hookColor } from '../../components/insights/ObservationCard';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 

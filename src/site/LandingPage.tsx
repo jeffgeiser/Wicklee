@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Cpu, Zap, Activity, Terminal, ChevronRight, Database, Thermometer, Copy, Check, Flame, MemoryStick, ShieldCheck, Route, ClipboardCheck, TrendingDown, BarChart2, Gauge, Waves, HardDrive, Server, Search, Webhook, Bell } from 'lucide-react';
-import Logo from './Logo';
+import Logo from '../components/Logo';
 import { perfMark } from '../utils/perfMark';
 
 interface LandingPageProps {

@@ -64,7 +64,7 @@ const root = ReactDOM.createRoot(rootElement);
     // costs no extra round-trip.
     const [{ ClerkProvider }, { default: CloudApp }] = await Promise.all([
       import('@clerk/clerk-react'),
-      import('./components/CloudApp'),
+      import('./cloud/CloudApp'),
     ]);
     perfMark('wk:clerk-module');
     const clerkPubKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string;

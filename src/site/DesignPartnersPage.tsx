@@ -9,7 +9,7 @@
 
 import React, { useEffect } from 'react';
 import { ArrowLeft, Handshake, Check, Building2, ShieldCheck, LineChart } from 'lucide-react';
-import { CONTACT_EMAIL, mailto } from '../utils/contact';
+import { CONTACT_EMAIL, mailto } from './utils/contact';
 
 interface DesignPartnersPageProps {
   onNavigate: (path: string) => void;

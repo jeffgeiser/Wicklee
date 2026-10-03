@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { ArrowLeft } from 'lucide-react';
-import { CONTACT_EMAIL, PRIVACY_EMAIL, mailto } from '../utils/contact';
+import { CONTACT_EMAIL, PRIVACY_EMAIL, mailto } from './utils/contact';
 
 type LegalTab = 'terms' | 'privacy' | 'refund';
 
@@ -69,7 +69,7 @@ const LegalPage: React.FC<LegalPageProps> = ({ onNavigate, initialTab = 'terms' 
 // Every "Paddle" mention below describes Paddle.com as merchant of record,
 // not a mere processor: Paddle sells the subscription to the buyer, so the
 // Terms, Privacy and Refund tabs must agree on that. Plan contents follow the
-// cards in src/components/PricingPage.tsx (the source of truth) and retention
+// cards in src/site/PricingPage.tsx (the source of truth) and retention
 // follows cloud/src/maintenance.rs + agent/src/store.rs — change them together.
 
 const TermsOfService: React.FC = () => (

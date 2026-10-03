@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import Logo from './Logo';
+import Logo from '../components/Logo';
 import {
   parseFrontmatter, slugToTitle, stripMarkdown, formatDate,
-} from '../utils/parseFrontmatter';
+} from './utils/parseFrontmatter';
 import { DEFAULT_TITLE } from '../utils/pageMeta';
 
 interface PostCard {

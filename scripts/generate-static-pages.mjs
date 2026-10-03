@@ -159,7 +159,7 @@ function injectContent(html, { jsonLd, bodyHtml, wrapStyle }) {
  * human-readable content in the raw HTML, not an empty #root that only fills
  * in after the JS bundle runs. React hydrates over this on load.
  *
- * Copy is mirrored verbatim from src/components/LandingPage.tsx (hero,
+ * Copy is mirrored verbatim from src/site/LandingPage.tsx (hero,
  * feature cards, section headers) — keep the two in sync; this is a marketing
  * surface that changes rarely. No claims here that aren't on the live page.
  */

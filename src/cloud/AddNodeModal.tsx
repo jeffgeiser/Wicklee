@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { X, CloudLightning, AlertCircle, CheckCircle2, ArrowRight, Terminal } from 'lucide-react';
 import { useAuth } from '@clerk/clerk-react';
 import { IS_AGENT, IS_DEMO } from '../utils/buildTarget';
-import { CopyButton } from './shared/CopyButton';
+import { CopyButton } from '../components/shared/CopyButton';
 
 interface AddNodeModalProps {
   isOpen: boolean;
