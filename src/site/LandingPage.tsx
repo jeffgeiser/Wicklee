@@ -239,7 +239,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
           Start local. Add a fleet when you need one.
         </h2>
         <p className="text-gray-400 text-base max-w-2xl mb-12 text-center mx-auto">
-          The agent is free forever and works completely on its own. Everything above it is optional.
+          The agent is open source, free forever, and works completely on its own. Everything above it is optional.
         </p>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">

@@ -1,6 +1,7 @@
 {
   "name": "wicklee",
   "private": true,
+  "license": "SEE LICENSE IN LICENSING.md",
   "version": "0.6.0",
   "type": "module",
   "scripts": {

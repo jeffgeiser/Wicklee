@@ -1,6 +1,6 @@
 # Wicklee
 
-[![License: FSL-1.1-Apache-2.0](https://img.shields.io/badge/License-FSL--1.1--Apache--2.0-blue.svg)](LICENSE)
+[![Agent: Apache 2.0](https://img.shields.io/badge/Agent-Apache--2.0-blue.svg)](LICENSE) [![Control plane: FSL-1.1-Apache-2.0](https://img.shields.io/badge/Control%20plane-FSL--1.1--Apache--2.0-lightgrey.svg)](cloud/LICENSE)
 [![Rust](https://img.shields.io/badge/Rust-1.85%2B-orange.svg)](https://www.rust-lang.org/)
 [![Build](https://img.shields.io/github/actions/workflow/status/jeffgeiser/Wicklee/release.yml?label=nightly)](https://github.com/jeffgeiser/Wicklee/actions)
 
@@ -245,7 +245,12 @@ cd agent && cargo build --release
 
 ## License
 
-[FSL-1.1-Apache-2.0](LICENSE) (Functional Source License). Free for personal use and small teams. Converts to Apache 2.0 after four years.
+Wicklee is licensed by directory. [LICENSING.md](LICENSING.md) has the full map.
+
+- **The agent and local dashboard are open source under [Apache 2.0](LICENSE).** That is everything that runs on your nodes: `agent/`, the dashboard at `localhost:7700`, and the metric calculations including WES.
+- **The fleet control plane is source-available under [FSL-1.1-Apache-2.0](cloud/LICENSE).** That is `cloud/`, `src/cloud/`, `src/site/` and the control-plane deployment files. You can read, run, modify and self-host it for anything except offering a competing fleet monitoring service; each release converts to Apache 2.0 after four years.
+
+"Wicklee" and the Wicklee logo are trademarks and are not covered by either licence. Forks must use a different name.
 
 ---
 

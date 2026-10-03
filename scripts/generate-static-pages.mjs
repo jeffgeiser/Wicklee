@@ -191,7 +191,7 @@ ${featureHtml}
   </ul>
   <h2 style="font-size:1.4rem;font-weight:700;color:#f9fafb;margin-top:2.5rem">Start local, add a fleet when you need one</h2>
   <p style="color:#9ca3af;line-height:1.6">
-    The agent is free forever and works on its own: full dashboard at localhost:7700, unlimited
+    The agent is open source, free forever and works on its own: full dashboard at localhost:7700, unlimited
     local nodes, per-model cost attribution. Pair nodes into a fleet view for chargeback by node,
     model and team, idle-waste recovery and capacity planning. Enterprise runs the entire control
     plane on your own infrastructure.
