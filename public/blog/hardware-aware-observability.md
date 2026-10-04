@@ -89,4 +89,4 @@ For multi-node fleets, the cloud dashboard at `wicklee.dev` aggregates everythin
 
 ---
 
-*Wicklee is open source under FSL-1.1-Apache-2.0 (converts to Apache 2.0 after 4 years). Source on [GitHub](https://github.com/jeffgeiser/Wicklee).*
+*The Wicklee agent and local dashboard are open source under Apache 2.0; the fleet control plane is source-available under FSL-1.1-Apache-2.0. Source on [GitHub](https://github.com/jeffgeiser/Wicklee).*

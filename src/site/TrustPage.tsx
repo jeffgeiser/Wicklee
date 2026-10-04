@@ -176,7 +176,7 @@ const TrustPage: React.FC<TrustPageProps> = ({ onNavigate }) => {
           <ul className="text-sm text-gray-400 space-y-2 list-disc pl-5 leading-relaxed">
             <li>Independent security review completed June 2026 (auth/tenancy, agent concurrency, frontend); all required findings shipped — the review write-ups live in the public repo's engineering journal.</li>
             <li>Wicklee is <strong className="text-white">not yet SOC 2 certified</strong>. The control surface that certification audits — RBAC, append-only audit, SIEM export, tenancy isolation — is built and documented above; certification is planned when a customer engagement requires it.</li>
-            <li>The codebase is source-visible on GitHub — verify any claim on this page against the code.</li>
+            <li>The agent that runs on your nodes is open source (Apache 2.0) and the control plane is source-available, both on GitHub — verify any claim on this page against the code.</li>
           </ul>
         </Section>
 

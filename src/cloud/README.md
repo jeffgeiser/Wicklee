@@ -15,3 +15,6 @@ Code outside it may import from here only behind `IS_AGENT` from
 A bare `React.lazy(() => import(...))` is kept by Rollup even when unused.
 After changing an import, run the agent build and check that no `src/cloud`
 module appears in its output.
+
+Licence: FSL-1.1-Apache-2.0 (see `LICENSE` in this folder and `LICENSING.md`
+at the repository root). The rest of `src/` is Apache 2.0.

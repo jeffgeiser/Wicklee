@@ -111,4 +111,4 @@ That's the only step that needs root. WES, the leaderboard, multi-model WES, and
 
 ---
 
-*WES scores update live from your fleet's SSE telemetry. Open source under FSL-1.1-Apache-2.0 (converts to Apache 2.0 after 4 years). See the [source code](https://github.com/jeffgeiser/Wicklee).*
+*WES scores update live from your fleet's SSE telemetry. The agent, including the WES calculation, is open source under Apache 2.0; the fleet control plane is source-available under FSL-1.1-Apache-2.0. See the [source code](https://github.com/jeffgeiser/Wicklee).*
