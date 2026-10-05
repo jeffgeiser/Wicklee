@@ -13,6 +13,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Boxes, Lock, AlertTriangle, Target } from 'lucide-react';
 import { SubscriptionTier } from '../../types';
 import { CLOUD_URL } from '../../utils/cloudUrl';
+import { isTeamOrAbove as isTeamTier } from '../../utils/tier';
 
 interface Scenario {
   profile: string;
@@ -48,7 +49,7 @@ interface Props {
 }
 
 const CapacityPlannerCard: React.FC<Props> = ({ getToken, subscriptionTier, onNavigateToPricing }) => {
-  const isTeamOrAbove = ['team', 'business', 'enterprise'].includes(subscriptionTier);
+  const isTeamOrAbove = isTeamTier(subscriptionTier);
 
   const [targetDraft, setTargetDraft] = useState('');
   const [target, setTarget] = useState<number | null>(null);   // null = server default (2× current)

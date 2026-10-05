@@ -75,6 +75,10 @@ import ChargebackCard from '../cloud/insights/ChargebackCard';
 import CapacityPlannerCard from '../cloud/insights/CapacityPlannerCard';
 import MigrationAdvisorCard from '../cloud/insights/MigrationAdvisorCard';
 import IdleWasteCard from '../cloud/insights/IdleWasteCard';
+import {
+  useForensicsHistory, EfficiencyRegressionCard, MemoryForecastCard, ColdStartCard,
+  ThermalDiversityCard, InferenceDensityCard, SovereigntyAuditCard,
+} from '../cloud/insights/ForensicsCards';
 
 import AccordionObservationCard from './insights/AccordionObservationCard';
 import FleetObservationCard from '../cloud/insights/FleetObservationCard';
@@ -1609,6 +1613,9 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   // ── Forensics unlock gate ─────────────────────────────────────────────────
 
   const isTeamOrAbove = insightsTier === 'trend' || insightsTier === 'predictive';
+  // Fetched only while the Forensics tab is open, so other tabs don't pay for it.
+  const hasCloudHistory = !isLocalHost && !!getToken;
+  const forensicsHistory = useForensicsHistory(getToken, hasCloudHistory && isTeamOrAbove && activeTab === 'forensics');
 
   // ── Cockpit settings ──────────────────────────────────────────────────────
 
@@ -2398,14 +2405,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
 
               {/* Efficiency Regression — Team tease: shows live WES */}
               {canViewInsight(8) ? (
-                // Full team card — pending build; placeholder until implemented
-                <div className="bg-gray-800 border border-gray-700 rounded-2xl p-4 flex items-center gap-3">
-                  <TrendingDown className="w-3.5 h-3.5 text-gray-600 shrink-0" />
-                  <div>
-                    <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-600">Efficiency Regression</p>
-                    <p className="text-xs text-gray-700 mt-0.5">Collecting history…</p>
-                  </div>
-                </div>
+                <EfficiencyRegressionCard history={forensicsHistory} hasCloud={hasCloudHistory} />
               ) : (
                 <InsightsTeaseCard
                   onUpgradeClick={onNavigateToPricing}
@@ -2435,14 +2435,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
 
               {/* Memory Forecast — Team tease: shows live memory pressure */}
               {canViewInsight(9) ? (
-                // Full team card — pending build
-                <div className="bg-gray-800 border border-gray-700 rounded-2xl p-4 flex items-center gap-3">
-                  <Database className="w-3.5 h-3.5 text-gray-600 shrink-0" />
-                  <div>
-                    <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-600">Memory Forecast</p>
-                    <p className="text-xs text-gray-700 mt-0.5">Collecting history…</p>
-                  </div>
-                </div>
+                <MemoryForecastCard history={forensicsHistory} hasCloud={hasCloudHistory} />
               ) : (
                 <InsightsTeaseCard
                   onUpgradeClick={onNavigateToPricing}
@@ -2483,14 +2476,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
 
               {/* Hardware Cold Start — Team tease: shows last known model state */}
               {canViewInsight(11) ? (
-                // Full team card — pending build
-                <div className="bg-gray-800 border border-gray-700 rounded-2xl p-4 flex items-center gap-3">
-                  <Activity className="w-3.5 h-3.5 text-gray-600 shrink-0" />
-                  <div>
-                    <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-600">Hardware Cold Start</p>
-                    <p className="text-xs text-gray-700 mt-0.5">Collecting history…</p>
-                  </div>
-                </div>
+                <ColdStartCard history={forensicsHistory} hasCloud={hasCloudHistory} />
               ) : (
                 <InsightsTeaseCard
                   onUpgradeClick={onNavigateToPricing}
@@ -2523,14 +2509,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
 
               {/* Fleet Thermal Diversity — Team tease: shows live state counts */}
               {canViewInsight(12) ? (
-                // Full team card — pending build
-                <div className="bg-gray-800 border border-gray-700 rounded-2xl p-4 flex items-center gap-3">
-                  <Globe className="w-3.5 h-3.5 text-gray-600 shrink-0" />
-                  <div>
-                    <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-600">Fleet Thermal Diversity</p>
-                    <p className="text-xs text-gray-700 mt-0.5">Collecting history…</p>
-                  </div>
-                </div>
+                <ThermalDiversityCard history={forensicsHistory} hasCloud={hasCloudHistory} />
               ) : (
                 <InsightsTeaseCard
                   onUpgradeClick={onNavigateToPricing}
@@ -2574,23 +2553,31 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 />
               )}
 
-              {/* Inference Density (Historical) — Team locked */}
-              <InsightsLockedCard
-                onUpgradeClick={onNavigateToPricing}
-                title="Inference Density (Historical)"
-                icon={<Layers className="w-3.5 h-3.5" />}
-                description="Historical playback of the inference density hive plot. Unlock peak-hour analysis and utilisation trends."
-                tierRequired="team"
-              />
+              {/* Inference Density (Historical) — Team */}
+              {canViewInsight(13) ? (
+                <InferenceDensityCard history={forensicsHistory} hasCloud={hasCloudHistory} />
+              ) : (
+                <InsightsLockedCard
+                  onUpgradeClick={onNavigateToPricing}
+                  title="Inference Density (Historical)"
+                  icon={<Layers className="w-3.5 h-3.5" />}
+                  description="Historical playback of the inference density hive plot. Unlock peak-hour analysis and utilisation trends."
+                  tierRequired="team"
+                />
+              )}
 
-              {/* Sovereignty Audit — Enterprise locked */}
-              <InsightsLockedCard
-                onUpgradeClick={onNavigateToPricing}
-                title="Sovereignty Audit"
-                icon={<Shield className="w-3.5 h-3.5" />}
-                description="Cryptographically signed compliance PDF. Audit trail of every telemetry destination, pairing event, and outbound connection."
-                tierRequired="enterprise"
-              />
+              {/* Sovereignty Audit — Enterprise */}
+              {canViewInsight(14) ? (
+                <SovereigntyAuditCard />
+              ) : (
+                <InsightsLockedCard
+                  onUpgradeClick={onNavigateToPricing}
+                  title="Sovereignty Audit"
+                  icon={<Shield className="w-3.5 h-3.5" />}
+                  description="Cryptographically signed compliance PDF. Audit trail of every telemetry destination, pairing event, and outbound connection."
+                  tierRequired="enterprise"
+                />
+              )}
 
             </div>
           )}

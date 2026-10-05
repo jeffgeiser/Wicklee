@@ -57,5 +57,13 @@ smoke-tests a running local agent (`bash scripts/qa_agent.sh`).*
       returns the 402 pointing at the 25-node plan.
 - [ ] Agent release page lists `SHA256SUMS` (agents refuse to auto-update
       without it).
+- [ ] Insights → Forensics on **Team · 10** and **Team · 25**: Efficiency
+      Regression, Memory Forecast, Hardware Cold Start, Fleet Thermal Diversity
+      and Inference Density show data (or a specific "needs more history"
+      message), never a Team lock; Sovereignty Audit shows the Enterprise lock.
+      On Community they show the teaser/locked cards.
+- [ ] Insights cloud cards (Idle Waste, Chargeback, Capacity Planner,
+      Migration Advisor) and SLO settings are unlocked on **Team · 10**, not only
+      Team · 25.
 - [ ] Prometheus scrape of `https://wicklee.dev/metrics` with a Team key is
       `up`; the Grafana dashboard's panels have data.

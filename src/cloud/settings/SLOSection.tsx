@@ -16,6 +16,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Target, Plus, Trash2, Lock, AlertTriangle } from 'lucide-react';
 import { CLOUD_URL } from '../../utils/cloudUrl';
+import { isTeamOrAbove as isTeamTier } from '../../utils/tier';
 
 interface SloStatus {
   id:             string;
@@ -61,7 +62,7 @@ function burnColor(burn: number): string {
 }
 
 const SLOSection: React.FC<Props> = ({ subscriptionTier, getToken, nodes, onNavigateToPricing }) => {
-  const isTeamOrAbove = ['team', 'business', 'enterprise'].includes(subscriptionTier);
+  const isTeamOrAbove = isTeamTier(subscriptionTier);
 
   const [slos,    setSlos]    = useState<SloStatus[]>([]);
   const [loading, setLoading] = useState(false);

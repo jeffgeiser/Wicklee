@@ -15,6 +15,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Webhook, Plus, Trash2, Check, AlertTriangle, Lock, Send, Copy } from 'lucide-react';
 import { CLOUD_URL } from '../../utils/cloudUrl';
+import { isProOrAbove as isProTier } from '../../utils/tier';
 
 interface WebhookSub {
   id:            string;
@@ -50,7 +51,7 @@ const EVENT_TYPES: { value: string; label: string; needsThreshold: boolean }[] =
 ];
 
 const WebhooksSection: React.FC<Props> = ({ subscriptionTier, getToken, nodes, onNavigateToPricing }) => {
-  const isProOrAbove = ['pro', 'team', 'business', 'enterprise'].includes(subscriptionTier);
+  const isProOrAbove = isProTier(subscriptionTier);
 
   const [subs,    setSubs]    = useState<WebhookSub[]>([]);
   const [loading, setLoading] = useState(false);
