@@ -15,6 +15,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Thermometer, AlertTriangle, Lock, RefreshCw } from 'lucide-react';
 import { SubscriptionTier } from '../../types';
 import { CLOUD_URL } from '../../utils/cloudUrl';
+import { isProOrAbove as isProTier } from '../../utils/tier';
 
 interface ThermalBudgetResponse {
   node_id:               string;
@@ -60,7 +61,7 @@ const ThermalBudgetCard: React.FC<ThermalBudgetCardProps> = ({
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState<string | null>(null);
 
-  const isProOrAbove = ['pro', 'team', 'business', 'enterprise'].includes(subscriptionTier);
+  const isProOrAbove = isProTier(subscriptionTier);
 
   const fetchBudget = useCallback(async () => {
     if (!selectedNodeId || !isProOrAbove) return;

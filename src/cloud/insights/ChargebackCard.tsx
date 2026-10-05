@@ -13,6 +13,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { DollarSign, Download, Lock } from 'lucide-react';
 import { CLOUD_URL } from '../../utils/cloudUrl';
+import { isTeamOrAbove as isTeamTier } from '../../utils/tier';
 
 interface ChargebackRow {
   key:           string;
@@ -50,7 +51,7 @@ const GROUPINGS: { value: Grouping; label: string; csv: string }[] = [
 const fmtUsd = (v: number) => v >= 100 ? `$${v.toFixed(0)}` : v >= 1 ? `$${v.toFixed(2)}` : `$${v.toFixed(3)}`;
 
 const ChargebackCard: React.FC<Props> = ({ getToken, subscriptionTier, onNavigateToPricing }) => {
-  const isTeamOrAbove = ['team', 'business', 'enterprise'].includes(subscriptionTier);
+  const isTeamOrAbove = isTeamTier(subscriptionTier);
 
   const [days,     setDays]     = useState(30);
   const [grouping, setGrouping] = useState<Grouping>('by_tag');

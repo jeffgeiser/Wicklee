@@ -11,6 +11,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { ArrowRightLeft, Lock, AlertTriangle, MoveRight } from 'lucide-react';
 import { SubscriptionTier } from '../../types';
 import { CLOUD_URL } from '../../utils/cloudUrl';
+import { isTeamOrAbove as isTeamTier } from '../../utils/tier';
 
 interface Recommendation {
   model: string;
@@ -34,7 +35,7 @@ interface Props {
 }
 
 const MigrationAdvisorCard: React.FC<Props> = ({ getToken, subscriptionTier, onNavigateToPricing, onViewModels }) => {
-  const isTeamOrAbove = ['team', 'business', 'enterprise'].includes(subscriptionTier);
+  const isTeamOrAbove = isTeamTier(subscriptionTier);
   const [recs, setRecs] = useState<Recommendation[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 

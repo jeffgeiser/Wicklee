@@ -12,6 +12,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { PowerOff, Lock, AlertTriangle, Mail } from 'lucide-react';
 import { SubscriptionTier } from '../../types';
 import { CLOUD_URL } from '../../utils/cloudUrl';
+import { isTeamOrAbove as isTeamTier } from '../../utils/tier';
 
 interface IdleAction {
   kind: 'unload_idle_model' | 'consolidate';
@@ -47,7 +48,7 @@ interface Props {
 const WINDOWS = [7, 30, 90] as const;
 
 const IdleWasteCard: React.FC<Props> = ({ getToken, subscriptionTier, onNavigateToPricing }) => {
-  const isTeamOrAbove = ['team', 'business', 'enterprise'].includes(subscriptionTier);
+  const isTeamOrAbove = isTeamTier(subscriptionTier);
 
   const [days, setDays] = useState<number>(30);
   const [report, setReport] = useState<IdleWasteReport | null>(null);
