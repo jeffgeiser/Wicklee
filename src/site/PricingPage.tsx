@@ -125,6 +125,7 @@ const TIERS: TierDef[] = [
       'Cloud fleet view — up to 3 nodes',
       '24-hour rolling metric history',
       'WES v2 + tok/W diagnostics',
+      'All 18 observation patterns on the local dashboard; 10 in the cloud fleet view',
       'Local API + MCP server (localhost, no auth)',
       'Fleet API (/api/v1/*) — core endpoints, 60 req/min',
       'Open-source agent and local dashboard (Apache 2.0)',
@@ -148,6 +149,7 @@ const TIERS: TierDef[] = [
     features: [
       'Everything in Community',
       'Up to 25 nodes in cloud fleet view',
+      'All 20 observation patterns in the fleet view, including long-term WES drift',
       '90-day metric history',
       'Fleet API at 600 req/min, plus the analytics endpoints',
       'Cost & chargeback reports — $/1M tokens by node, model and tag',

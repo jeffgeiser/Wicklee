@@ -136,12 +136,6 @@ const PairingModal: React.FC<PairingModalProps> = ({ isOpen, onClose, pairingInf
                 {' '}→ Fleet → Add Node
               </p>
 
-              {/* QR placeholder */}
-              <div className="h-28 bg-zinc-900 border border-zinc-800 rounded-xl flex flex-col items-center justify-center gap-1">
-                <div className="w-12 h-12 bg-zinc-800 rounded-lg" />
-                <span className="text-[10px] text-gray-600">QR Code — Coming Soon</span>
-              </div>
-
               <div className="flex gap-3">
                 <button
                   onClick={onGenerate}
