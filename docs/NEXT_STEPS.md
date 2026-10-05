@@ -1,6 +1,6 @@
 # Wicklee — Founder Next Steps
 
-*Open items that need a human (dashboards, accounts, decisions). Last updated September 28, 2026.
+*Open items that need a human (dashboards, accounts, decisions). Last updated October 5, 2026.
 Engineering history lives in `docs/progress.md`; product plan in `docs/ROADMAP.md`.*
 
 ## Done recently
@@ -10,6 +10,14 @@ Engineering history lives in `docs/progress.md`; product plan in `docs/ROADMAP.m
       Clerk off the critical path. `?perf=1` on any page shows a load report.
 - [x] Cloudflare Web Analytics already running (real-visitor Core Web Vitals under
       Cloudflare → Analytics & Logs → Web Analytics).
+- [x] Forensics cards built and Team · 10 gating fixed (PR #84); misleading dashboard UI fixed
+      (PR #85); marketing-site pattern counts and placeholders fixed (PR #86). See `docs/progress.md`.
+
+## 0. Check today's fixes on the live site
+- [ ] Insights → Forensics on your Team account: five Team cards show data or a specific
+      "needs more history" note; Sovereignty Audit shows the Enterprise lock.
+- [ ] If your Clerk org has a non-admin member, have them sign in once: no Team Management tab.
+- [ ] Landing, Pricing and Docs read correctly (pattern counts, Team badges, Illustrative tag).
 
 ## 1. Paddle — sandbox first, then live ✅ done (September 29, 2026)
 

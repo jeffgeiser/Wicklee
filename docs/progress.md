@@ -6,6 +6,35 @@
 
 ---
 
+## October 5, 2026 — Forensics cards, Team gating, and a placeholder sweep (PRs #84–#86)
+
+A Team account on Insights → Forensics saw "Collecting history…" on four cards and "Team required" on a fifth. Tier resolution (`usePermissions` → `canViewInsight`) was correct; the cards themselves were unbuilt or ungated. Fixing that led to a sweep of the whole site for placeholder or misleading UI.
+
+- **#84 — Forensics + Team · 10 gating.**
+  - The Team versions of Efficiency Regression, Memory Forecast, Hardware Cold Start and Fleet Thermal Diversity were never built; the placeholder was hardcoded. They are now real cards, along with Inference Density (Historical):
+    - Efficiency Regression: WES over the last 24 h vs. the prior 6 days (medians).
+    - Memory Forecast: 2 h memory-pressure trend with an ETA to 95%.
+    - Hardware Cold Start: count of TTFT spikes (likely model loads).
+    - Fleet Thermal Diversity: correlated-thermal cascade risk across nodes.
+    - Inference Density: fleet tok/s by hour of day.
+  - Analysis lives in `src/utils/forensics.ts` (tested). Cards are in `src/cloud/insights/ForensicsCards.tsx`. Data comes from the existing `wes-history` 7d and `metrics-history` 24h/7d endpoints, fetched only while the tab is open and refreshed every 5 min. No backend change.
+  - Inference Density and Sovereignty Audit were locked unconditionally; they are now gated on `canViewInsight(13|14)`. Enterprise gets a "request your audit report" card, since there is no self-serve generator.
+  - Idle Waste, Chargeback, Capacity Planner, Migration Advisor, SLO, Thermal Budget and Webhooks checked hardcoded tier lists that left out `team_10`, so **Team · 10 accounts saw them locked**. All now use `utils/tier`.
+- **#85 — misleading dashboard UI.**
+  - Keep Warm in the cloud fleet view POSTed to the *viewer's* `localhost:11434`, swallowed the failure and showed "Model kept warm ✓". Fleet cards now explain how to keep a model warm instead; the local dashboard checks the response and reports failure.
+  - Upgrade copy named the retired Pro plan (7D range locks, history-chart hints, Thermal Budget, WES Leaderboard); it now names Team. Grandfathered Pro access is unchanged.
+  - Every signed-in cloud user was hardcoded as Owner. The role now comes from the Clerk org membership (`src/utils/role.ts`): `org:admin` → Owner, `org:viewer` → Viewer, other members → Collaborator, solo accounts → Owner. Members no longer see Team Management.
+  - The Overview chart drew `Math.random()` data behind "Collecting data…"; it now stays empty until history arrives.
+  - OTel export Save reports success or the server's error. The Traces mini-chart ranges derive from `RANGE_CONFIG`. The SSO, Audit Log and Model Governance gates and `isPro` use `utils/tier` (`isPro` used to fail open on an unknown tier); `hasPrometheusExport` corrected to Team.
+- **#86 — marketing site.**
+  - Pattern counts now match the code: 18 agent patterns, all free on the local dashboard (the agent doesn't gate by tier); 20 in the cloud fleet view, where Community sees 10 (the 9 Community agent patterns plus fleet load imbalance) and Team sees all 20.
+  - The landing "18 agent patterns" grid had the cloud-only Fleet Load Imbalance instead of the agent's Memory-Bandwidth Ceiling; swapped. Pattern badges read Team, not Pro. The Docs "9 / 11" split is corrected and the Pricing cards state coverage.
+  - The Model Discovery mock is labelled Illustrative. The pairing-modal "QR Code — Coming Soon" box and the blog's "subscribe to be notified" promise are gone.
+- **Checked and clean:** every dashboard fetch has a matching backend route; no panel waits on a field the backend never sends; prices, rate limits and node caps agree across app, pricing page and backend.
+- **Not verified live:** the marketing pages need a real Clerk key to render, and the role mapping hasn't been exercised with a non-admin org member. Both are on the QA checklist.
+
+---
+
 ## September 28, 2026 — Security + bug-fix sweep from the code review (PRs #61–#64)
 
 Worked through Priorities 1–2 of `docs/CODE_REVIEW.md` before Paddle goes live. S1–S9 and B1–B10 are closed; Priority 3 (performance) is in progress.

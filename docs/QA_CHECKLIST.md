@@ -65,5 +65,17 @@ smoke-tests a running local agent (`bash scripts/qa_agent.sh`).*
 - [ ] Insights cloud cards (Idle Waste, Chargeback, Capacity Planner,
       Migration Advisor) and SLO settings are unlocked on **Team · 10**, not only
       Team · 25.
+- [ ] Org roles: a non-admin member of a Clerk organization does **not** see
+      the Team Management tab; an org admin and a solo account do.
+- [ ] Insights → Triage in the cloud fleet view: a Model Eviction card shows
+      no Keep Warm button (only the local dashboard has one, and it reports
+      failure when Ollama is unreachable).
+- [ ] Upgrade prompts and badges name Team or Enterprise, never Pro or
+      Business (7D range lock, history charts, Thermal Budget, landing
+      pattern grid).
+- [ ] Landing page: Local card says 18 patterns; the pattern grid has 18 tiles
+      (Memory-Bandwidth Ceiling present, Fleet Load Imbalance absent); the
+      Model Discovery panel is tagged Illustrative. Docs and Pricing give the
+      same counts (18 local; 20 in the fleet view, Community 10).
 - [ ] Prometheus scrape of `https://wicklee.dev/metrics` with a Team key is
       `up`; the Grafana dashboard's panels have data.
