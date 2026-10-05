@@ -13,6 +13,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { ShieldCheck, Lock, Plus, Trash2, AlertTriangle } from 'lucide-react';
 import { CLOUD_URL } from '../../utils/cloudUrl';
+import { isBusinessOrAbove as isBusinessTier } from '../../utils/tier';
 
 interface Props {
   subscriptionTier: string;
@@ -37,7 +38,7 @@ interface Violation {
 }
 
 const ModelGovernanceSection: React.FC<Props> = ({ subscriptionTier, getToken, onNavigateToPricing }) => {
-  const isEnterprise = ['business', 'enterprise'].includes(subscriptionTier);
+  const isEnterprise = isBusinessTier(subscriptionTier);
 
   const [entries, setEntries]       = useState<PolicyEntry[]>([]);
   const [violations, setViolations] = useState<Violation[]>([]);

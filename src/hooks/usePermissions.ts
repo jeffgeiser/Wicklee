@@ -1,5 +1,5 @@
 import { User, UserRole, SubscriptionTier, InsightsTier } from '../types';
-import { isTeamOrAbove, isBusinessOrAbove } from '../utils/tier';
+import { isProOrAbove, isTeamOrAbove, isBusinessOrAbove } from '../utils/tier';
 
 // ── Tier mappings ──────────────────────────────────────────────────────────────
 
@@ -87,12 +87,12 @@ export const usePermissions = (user: User | null) => {
     // canGoSovereign: Enterprise-only. Airgapped mode — no outbound telemetry,
     //   no cloud pairing. On-prem Docker/Helm deployment path.
     canGoSovereign: subscriptionTier === 'enterprise',
-    // hasPrometheusExport: Enterprise-only. Exposes /metrics endpoint in
-    //   Prometheus exposition format for operator scraping into existing infra.
-    hasPrometheusExport: subscriptionTier === 'enterprise',
+    // hasPrometheusExport: Team and above. The cloud's /metrics endpoint
+    //   (Prometheus exposition format) accepts Team-tier API keys.
+    hasPrometheusExport: isTeamOrAbove(subscriptionTier),
 
     // ── Convenience booleans ──────────────────────────────────────────────
-    isPro:        subscriptionTier !== 'community',
+    isPro:        isProOrAbove(subscriptionTier),
     isTeamOrAbove:  isTeamOrAbove(subscriptionTier),
     isBusinessOrAbove: isBusinessOrAbove(subscriptionTier),
     isEnterprise: subscriptionTier === 'enterprise',

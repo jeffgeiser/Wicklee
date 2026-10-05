@@ -31,6 +31,8 @@ import { CLOUD_URL } from '../utils/cloudUrl';
 import { useFleetStream } from '../contexts/FleetStreamContext';
 import { useEventHistory } from '../hooks/useEventHistory';
 import { fmtAgo } from '../utils/time';
+import { tierRank } from '../utils/tier';
+import { RANGE_CONFIG } from '../cloud/utils/historyRange';
 
 import { IS_LOCAL_HOST as isLocalHost, IS_AGENT } from '../utils/buildTarget';
 
@@ -1648,14 +1650,12 @@ const FLEET_CHART_CONFIG: { key: keyof FleetMetricPoint; label: string; unit: st
   { key: 'wes_score',  label: 'WES Score',     unit: '',      color: '#14b8a6', gradId: 'fmcWes'  },
 ];
 
-const RANGE_LIMITS: Record<SubscriptionTier, FleetMetricRange[]> = {
-  community:  ['1h', '24h'],
-  pro:        ['1h', '24h', '7d'],
-  team_10:    ['1h', '24h', '7d', '30d'],
-  team:       ['1h', '24h', '7d', '30d'],
-  business:   ['1h', '24h', '7d', '30d'],
-  enterprise: ['1h', '24h', '7d', '30d'],
-};
+// Ranges this mini chart offers, gated by the same RANGE_CONFIG tier table as
+// the main history charts (and the backend's range_upgrade_plan), instead of a
+// separate per-tier list that could drift.
+const FLEET_METRIC_RANGES: FleetMetricRange[] = ['1h', '24h', '7d', '30d'];
+const allowedFleetRanges = (tier: SubscriptionTier): FleetMetricRange[] =>
+  FLEET_METRIC_RANGES.filter(r => tierRank(tier) >= tierRank(RANGE_CONFIG[r].minTier));
 
 const FleetMetricsMini: React.FC<{
   nodes: NodeAgent[];
@@ -1670,7 +1670,7 @@ const FleetMetricsMini: React.FC<{
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const allowedRanges = RANGE_LIMITS[subscriptionTier] ?? RANGE_LIMITS.community;
+  const allowedRanges = allowedFleetRanges(subscriptionTier);
 
   const fetchData = useCallback(async (r: FleetMetricRange) => {
     setLoading(true);

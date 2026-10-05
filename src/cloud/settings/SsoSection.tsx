@@ -24,6 +24,7 @@ import React, { useEffect, useState } from 'react';
 import { KeyRound, Lock, ExternalLink } from 'lucide-react';
 import { CLOUD_URL } from '../../utils/cloudUrl';
 import { CONTACT_EMAIL, mailto } from '../../site/utils/contact';
+import { isBusinessOrAbove as isBusinessTier } from '../../utils/tier';
 
 interface Props {
   subscriptionTier: string;
@@ -33,7 +34,7 @@ interface Props {
 const SSO_GUIDE = 'https://github.com/jeffgeiser/Wicklee/blob/main/docs/SSO.md';
 
 const SsoSection: React.FC<Props> = ({ subscriptionTier, onNavigateToPricing }) => {
-  const isEnterprise = ['business', 'enterprise'].includes(subscriptionTier);
+  const isEnterprise = isBusinessTier(subscriptionTier);
 
   // /health reports self_hosted only on self-hosted deployments; it is
   // unauthenticated and returns no platform stats.

@@ -31,6 +31,9 @@ export const RANGES: TimeRange[] = ['1h', '24h', '7d', '30d', '90d', '1y'];
 /** "Requires <tier>" label for a locked range; empty for Community ranges. */
 export function tierUpgradeLabel(minTier: SubscriptionTier): string {
   if (minTier === 'community') return '';
-  // Business is retired — a locked Business-level range sells Enterprise.
+  // Pro and Business are retired (kept only for grandfathered accounts), so a
+  // locked range sells the plan on /pricing: Pro-level → Team, Business-level
+  // → Enterprise.
+  if (minTier === 'pro') return tierLabel('team');
   return tierLabel(minTier === 'business' ? 'enterprise' : minTier);
 }

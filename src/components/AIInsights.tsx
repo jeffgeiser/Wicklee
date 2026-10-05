@@ -2036,8 +2036,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                   <div className="space-y-3">
                     {fleetEvictionNodes.map(n => (
                       <div key={n.node_id} id={`insight-model-eviction-${n.node_id}`}>
-                        <ModelEvictionCard node={n} idleSinceMs={nodeIdleStartMsRef.current[n.node_id] ?? null} showNodeHeader canKeepWarm
-                          onKeepWarm={() => emitFleetEvent({ id: `${Date.now()}-keepwarm`, ts: Date.now(), type: 'keep_warm_taken', nodeId: n.node_id, hostname: n.hostname ?? n.node_id, detail: n.ollama_active_model ?? 'active model' })} />
+                        <ModelEvictionCard node={n} idleSinceMs={nodeIdleStartMsRef.current[n.node_id] ?? null} showNodeHeader canKeepWarm={false} />
                       </div>
                     ))}
                   </div>
@@ -2374,8 +2373,8 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                     onUpgradeClick={onNavigateToPricing}
                     title="WES Leaderboard"
                     icon={<BarChart2 className="w-3.5 h-3.5" />}
-                    tierRequired="pro"
-                    upgradeCopy="Unlock sparklines & peer comparison on Pro →"
+                    tierRequired="team"
+                    upgradeCopy="Unlock sparklines & peer comparison on Team →"
                   >
                     <WesLeaderboardLite nodes={effectiveNodes} />
                   </InsightsLiteCard>

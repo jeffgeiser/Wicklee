@@ -10,6 +10,8 @@ import { CLOUD_URL } from './utils/cloudUrl';
 import { hasClerkSessionHint } from './cloud/utils/clerkHint';
 import { perfMark } from './utils/perfMark';
 import { IS_AGENT, IS_DEMO, IS_LOCAL_HOST as isLocalHost, SITE_URL } from './utils/buildTarget';
+import { roleFromOrgMembership } from './utils/role';
+import { isProOrAbove } from './utils/tier';
 import { loadPaddle } from './cloud/utils/loadPaddle';
 import Sidebar from './components/Sidebar';
 import MobileTabBar from './components/MobileTabBar';
@@ -175,9 +177,11 @@ interface AppCoreProps {
   } | null;
   /** Clerk organization ID when user has an active org (Team+ shared fleet). Null for solo users. */
   orgId?: string | null;
+  /** Clerk membership role in the active org (e.g. 'org:admin'); null for solo users. */
+  orgRole?: string | null;
 }
 
-const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user, orgId = null }) => {
+const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user, orgId = null, orgRole = null }) => {
 
   const [currentPath, setCurrentPath] = useState(() => window.location.pathname);
   const [activeTab, setActiveTab] = useState<DashboardTab>(DashboardTab.OVERVIEW);
@@ -201,7 +205,7 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
   // Build currentUser from Clerk user data (or LOCAL_USER for localhost).
   // tier is read from Clerk publicMetadata.tier — set this in the Clerk
   // Dashboard (Users → select user → Metadata → Public) to gate features.
-  // Valid values: "community" | "pro" | "team" | "enterprise"
+  // Valid values: the SubscriptionTier union (community | pro | team_10 | team | business | enterprise).
   const clerkTier = (user?.publicMetadata?.tier as SubscriptionTier | undefined) ?? 'community';
   const currentUser: UserType = isLocalHost
     ? LOCAL_USER
@@ -209,8 +213,8 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
         id: user?.id ?? 'local',
         email: user?.primaryEmailAddress?.emailAddress ?? '',
         fullName: user?.fullName ?? '',
-        role: 'Owner',
-        isPro: clerkTier !== 'community',
+        role: roleFromOrgMembership(orgId, orgRole),
+        isPro: isProOrAbove(clerkTier),
         tier: clerkTier,
       };
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);

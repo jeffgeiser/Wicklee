@@ -1809,6 +1809,9 @@ const OtelExportSection: React.FC<{
   const [interval, setInterval_] = useState(30);
   const [saving, setSaving] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  // Result of the last save — previously the PUT's status was never checked,
+  // so a rejected save looked identical to a successful one.
+  const [saveResult, setSaveResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -1832,15 +1835,28 @@ const OtelExportSection: React.FC<{
 
   const save = async () => {
     setSaving(true);
+    setSaveResult(null);
     const token = await getToken();
-    if (!token) { setSaving(false); return; }
+    if (!token) {
+      setSaving(false);
+      setSaveResult({ ok: false, msg: 'Not signed in.' });
+      return;
+    }
     try {
-      await fetch(`${CLOUD_URL}/api/otel/config`, {
+      const resp = await fetch(`${CLOUD_URL}/api/otel/config`, {
         method: 'PUT',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled, endpoint_url: endpoint, auth_headers: authHeaders, export_interval_s: interval }),
       });
-    } catch { /* ignore */ }
+      if (resp.ok) {
+        setSaveResult({ ok: true, msg: 'Saved.' });
+      } else {
+        const body = await resp.json().catch(() => ({}));
+        setSaveResult({ ok: false, msg: body.error ?? `Save failed (HTTP ${resp.status}).` });
+      }
+    } catch {
+      setSaveResult({ ok: false, msg: 'Save failed — network error.' });
+    }
     setSaving(false);
   };
 
@@ -1910,6 +1926,9 @@ const OtelExportSection: React.FC<{
         >
           {saving ? 'Saving…' : 'Save OTel Configuration'}
         </button>
+        {saveResult && (
+          <p className={`text-xs ${saveResult.ok ? 'text-green-400' : 'text-red-400'}`}>{saveResult.msg}</p>
+        )}
 
         <div className="text-[10px] text-gray-600 font-mono">
           <p>8 gauges per node: gpu_utilization · power_watts · tokens_per_second · wes_score</p>
