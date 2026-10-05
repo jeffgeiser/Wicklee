@@ -177,7 +177,7 @@ const BlogListing: React.FC<BlogListingProps> = ({ onNavigate, onSignIn, onSignU
           </div>
         ) : posts.length === 0 ? (
           <div className="text-center py-20 text-gray-500">
-            First post coming soon — subscribe to be notified.
+            No posts published yet.
           </div>
         ) : (
           <div className="space-y-6">

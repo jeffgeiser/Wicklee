@@ -30,12 +30,14 @@ interface ObsTile {
   title: string;
   trigger: string;
   scope: 'Cloud' | null;      // only "Cloud" gets a badge; null = available everywhere
-  tier: 'community' | 'pro';  // Pro gets a small badge
+  // Gate in the cloud fleet view (cloud allowed_patterns_for_tier). Locally the
+  // agent runs all 18 for free.
+  tier: 'community' | 'team';  // Team gets a small badge
   icon: React.ReactElement;
 }
 
 const allPatterns: ObsTile[] = [
-  // Community patterns (9)
+  // Community in the fleet view (9)
   { id: 'A', title: 'Thermal Performance Drain',   trigger: 'Your GPU is thermally throttling, silently reducing throughput below its rated speed.',                                    scope: null,    tier: 'community', icon: <Thermometer className="w-4 h-4 text-amber-400" />  },
   { id: 'B', title: 'Phantom Load',                trigger: 'A model is loaded in memory and drawing power, but nobody is using it.',                                                    scope: null,    tier: 'community', icon: <Zap         className="w-4 h-4 text-violet-400" /> },
   { id: 'C', title: 'WES Velocity Drop',           trigger: 'Efficiency score is declining steadily before thermal state has changed — an early warning.',                                scope: null,    tier: 'community', icon: <TrendingDown className="w-4 h-4 text-indigo-400" /> },
@@ -43,18 +45,18 @@ const allPatterns: ObsTile[] = [
   { id: 'H', title: 'Power Jitter',                trigger: 'Power draw is swinging wildly during inference — unstable delivery or erratic batch scheduling.',                            scope: null,    tier: 'community', icon: <Waves       className="w-4 h-4 text-orange-400" /> },
   { id: 'J', title: 'Swap I/O Pressure',           trigger: 'Model layers are spilling to disk during inference, causing latency spikes.',                                               scope: null,    tier: 'community', icon: <HardDrive   className="w-4 h-4 text-rose-400" />   },
   { id: 'K', title: 'Clock Drift',                 trigger: 'GPU clocks are throttled during inference but thermals are normal — a power cap or driver limit.',                           scope: null,    tier: 'community', icon: <Gauge       className="w-4 h-4 text-lime-400" />   },
-  { id: 'N', title: 'NVIDIA Thermal Redline',      trigger: 'GPU temperature is dangerously high — the driver will aggressively throttle clocks.',                                       scope: null,    tier: 'pro', icon: <Flame       className="w-4 h-4 text-red-400" />    },
+  { id: 'N', title: 'NVIDIA Thermal Redline',      trigger: 'GPU temperature is dangerously high — the driver will aggressively throttle clocks.',                                       scope: null,    tier: 'team', icon: <Flame       className="w-4 h-4 text-red-400" />    },
   { id: 'O', title: 'VRAM Overcommit',             trigger: 'The loaded model consumes nearly all available memory — no headroom for KV cache or concurrency.',                          scope: null,    tier: 'community', icon: <MemoryStick className="w-4 h-4 text-emerald-400" /> },
-  // Pro patterns (9)
-  { id: 'D', title: 'Power-GPU Decoupling',        trigger: 'High power draw but the GPU is barely active — inference is running on CPU instead of GPU.',                                 scope: null,    tier: 'pro', icon: <Cpu         className="w-4 h-4 text-cyan-400" />    },
-  { id: 'E', title: 'Fleet Load Imbalance',        trigger: 'This node is stressed while a healthier fleet peer has spare capacity.',                                                     scope: 'Cloud', tier: 'pro', icon: <BarChart2   className="w-4 h-4 text-blue-400" />    },
-  { id: 'G', title: 'Bandwidth Saturation',        trigger: 'VRAM is nearly full but the GPU compute is barely used — a memory bandwidth bottleneck, not compute.',                       scope: null,    tier: 'pro', icon: <Gauge       className="w-4 h-4 text-emerald-400" /> },
-  { id: 'I', title: 'Efficiency Penalty Drag',     trigger: 'Significant efficiency loss with normal thermals and no memory pressure — a hidden context or batch inefficiency.',           scope: null,    tier: 'pro', icon: <TrendingDown className="w-4 h-4 text-yellow-400" /> },
+  // Team in the fleet view (9)
+  { id: 'D', title: 'Power-GPU Decoupling',        trigger: 'High power draw but the GPU is barely active — inference is running on CPU instead of GPU.',                                 scope: null,    tier: 'team', icon: <Cpu         className="w-4 h-4 text-cyan-400" />    },
+  { id: 'G', title: 'Bandwidth Saturation',        trigger: 'VRAM is nearly full but the GPU compute is barely used — a memory bandwidth bottleneck, not compute.',                       scope: null,    tier: 'team', icon: <Gauge       className="w-4 h-4 text-emerald-400" /> },
+  { id: 'I', title: 'Efficiency Penalty Drag',     trigger: 'Significant efficiency loss with normal thermals and no memory pressure — a hidden context or batch inefficiency.',           scope: null,    tier: 'team', icon: <TrendingDown className="w-4 h-4 text-yellow-400" /> },
   { id: 'L', title: 'PCIe Lane Degradation',       trigger: 'GPU is running in a reduced PCIe lane width, limiting data transfer bandwidth.',                                            scope: null,    tier: 'community', icon: <Server      className="w-4 h-4 text-orange-400" /> },
-  { id: 'M', title: 'vLLM KV Cache Saturation',    trigger: 'The vLLM KV cache is nearly full — new sequences will queue or get rejected.',                                              scope: null,    tier: 'pro', icon: <Database    className="w-4 h-4 text-pink-400" />   },
-  { id: 'P', title: 'TTFT Regression',             trigger: 'Time to first token has spiked above 2x the recent baseline — queue contention or model swap.',                             scope: null,    tier: 'pro', icon: <Activity    className="w-4 h-4 text-pink-400" />   },
-  { id: 'Q', title: 'Latency Spike',               trigger: 'End-to-end request latency exceeds 2 seconds sustained — inference pipeline bottleneck.',                                    scope: null,    tier: 'pro', icon: <Thermometer className="w-4 h-4 text-red-300" />    },
-  { id: 'R', title: 'vLLM Queue Saturation',       trigger: 'Requests are queuing faster than the engine can process — scale horizontally or reroute.',                                   scope: null,    tier: 'pro', icon: <Gauge       className="w-4 h-4 text-violet-300" /> },
+  { id: 'M', title: 'vLLM KV Cache Saturation',    trigger: 'The vLLM KV cache is nearly full — new sequences will queue or get rejected.',                                              scope: null,    tier: 'team', icon: <Database    className="w-4 h-4 text-pink-400" />   },
+  { id: 'P', title: 'TTFT Regression',             trigger: 'Time to first token has spiked above 2x the recent baseline — queue contention or model swap.',                             scope: null,    tier: 'team', icon: <Activity    className="w-4 h-4 text-pink-400" />   },
+  { id: 'Q', title: 'Latency Spike',               trigger: 'End-to-end request latency exceeds 2 seconds sustained — inference pipeline bottleneck.',                                    scope: null,    tier: 'team', icon: <Thermometer className="w-4 h-4 text-red-300" />    },
+  { id: 'S', title: 'Memory-Bandwidth Ceiling',    trigger: 'Throughput is pinned near the most this chip\'s memory bandwidth allows for the loaded model — more compute won\'t help.',    scope: null,    tier: 'team', icon: <Gauge       className="w-4 h-4 text-sky-400" />    },
+  { id: 'R', title: 'vLLM Queue Saturation',       trigger: 'Requests are queuing faster than the engine can process — scale horizontally or reroute.',                                   scope: null,    tier: 'team', icon: <Gauge       className="w-4 h-4 text-violet-300" /> },
 ];
 
 const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigate }) => {
@@ -250,7 +252,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
               price: 'Free forever',
               accent: 'text-gray-300',
               border: 'border-gray-700',
-              desc: 'One binary per machine. Full dashboard at localhost:7700, unlimited local nodes, per-model cost attribution, 9 observation patterns.',
+              desc: 'One binary per machine. Full dashboard at localhost:7700, unlimited local nodes, per-model cost attribution, all 18 agent observation patterns.',
               foot: 'Nothing leaves the machine.',
             },
             {
@@ -528,9 +530,10 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
               20 total quoted above and in the docs. Stated so the two numbers on this
               page don't appear to contradict each other. */}
           <p className="text-xs text-gray-600 max-w-2xl mb-10 text-center mx-auto">
-            These 18 run on the agent itself. Two more — fleet load imbalance and
-            long-term WES drift — need multi-node or multi-week context, so they run in
-            the fleet view.
+            These 18 run on the agent itself, all free on the local dashboard. Two more —
+            fleet load imbalance and long-term WES drift — need multi-node or multi-week
+            context, so they run in the fleet view. In the cloud fleet view, patterns
+            marked Team need a Team plan.
           </p>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -544,8 +547,8 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
                       {p.scope === 'Cloud' && (
                         <span className="text-[9px] font-semibold uppercase tracking-wider text-blue-400 bg-blue-500/10 border border-blue-500/20 px-1.5 py-0.5 rounded">Cloud</span>
                       )}
-                      {p.tier === 'pro' && (
-                        <span className="text-[9px] font-semibold uppercase tracking-wider text-indigo-400 bg-indigo-500/10 border border-indigo-500/20 px-1.5 py-0.5 rounded">Pro</span>
+                      {p.tier === 'team' && (
+                        <span className="text-[9px] font-semibold uppercase tracking-wider text-violet-400 bg-violet-500/10 border border-violet-500/20 px-1.5 py-0.5 rounded">Team</span>
                       )}
                     </div>
                   </div>
@@ -637,7 +640,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSignUp, onNavigat
           <div className="bg-gray-800 border-b border-gray-700 p-4 flex items-center gap-3">
             <Search className="w-4 h-4 text-gray-500 shrink-0" />
             <span className="font-mono text-sm text-gray-200">llama</span>
-            <span className="text-xs text-gray-600 ml-auto whitespace-nowrap">3 of 1,247 GGUFs</span>
+            <span className="text-[9px] font-semibold uppercase tracking-wider text-gray-500 border border-gray-700 px-1.5 py-0.5 rounded ml-auto whitespace-nowrap">Illustrative</span>
           </div>
           <div className="divide-y divide-gray-800">
             {[
