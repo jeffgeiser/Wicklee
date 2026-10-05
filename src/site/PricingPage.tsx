@@ -149,7 +149,7 @@ const TIERS: TierDef[] = [
     features: [
       'Everything in Community',
       'Up to 25 nodes in cloud fleet view',
-      'All 20 observation patterns in the fleet view, including long-term WES drift',
+      'All 20 observation patterns in the fleet view — the 18 agent patterns plus fleet load imbalance and long-term WES drift',
       '90-day metric history',
       'Fleet API at 600 req/min, plus the analytics endpoints',
       'Cost & chargeback reports — $/1M tokens by node, model and tag',
