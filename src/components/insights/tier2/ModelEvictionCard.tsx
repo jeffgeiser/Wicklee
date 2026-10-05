@@ -17,7 +17,7 @@
  */
 
 import React, { useState } from 'react';
-import { Lock, Flame, Loader2 } from 'lucide-react';
+import { Flame, Loader2 } from 'lucide-react';
 import type { SentinelMetrics } from '../../../types';
 import InsightCard from '../InsightCard';
 
@@ -29,7 +29,7 @@ const KEEP_ALIVE_MS = 5 * 60 * 1_000;
 /** Warn when 3 minutes of inactivity observed (2 minutes before eviction). */
 const WARN_AFTER_MS = 3 * 60 * 1_000;
 
-/** Success toast duration. */
+/** Success / failure toast duration. */
 const SUCCESS_DURATION_MS = 3_000;
 
 // ── Props ─────────────────────────────────────────────────────────────────────
@@ -42,6 +42,11 @@ interface Props {
    */
   idleSinceMs:     number | null;
   showNodeHeader?: boolean;
+  /**
+   * True only where the browser can reach this node's Ollama directly — the
+   * local agent dashboard. From the cloud fleet view the request would go to
+   * the viewer's own machine, not the remote node.
+   */
   canKeepWarm?:    boolean;
   onKeepWarm?:     () => void;
 }
@@ -55,7 +60,7 @@ const ModelEvictionCard: React.FC<Props> = ({
   canKeepWarm    = true,
   onKeepWarm,
 }) => {
-  const [keepWarmState, setKeepWarmState] = useState<'idle' | 'loading' | 'success'>('idle');
+  const [keepWarmState, setKeepWarmState] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
 
   // Must have an Ollama model loaded and be in idle state
   if (!node.ollama_running || !node.ollama_active_model) return null;
@@ -74,8 +79,9 @@ const ModelEvictionCard: React.FC<Props> = ({
   const handleKeepWarm = async () => {
     if (keepWarmState !== 'idle') return;
     setKeepWarmState('loading');
+    let ok = false;
     try {
-      await fetch('http://localhost:11434/api/generate', {
+      const res = await fetch('http://localhost:11434/api/generate', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -85,11 +91,12 @@ const ModelEvictionCard: React.FC<Props> = ({
           stream:      false,
         }),
       });
+      ok = res.ok;
     } catch {
-      // Ping failure is non-fatal — still show success
+      // Ollama unreachable — reported below, never shown as success.
     }
-    setKeepWarmState('success');
-    onKeepWarm?.();
+    setKeepWarmState(ok ? 'success' : 'error');
+    if (ok) onKeepWarm?.();
     setTimeout(() => setKeepWarmState('idle'), SUCCESS_DURATION_MS);
   };
 
@@ -130,6 +137,8 @@ const ModelEvictionCard: React.FC<Props> = ({
               className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
                 keepWarmState === 'success'
                   ? 'bg-green-900/40 border border-green-700/50 text-green-400 cursor-default'
+                  : keepWarmState === 'error'
+                  ? 'bg-red-900/30 border border-red-700/40 text-red-400 cursor-default'
                   : keepWarmState === 'loading'
                   ? 'bg-gray-700 border border-gray-700 text-gray-400 cursor-wait'
                   : 'bg-amber-500/10 border border-amber-500/25 text-amber-400 hover:bg-amber-500/20 cursor-pointer'
@@ -139,19 +148,17 @@ const ModelEvictionCard: React.FC<Props> = ({
                 <><Loader2 className="w-3 h-3 animate-spin" />Keeping warm…</>
               ) : keepWarmState === 'success' ? (
                 <>Model kept warm ✓</>
+              ) : keepWarmState === 'error' ? (
+                <>Couldn’t reach Ollama</>
               ) : (
                 <><Flame className="w-3 h-3" />Keep Warm</>
               )}
             </button>
           ) : (
-            <button
-              disabled
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-700 border border-gray-700 text-gray-500 text-xs font-semibold cursor-not-allowed"
-            >
-              <Lock className="w-3 h-3" />
-              Keep Warm
-              <span className="text-[9px] text-gray-600 font-normal ml-0.5">Pro+</span>
-            </button>
+            <p className="text-[11px] text-gray-500">
+              To keep it loaded, send a request to the node, or use Keep Warm in
+              that node’s local dashboard (localhost:7700).
+            </p>
           )}
         </div>
 

@@ -98,12 +98,12 @@ const ThermalBudgetCard: React.FC<ThermalBudgetCardProps> = ({
             <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
               Thermal Budget
             </span>
-            <span className="text-[9px] uppercase tracking-widest text-blue-400 ml-1">Pro</span>
+            <span className="text-[9px] uppercase tracking-widest text-violet-400 ml-1">Team</span>
           </div>
           <Lock className="w-3.5 h-3.5 text-gray-600" />
         </div>
         <p className="text-xs text-gray-500 mt-2 leading-relaxed">
-          Predicts when pushing harder backfires. Computes your sustainable tok/s rate, the load level that triggers Fair thermal, and whether pushing produces more or fewer net tokens over time. Requires 7-day history (Pro tier).
+          Predicts when pushing harder backfires. Computes your sustainable tok/s rate, the load level that triggers Fair thermal, and whether pushing produces more or fewer net tokens over time. Requires 7-day history (Team).
         </p>
       </div>
     );

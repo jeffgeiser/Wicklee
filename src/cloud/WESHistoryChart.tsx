@@ -312,7 +312,7 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
           {subscriptionTier === 'community' && (
             <p className="mt-3 text-[11px] text-indigo-400/70">
               Fleet history is active.{' '}
-              <span className="text-indigo-400 font-semibold">Pro</span>
+              <span className="text-indigo-400 font-semibold">Team</span>
               {' '}unlocks 7-day historical trends.
             </p>
           )}

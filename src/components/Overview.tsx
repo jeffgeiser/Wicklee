@@ -90,11 +90,6 @@ interface OverviewProps {
   onNavigateToInsights?: (tab: 'triage' | 'performance' | 'forensics', scrollTo?: string) => void;
 }
 
-const MOCK_HISTORY = Array.from({ length: 20 }).map((_, i) => ({
-  time: `${i}:00`,
-  requests: Math.floor(Math.random() * 50) + 10,
-  latency: Math.floor(Math.random() * 100) + 200,
-}));
 
 // Minimum tok/s required before a cost sample enters any rolling buffer.
 // During Ollama startup the probe may read ~0.001 tok/s while GPU power is
@@ -2624,7 +2619,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
                   </div>
                 )}
                 <ResponsiveContainer width="100%" height="100%" minHeight={1}>
-                  <AreaChart data={isLive ? history : MOCK_HISTORY}>
+                  <AreaChart data={history}>
                     <defs>
                       <linearGradient id={cfg.gradId} x1="0" y1="0" x2="0" y2="1">
                         <stop offset="5%"  stopColor={cfg.color} stopOpacity={isLive ? 0.35 : 0.08}/>
@@ -2644,7 +2639,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
                     />
                     <Area
                       type="monotone"
-                      dataKey={isLive ? effectiveKey : 'requests'}
+                      dataKey={effectiveKey}
                       stroke={isLive ? cfg.color : '#374151'}
                       fillOpacity={1}
                       fill={`url(#${cfg.gradId})`}

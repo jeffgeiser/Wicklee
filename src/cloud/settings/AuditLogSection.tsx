@@ -15,6 +15,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { ScrollText, Lock, AlertTriangle, RefreshCw, Download, Send, Trash2, Copy } from 'lucide-react';
 import { CLOUD_URL } from '../../utils/cloudUrl';
+import { isBusinessOrAbove as isBusinessTier } from '../../utils/tier';
 
 interface AuditEntry {
   id:          number;
@@ -90,7 +91,7 @@ function detailsSummary(details: Record<string, unknown>): string {
 }
 
 const AuditLogSection: React.FC<Props> = ({ subscriptionTier, getToken, onNavigateToPricing }) => {
-  const isBusinessOrAbove = ['business', 'enterprise'].includes(subscriptionTier);
+  const isBusinessOrAbove = isBusinessTier(subscriptionTier);
 
   const [entries,    setEntries]    = useState<AuditEntry[]>([]);
   const [loading,    setLoading]    = useState(false);
