@@ -155,6 +155,13 @@ const DocsPage: React.FC<DocsPageProps> = ({ onNavigate }) => {
               GitHub →
             </a>
             <button
+              type="button"
+              onClick={() => onNavigate?.('/metrics-reference')}
+              className="block text-xs text-gray-600 hover:text-gray-300 transition-colors text-left"
+            >
+              Metrics reference →
+            </button>
+            <button
               onClick={() => onNavigate?.('/blog')}
               className="block text-xs text-gray-600 hover:text-gray-300 transition-colors text-left"
             >
@@ -587,6 +594,17 @@ sudo ~/.wicklee/bin/wicklee --install-service   # re-install as daemon`}</Code>
             {/* Derived metrics reference */}
             <div>
               <p className="font-semibold text-white mb-2">Derived metrics — formulas</p>
+              <p className="text-xs text-gray-500 mb-3">
+                Field-by-field definitions live on the{' '}
+                <button
+                  type="button"
+                  onClick={() => onNavigate?.('/metrics-reference')}
+                  className="text-blue-400 hover:text-blue-300 underline underline-offset-2"
+                >
+                  Metrics reference
+                </button>
+                {' '}page.
+              </p>
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead>
