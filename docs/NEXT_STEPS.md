@@ -1,6 +1,6 @@
 # Wicklee — Founder Next Steps
 
-*Open items that need a human (dashboards, accounts, decisions). Last updated October 5, 2026.
+*Open items that need a human (dashboards, accounts, decisions). Last updated October 6, 2026.
 Engineering history lives in `docs/progress.md`; product plan in `docs/ROADMAP.md`.*
 
 ## Done recently
@@ -14,10 +14,10 @@ Engineering history lives in `docs/progress.md`; product plan in `docs/ROADMAP.m
       (PR #85); marketing-site pattern counts and placeholders fixed (PR #86). See `docs/progress.md`.
 
 ## 0. Check today's fixes on the live site
-- [ ] Insights → Forensics on your Team account: five Team cards show data or a specific
-      "needs more history" note; Sovereignty Audit shows the Enterprise lock.
+- [x] Insights → Forensics on your Team account: five Team cards show data or a specific
+      "needs more history" note; Sovereignty Audit shows the Enterprise lock. (Confirmed October 6.)
 - [ ] If your Clerk org has a non-admin member, have them sign in once: no Team Management tab.
-- [ ] Landing, Pricing and Docs read correctly (pattern counts, Team badges, Illustrative tag).
+- [x] Landing, Pricing and Docs read correctly (pattern counts, Team badges, Illustrative tag). (Confirmed October 5.)
 
 ## 1. Paddle — sandbox first, then live ✅ done (September 29, 2026)
 
@@ -62,27 +62,13 @@ Sandbox purchase, webhook and cancel tested for both sizes; live Paddle and self
 - [x] Railway: `PADDLE_ENV=production`, the four live price IDs, live token/secret.
       Set `PADDLE_CHECKOUT_ENABLED=true` **last**, after everything else is confirmed.
 
-## 2. Grafana dashboard + catalog listing
-- [ ] Point a Prometheus scrape job at `https://wicklee.dev/metrics` with a Team-tier API key (see `docs/GRAFANA.md`;
-      the endpoint lives on the cloud, not the agent, and needs the account on Team — do this after Paddle or on a comped account).
-- [ ] Grafana → Dashboards → New → Import `deploy/grafana/wicklee-fleet.json`, pick the Prometheus datasource.
-- [ ] After ~1 hour of data, screenshot with the thermal-penalty panel visible.
-- [ ] grafana.com/grafana/dashboards → Upload dashboard (JSON, screenshot, description, Prometheus datasource).
-- [ ] Send the assigned dashboard ID so the one-line import instruction can go into the docs.
+## 2. Grafana dashboard + catalog listing ✅ done
+- [x] Prometheus scrape of `https://wicklee.dev/metrics` with a Team key, dashboard imported and screenshotted.
+- [x] Listed on grafana.com as dashboard **25854** (Wicklee Fleet Efficiency); the one-line import is in `docs/GRAFANA.md`.
 
-## 3. Hugging Face Space
-- [ ] Create the Space at huggingface.co/new-space, SDK **Static**.
-- [ ] From an up-to-date `main`:
-  ```
-  git pull origin main
-  npm run build:demo
-  git clone https://huggingface.co/spaces/<your-user>/wicklee-fleet-demo hf-space
-  cp -r dist-demo/* hf-space/
-  cp deploy/hf-space/README.md hf-space/README.md
-  cd hf-space && git add -A && git commit -m "Wicklee fleet demo" && git push
-  ```
-- [ ] `demo.wicklee.dev`: add the CNAME in Cloudflare DNS if missing (the `wicklee-demo` Pages project
-      already builds on every merge).
+## 3. Hugging Face Space ✅ done
+- [x] Static Space created and the demo build pushed (rebuild steps: `docs/DEMO.md`).
+- [x] `demo.wicklee.dev` serves the `wicklee-demo` Pages project, rebuilt on every merge.
 
 ## 4. Proof numbers from your own fleet
 - [ ] Settings → API Keys: create a key, then run:
