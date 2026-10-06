@@ -70,9 +70,11 @@ smoke-tests a running local agent (`bash scripts/qa_agent.sh`).*
 - [ ] Insights → Triage in the cloud fleet view: a Model Eviction card shows
       no Keep Warm button (only the local dashboard has one, and it reports
       failure when Ollama is unreachable).
-- [ ] Upgrade prompts and badges name Team or Enterprise, never Pro or
-      Business (7D range lock, history charts, Thermal Budget, landing
-      pattern grid).
+- [ ] Upgrade prompts and locked-feature badges name Team or Enterprise,
+      never Pro or Business (7D range lock, history charts, Thermal Budget,
+      landing pattern grid). The sidebar plan badge is the exception: it shows
+      the account's own plan, so a grandfathered Pro or Business account still
+      reads Pro or Business.
 - [ ] Landing page: Local card says 18 patterns; the pattern grid has 18 tiles
       (Memory-Bandwidth Ceiling present, Fleet Load Imbalance absent); the
       Model Discovery panel is tagged Illustrative. Docs and Pricing give the
