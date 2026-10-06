@@ -518,10 +518,24 @@ const PricingPage: React.FC<PricingPageProps> = ({
                     </p>
                   </div>
                 ) : (
-                  <a href={tier.cta.href} className={ctaCls}>
-                    {tier.cta.label}
-                    <ArrowRight className="w-3.5 h-3.5" />
-                  </a>
+                  <div className="mt-auto space-y-2">
+                    <a href={tier.cta.href} className={ctaCls}>
+                      {tier.cta.label}
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </a>
+                    {tier.id === 'enterprise' && (
+                      <p className="text-[11px] text-gray-500 text-center leading-relaxed">
+                        Building with us?{' '}
+                        <button
+                          type="button"
+                          onClick={() => onNavigate?.('/design-partners')}
+                          className="text-blue-400 hover:text-blue-300 underline underline-offset-2"
+                        >
+                          Design partner program
+                        </button>
+                      </p>
+                    )}
+                  </div>
                 )}
               </div>
             );
