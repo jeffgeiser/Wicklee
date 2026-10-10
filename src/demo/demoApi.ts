@@ -217,9 +217,126 @@ function modelSwitches() {
   };
 }
 
+// Idle-waste report (Insights → Performance). Phantom load = a model held in
+// memory while the node isn't inferring. Mirrors GET /api/v1/fleet/idle-waste.
+function idleWaste() {
+  const [studio, , rigB, , mini, edge] = DEMO_NODES;
+  return {
+    days: 30, kwh_rate: 0.16,
+    totals: {
+      phantom_kwh: 41.8, phantom_cost_usd: 6.69,
+      baseline_idle_cost_usd: 9.12, active_cost_usd: 34.34,
+      idle_pct_of_energy: 31.5, projected_monthly_recovery_usd: 5.84,
+    },
+    by_node: [
+      { node_id: rigB.node_id,   idle_hours: 412, duty_pct: 18.4, phantom_cost_usd: 3.71 },
+      { node_id: edge.node_id,   idle_hours: 538, duty_pct: 9.2,  phantom_cost_usd: 1.62 },
+      { node_id: studio.node_id, idle_hours: 301, duty_pct: 41.7, phantom_cost_usd: 0.88 },
+      { node_id: mini.node_id,   idle_hours: 266, duty_pct: 22.0, phantom_cost_usd: 0.48 },
+    ],
+    actions: [
+      { kind: 'unload_idle_model', node_id: rigB.node_id, model: rigB.model, idle_hours: 412,
+        recovers_usd_month: 3.40, detail: `${rigB.model} stays loaded on ${rigB.hostname} ~14 h/day with no requests — set OLLAMA_KEEP_ALIVE=10m.` },
+      { kind: 'unload_idle_model', node_id: edge.node_id, model: edge.model, idle_hours: 538,
+        recovers_usd_month: 1.49, detail: `${edge.model} on ${edge.hostname} is idle 91% of the time — unload it between bursts.` },
+      { kind: 'consolidate', node_id: mini.node_id, duty_pct: 22.0,
+        recovers_usd_month: 0.95, detail: `${mini.hostname} runs at 22% duty — its traffic fits on ${studio.hostname}.` },
+    ],
+  };
+}
+
+// Capacity planner. Same arithmetic as cloud reports.rs: units of each
+// hardware profile needed to close the gap to target, at the fleet's
+// measured tok/W per class, costed at 24 h duty.
+function capacity(targetParam: string | null) {
+  const kwh = 0.16, sustained = 412.6, watts = 1385;
+  const eff = { apple: 1.9, nvidia: 0.32 } as const;
+  const profiles: Array<[string, string, 'apple' | 'nvidia', number, number]> = [
+    ['m4', 'Mac Mini M4 16GB', 'apple', 16_384, 12], ['m4_pro_24gb', 'M4 Pro 24GB', 'apple', 24_576, 18],
+    ['m4_max_36gb', 'M4 Max 36GB', 'apple', 36_864, 25], ['m4_max_64gb', 'M4 Max 64GB', 'apple', 65_536, 35],
+    ['m4_ultra_128gb', 'M4 Ultra 128GB', 'apple', 131_072, 60],
+    ['nvidia_4060', 'RTX 4060', 'nvidia', 8_192, 115], ['nvidia_4070', 'RTX 4070', 'nvidia', 12_288, 200],
+    ['nvidia_4080', 'RTX 4080', 'nvidia', 16_384, 320], ['nvidia_4090', 'RTX 4090', 'nvidia', 24_576, 450],
+    ['nvidia_a100_40gb', 'A100 40GB', 'nvidia', 40_960, 300], ['nvidia_a100_80gb', 'A100 80GB', 'nvidia', 81_920, 300],
+    ['nvidia_h100', 'H100 80GB', 'nvidia', 81_920, 700],
+  ];
+  const parsed = targetParam != null ? Number(targetParam) : NaN;
+  const target = Math.min(Math.max(Number.isFinite(parsed) ? parsed : sustained * 2, 1), 1_000_000);
+  const deficit = Math.max(target - sustained, 0);
+  const scenarios = profiles.flatMap(([profile, label, cls, vram_mb, power_w]) => {
+    const unit = eff[cls] * power_w;
+    const units = deficit <= 0 ? 0 : Math.ceil(deficit / unit);
+    if (units > 16) return [];
+    return [{
+      profile, label, class: cls, vram_mb, power_w, units,
+      unit_tok_s: Math.round(unit * 10) / 10,
+      est_added_tok_s: Math.round(unit * units * 10) / 10,
+      est_cost_per_day: Math.round(units * power_w * 24 / 1000 * kwh * 100) / 100,
+      basis: `your ${cls === 'apple' ? 'Apple' : 'NVIDIA'} nodes' measured efficiency (${eff[cls].toFixed(2)} tok/W)`,
+    }];
+  }).sort((a, b) => a.est_cost_per_day - b.est_cost_per_day || a.units - b.units);
+  return {
+    days: 7, kwh_rate: kwh, target_tok_s: Math.round(target * 10) / 10, target_met: deficit <= 0,
+    fleet: { nodes: [], sustained_tok_s: sustained, total_watts: watts, cost_per_day: Math.round(watts * 24 / 1000 * kwh * 100) / 100 },
+    scenarios,
+  };
+}
+
+// Migration advisor: move a model to a node that runs it more efficiently.
+function migrationAdvisor() {
+  const [studio, rigA, , dgx, mini] = DEMO_NODES;
+  return {
+    recommendations: [
+      { model: mini.model, from_node: mini.node_id, from_hostname: mini.hostname,
+        to_node: studio.node_id, to_hostname: studio.hostname,
+        from_wes: 4.1, to_wes_7d: 11.2, est_gain_pct: 173, to_free_mem_mb: 61_440, model_size_mb: 2_250 },
+      { model: rigA.model, from_node: rigA.node_id, from_hostname: rigA.hostname,
+        to_node: dgx.node_id, to_hostname: dgx.hostname,
+        from_wes: 3.1, to_wes_7d: 3.9, est_gain_pct: 26, to_free_mem_mb: 37_900, model_size_mb: 20_275 },
+    ],
+  };
+}
+
+// Fleet model discovery (Models tab). Each candidate is scored against every
+// node's memory budget, like GET /api/fleet/model-candidates.
+function modelCandidates(search: string | null, nodeId: string | null) {
+  const budgetGb: Record<string, number> = {
+    'studio-m4max': 96, 'rig-4090-a': 22, 'rig-4090-b': 22, 'dgx-h100': 76, 'mini-m2': 10, 'edge-4060': 14,
+  };
+  const catalog: Array<[string, number, string, number, number]> = [
+    // model_id, file size GB at best quant, quant, downloads, likes
+    ['bartowski/Llama-3.2-3B-Instruct-GGUF', 2.0, 'Q4_K_M', 293_000, 410],
+    ['bartowski/Meta-Llama-3.1-8B-Instruct-GGUF', 4.9, 'Q4_K_M', 1_240_000, 1_380],
+    ['Qwen/Qwen2.5-14B-Instruct-GGUF', 9.0, 'Q4_K_M', 486_000, 690],
+    ['bartowski/Qwen2.5-32B-Instruct-GGUF', 19.8, 'Q4_K_M', 352_000, 520],
+    ['bartowski/Mistral-7B-Instruct-v0.3-GGUF', 4.4, 'Q4_K_M', 905_000, 980],
+    ['bartowski/Meta-Llama-3.1-70B-Instruct-GGUF', 42.5, 'Q4_K_M', 211_000, 450],
+  ];
+  const q = search?.toLowerCase() ?? '';
+  const nodes = DEMO_NODES.filter(d => !nodeId || d.node_id === nodeId);
+  const models = catalog
+    .filter(([id]) => !q || id.toLowerCase().includes(q))
+    .map(([model_id, gb, quant, downloads, likes]) => {
+      const fits = nodes.map(d => {
+        const budget = budgetGb[d.hostname] ?? 16;
+        const headroom = (budget - gb) / budget;
+        const fit_score = gb > budget ? 0 : Math.round(Math.min(100, 40 + headroom * 70));
+        const fit_label = fit_score >= 80 ? 'Excellent' : fit_score >= 60 ? 'Good' : fit_score > 0 ? 'Tight' : 'Won\'t fit';
+        return {
+          node_id: d.node_id, hostname: d.hostname, mem_budget_gb: budget, thermal: 'Normal', chip_name: null,
+          fit_score, fit_label, best_quant: quant, file_size_mb: Math.round(gb * 1024),
+          pull_cmd: `ollama pull hf.co/${model_id}:${quant}`,
+        };
+      });
+      return { model_id, downloads, likes, fleet_best_score: Math.max(0, ...fits.map(f => f.fit_score)), nodes: fits };
+    });
+  return { is_live_search: !!q, online_nodes: nodes.length, hf_reachable: true, models };
+}
+
 // ── Router ────────────────────────────────────────────────────────────────────
 
-function route(pathname: string, search: URLSearchParams, method: string): Response | null {
+/** Exported for tests; installDemoFetch is the only runtime caller. */
+export function route(pathname: string, search: URLSearchParams, method: string): Response | null {
   if (method !== 'GET') {
     // Acknowledge/resolve/dismiss and every settings write → friendly read-only.
     return json(READ_ONLY, 403);
@@ -233,6 +350,11 @@ function route(pathname: string, search: URLSearchParams, method: string): Respo
   if (pathname === '/api/fleet/events/history')  return json(eventsHistory());
   if (pathname === '/api/slo')                   return json(slos());
   if (pathname === '/api/v1/fleet/chargeback')   return json(chargeback());
+  if (pathname === '/api/v1/fleet/idle-waste')   return json(idleWaste());
+  if (pathname === '/api/v1/fleet/capacity')     return json(capacity(search.get('target_tok_s')));
+  if (pathname === '/api/v1/fleet/migration-advisor') return json(migrationAdvisor());
+  if (pathname === '/api/fleet/model-candidates') return json(modelCandidates(search.get('search'), search.get('node_id')));
+  if (pathname === '/api/digest')                return json({ email: '', enabled: false });
   if (pathname === '/api/audit-log')             return json(auditLog());
   if (pathname === '/api/audit-log/drain')       return json({ configured: false });
   if (pathname === '/api/alerts/channels')       return json({ channels: [
