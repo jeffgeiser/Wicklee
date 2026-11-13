@@ -56,25 +56,90 @@ pub(crate) fn probe_due(
     last_attempt.is_none_or(|t| now.saturating_duration_since(t) >= interval)
 }
 
+/// Number of tokens the idle probe generates. Small on purpose: the probe
+/// exists to time a warm model, not to produce output.
+const PROBE_TOKENS: u32 = 20;
+
 /// True when an Ollama `/api/ps` response lists `model` as currently loaded.
+///
+/// Production code now goes through [`probe_target`], which answers residency
+/// and the running context in one pass. This remains as the subject of
+/// `ps_lists_model_matches_loaded_only`, which still covers the name/model
+/// field matching that [`ps_entry`] does for both callers.
+#[cfg(test)]
 fn ps_lists_model(ps: &serde_json::Value, model: &str) -> bool {
-    ps["models"].as_array().is_some_and(|arr| {
-        arr.iter().any(|m| m["name"].as_str() == Some(model) || m["model"].as_str() == Some(model))
+    ps_entry(ps, model).is_some()
+}
+
+/// The `/api/ps` entry for `model`, matched on either `name` or `model`.
+fn ps_entry<'a>(ps: &'a serde_json::Value, model: &str) -> Option<&'a serde_json::Value> {
+    ps["models"].as_array()?.iter().find(|m| {
+        m["name"].as_str() == Some(model) || m["model"].as_str() == Some(model)
     })
 }
 
-/// Re-checks `/api/ps` immediately before a probe. The harvester's view can be
-/// up to 5 s old, and a generate request for a model that has just been
-/// evicted would make Ollama load it again (multi-GB, and it resets the
-/// keep_alive timer). Any failure is treated as "not resident" → skip.
-async fn ollama_model_resident(client: &reqwest::Client, port: u16, model: &str) -> bool {
+/// What the probe is allowed to do for one model, decided from a fresh
+/// `/api/ps` read taken immediately before firing.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ProbeTarget {
+    /// Resident, and its running context is known. Probe with this `num_ctx`.
+    Probe { num_ctx: u64 },
+    /// Not listed as loaded. Probing would make Ollama load it (multi-GB, and
+    /// it resets the keep_alive timer), so skip.
+    NotResident,
+    /// Loaded, but `/api/ps` did not report a `context_length`. Skip rather
+    /// than guess — see [`probe_request_body`] for why omitting `num_ctx` is
+    /// not a safe default.
+    ContextUnknown,
+}
+
+/// Decide what to do about `model`, given a `/api/ps` body.
+pub(crate) fn probe_target(ps: &serde_json::Value, model: &str) -> ProbeTarget {
+    let Some(entry) = ps_entry(ps, model) else { return ProbeTarget::NotResident };
+    match entry["context_length"].as_u64().filter(|n| *n > 0) {
+        Some(num_ctx) => ProbeTarget::Probe { num_ctx },
+        None          => ProbeTarget::ContextUnknown,
+    }
+}
+
+/// Body of the idle probe's `/api/generate` request.
+///
+/// `num_ctx` is **mandatory**, and that is the whole point of this function
+/// existing. Step 0 verification item V3 measured that a request which omits
+/// `num_ctx` makes Ollama *reload the model at the server default* — 65536 →
+/// 4096 and 8192 → 4096, each with a multi-second `load_duration` on a model
+/// that was already resident. The probe used to omit it, so on any host
+/// running a non-default context it silently destroyed that context every
+/// probe interval and charged the user a reload for it.
+///
+/// Passing the context that `/api/ps` reports as *currently running* keeps the
+/// loaded configuration exactly as it was. There is no safe fallback value:
+/// any guess that differs from the running context causes the same reload, so
+/// an unknown context means no probe (see [`ProbeTarget::ContextUnknown`]).
+///
+/// `keep_alive` is still deliberately absent — Ollama has no "leave the expiry
+/// as it is" value, so sending one would override the operator's own
+/// `OLLAMA_KEEP_ALIVE`.
+pub(crate) fn probe_request_body(model: &str, num_ctx: u64) -> serde_json::Value {
+    serde_json::json!({
+        "model":   model,
+        "prompt":  " ",
+        "stream":  false,
+        "options": { "num_predict": PROBE_TOKENS, "num_ctx": num_ctx }
+    })
+}
+
+/// Re-reads `/api/ps` immediately before a probe and decides what to do. The
+/// harvester's own view can be up to 5 s old. Any transport or parse failure
+/// is treated as "not resident" → skip.
+async fn ollama_probe_target(client: &reqwest::Client, port: u16, model: &str) -> ProbeTarget {
     let url = format!("http://127.0.0.1:{port}/api/ps");
     match client.get(&url).timeout(Duration::from_secs(3)).send().await {
-        Ok(r) if r.status().is_success() => r
-            .json::<serde_json::Value>()
-            .await
-            .is_ok_and(|j| ps_lists_model(&j, model)),
-        _ => false,
+        Ok(r) if r.status().is_success() => match r.json::<serde_json::Value>().await {
+            Ok(j)  => probe_target(&j, model),
+            Err(_) => ProbeTarget::NotResident,
+        },
+        _ => ProbeTarget::NotResident,
     }
 }
 
@@ -91,17 +156,17 @@ struct OllamaProbeResult {
 /// Fires a non-streaming 20-token generate probe and returns timing metrics
 /// derived from eval_count, eval_duration, prompt_eval_count, prompt_eval_duration,
 /// and load_duration returned by Ollama.
-async fn probe_ollama_tps(client: &reqwest::Client, port: u16, model: &str) -> OllamaProbeResult {
+async fn probe_ollama_tps(
+    client:  &reqwest::Client,
+    port:    u16,
+    model:   &str,
+    num_ctx: u64,
+) -> OllamaProbeResult {
     // Explicit 127.0.0.1 (not localhost) to avoid Windows resolving localhost → ::1.
     let url = format!("http://127.0.0.1:{port}/api/generate");
     let resp = match client
         .post(&url)
-        .json(&serde_json::json!({
-            "model":   model,
-            "prompt":  " ",
-            "stream":  false,
-            "options": { "num_predict": 20 }
-        }))
+        .json(&probe_request_body(model, num_ctx))
         .send()
         .await
     {
@@ -682,11 +747,28 @@ pub(crate) fn start_ollama_harvester(
                     }
                 }
 
-                // Final residency check right before firing — never trigger a load.
-                if !ollama_model_resident(&probe_client, port, &model).await {
-                    eprintln!("[ollama] probe skip — {model} no longer resident on :{port}");
-                    continue;
-                }
+                // Final check right before firing. Never trigger a load, and
+                // never send a request that would reset the running context.
+                let num_ctx = match ollama_probe_target(&probe_client, port, &model).await {
+                    ProbeTarget::Probe { num_ctx } => num_ctx,
+                    ProbeTarget::NotResident => {
+                        eprintln!("[ollama] probe skip — {model} no longer resident on :{port}");
+                        continue;
+                    }
+                    ProbeTarget::ContextUnknown => {
+                        // Without the running context there is no safe request
+                        // to send: omitting num_ctx reloads the model at the
+                        // server default (V3). Back off for a full interval so
+                        // this does not spin on every 30 s tick.
+                        eprintln!(
+                            "[ollama] probe skip — {model} is loaded but /api/ps reports no \
+                             context_length; probing would reset its context"
+                        );
+                        last_attempt      = Some(std::time::Instant::now());
+                        last_probed_model = Some(model.clone());
+                        continue;
+                    }
+                };
                 last_attempt      = Some(std::time::Instant::now());
                 last_probed_model = Some(model.clone());
 
@@ -705,7 +787,7 @@ pub(crate) fn start_ollama_harvester(
                 scopeguard::defer! {
                     probe_active_clone.store(false, std::sync::atomic::Ordering::SeqCst);
                 }
-                let probe_result = probe_ollama_tps(&probe_client, port, &model).await;
+                let probe_result = probe_ollama_tps(&probe_client, port, &model, num_ctx).await;
                 if let Ok(mut g) = shared_probe.lock() {
                     // Retain the last successful baseline on probe failure —
                     // probe_ollama_tps returns all-None on timeout/error, and
@@ -1406,6 +1488,95 @@ mod tests {
         assert!(probe_due(true, Some("old"), "new", Some(last), TEN_MIN, now));
         // Baseline from a source other than our probe (e.g. vLLM live gauge).
         assert!(probe_due(true, None, "m", None, TEN_MIN, now));
+    }
+
+    // ── The probe must never change a model's context (step 0, V3) ───────────
+
+    fn ps_with(model: &str, context_length: Option<u64>) -> serde_json::Value {
+        let mut entry = serde_json::json!({
+            "name":      model,
+            "model":     model,
+            "size":      5_280_104_447u64,
+            "size_vram": 5_280_104_447u64,
+            "digest":    "46e0c10c039e",
+            "expires_at": "2026-11-13T09:26:44.305831-05:00",
+        });
+        if let Some(n) = context_length {
+            entry["context_length"] = serde_json::json!(n);
+        }
+        serde_json::json!({ "models": [entry] })
+    }
+
+    #[test]
+    fn probe_body_always_carries_the_running_context() {
+        // The regression this guards: the old body was
+        //   {"options": {"num_predict": 20}}
+        // with no num_ctx, which made Ollama reload the model at 4096.
+        let body = probe_request_body("llama3.1:8b", 32768);
+        assert_eq!(body["options"]["num_ctx"], 32768);
+        assert_eq!(body["options"]["num_predict"], 20);
+        assert_eq!(body["model"], "llama3.1:8b");
+        assert_eq!(body["stream"], false);
+        // keep_alive must stay absent so the operator's OLLAMA_KEEP_ALIVE wins.
+        assert!(body.get("keep_alive").is_none(), "probe must not send keep_alive");
+    }
+
+    #[test]
+    fn probe_does_not_change_a_models_context() {
+        // End-to-end at the decision level: whatever context /api/ps reports
+        // as running is exactly what the probe request asks for, so the loaded
+        // configuration is unchanged. Covers the two values measured in V3
+        // plus the default.
+        for running in [4096u64, 8192, 32768, 65536, 262144] {
+            let ps = ps_with("qwen3.5:4b", Some(running));
+            let ProbeTarget::Probe { num_ctx } = probe_target(&ps, "qwen3.5:4b") else {
+                panic!("expected Probe for a resident model with context {running}");
+            };
+            assert_eq!(num_ctx, running, "probe must mirror the running context");
+            let body = probe_request_body("qwen3.5:4b", num_ctx);
+            assert_eq!(
+                body["options"]["num_ctx"].as_u64(),
+                Some(running),
+                "probe body must request the context the model is already running",
+            );
+        }
+    }
+
+    #[test]
+    fn probe_skips_when_the_running_context_is_unknown() {
+        // No context_length field at all — an older Ollama, or a field that
+        // disappeared. Guessing would reset the context, so skip.
+        let ps = ps_with("llama3.1:8b", None);
+        assert_eq!(probe_target(&ps, "llama3.1:8b"), ProbeTarget::ContextUnknown);
+
+        // Present but zero or unusable is treated the same way.
+        let mut zero = ps_with("llama3.1:8b", Some(0));
+        assert_eq!(probe_target(&zero, "llama3.1:8b"), ProbeTarget::ContextUnknown);
+        zero["models"][0]["context_length"] = serde_json::json!("4096");
+        assert_eq!(probe_target(&zero, "llama3.1:8b"), ProbeTarget::ContextUnknown);
+    }
+
+    #[test]
+    fn probe_skips_a_model_that_is_not_loaded() {
+        let ps = ps_with("llama3.1:8b", Some(4096));
+        assert_eq!(probe_target(&ps, "qwen3.5:9b"), ProbeTarget::NotResident);
+        assert_eq!(
+            probe_target(&serde_json::json!({ "models": [] }), "llama3.1:8b"),
+            ProbeTarget::NotResident,
+        );
+        // A malformed body must not be read as "resident".
+        assert_eq!(probe_target(&serde_json::json!({}), "llama3.1:8b"), ProbeTarget::NotResident);
+    }
+
+    #[test]
+    fn probe_target_matches_on_either_name_or_model_field() {
+        let only_model = serde_json::json!({
+            "models": [{ "model": "qwen3.5:4b", "context_length": 4096 }]
+        });
+        assert_eq!(
+            probe_target(&only_model, "qwen3.5:4b"),
+            ProbeTarget::Probe { num_ctx: 4096 },
+        );
     }
 
     #[test]
