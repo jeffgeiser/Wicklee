@@ -56,6 +56,7 @@ mod observations;
 mod model_fit;
 mod http_api;
 mod mcp;
+mod auth;
 #[cfg(any(all(target_os = "linux", not(target_env = "musl")), target_os = "windows"))]
 use nvml_wrapper::{bitmasks::device::ThrottleReasons, enum_wrappers::device::{Clock, TemperatureSensor}, Nvml};
 // nvml-wrapper 0.10 only wraps nvmlDeviceGetMemoryInfo (v1), which returns
@@ -273,6 +274,42 @@ async fn main() {
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or(7700);
+
+    // ── Inbound auth: the Remote access startup rule ──────────────────────────
+    // Evaluated here, after every client-mode flag has returned (so `--status`
+    // and `--mcp-stdio` still work on a misconfigured host) and before any task
+    // is spawned or any port is bound. A non-loopback bind with no credential
+    // refuses to start rather than exposing hardware, loaded models and the
+    // writable /api/pair/claim and /mcp routes to the network.
+    let bind_addr_cfg = config.bind_address.clone().unwrap_or_else(|| "127.0.0.1".to_string());
+    let auth_policy = match auth::evaluate_startup(
+        &bind_addr_cfg,
+        config.auth_token.as_deref(),
+        config.allow_unauthenticated.unwrap_or(false),
+    ) {
+        auth::StartupDecision::Proceed(p) => p,
+        auth::StartupDecision::ProceedWithWarning(p, warning) => {
+            eprintln!("[warn] ╔══════════════════════════════════════════════════════════════╗");
+            eprintln!("[warn] ║  UNAUTHENTICATED REMOTE ACCESS                               ║");
+            eprintln!("[warn] ╚══════════════════════════════════════════════════════════════╝");
+            for line in warning.split('\n') {
+                eprintln!("[warn] {line}");
+            }
+            p
+        }
+        auth::StartupDecision::Refuse(reason) => {
+            eprintln!("[fatal] {reason}");
+            std::process::exit(1);
+        }
+    };
+    if auth_policy.non_loopback_bind && auth_policy.token.is_some() {
+        eprintln!(
+            "[auth] bound to {bind_addr_cfg} — requests from other machines must present \
+             the configured {} as a bearer token",
+            auth::TOKEN_KEY,
+        );
+    }
+    let auth_policy = Arc::new(auth_policy);
 
     let pair_on_start = std::env::args().any(|a| a == "--pair");
     if pair_on_start {
@@ -978,6 +1015,13 @@ async fn main() {
          .layer(axum::extract::Extension(ProxyPorts { listen: proxy_listen, target: proxy_target }))
          .layer(axum::extract::Extension(Arc::clone(&runtime_config_cache)))
          .layer(cors)
+         // Outermost layer: every route, including the embedded dashboard and
+         // the static fallback, passes the peer-address and token check before
+         // any handler or extractor runs.
+         .layer(axum::middleware::from_fn_with_state(
+             Arc::clone(&auth_policy),
+             auth::require_auth,
+         ))
     };
     // Suppress unused-variable warning on musl where metrics_store = None:()
     let _ = &metrics_store;
@@ -1055,7 +1099,13 @@ async fn main() {
         }
     };
 
-    axum::serve(listener, app)
+    // `into_make_service_with_connect_info` is what puts ConnectInfo<SocketAddr>
+    // into each request's extensions; without it the auth middleware has no
+    // peer address to check and fails closed.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
         .with_graceful_shutdown(shutdown)
         .await
         .expect("Server exited unexpectedly");

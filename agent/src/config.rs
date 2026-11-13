@@ -111,6 +111,16 @@ pub(crate) struct WickleeConfig {
     /// Idle-probe settings (`[probe]`). Absent → enabled, every 10 minutes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) probe: Option<ProbeConfig>,
+    /// Bearer token required from non-loopback peers on `/api`, `/mcp` and
+    /// `/v1`. Required when `bind_address` is not loopback — the agent refuses
+    /// to start otherwise. Loopback peers are never challenged, so this is
+    /// irrelevant on a default install.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) auth_token: Option<String>,
+    /// Serve non-loopback peers with no credential at all. Prints a prominent
+    /// warning at every startup. Only for a trusted private network.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) allow_unauthenticated: Option<bool>,
 }
 
 #[derive(Clone)]
@@ -342,7 +352,7 @@ pub(crate) fn load_or_create_config() -> WickleeConfig {
             }
 
     // ── First-run: generate a new identity ───────────────────────────────────
-    let cfg = WickleeConfig { node_id: generate_node_id(), fleet_url: None, session_token: None, ollama_proxy: None, runtime_ports: None, bind_address: None, deployment_profile: None, probe: None };
+    let cfg = WickleeConfig { node_id: generate_node_id(), fleet_url: None, session_token: None, ollama_proxy: None, runtime_ports: None, bind_address: None, deployment_profile: None, probe: None, auth_token: None, allow_unauthenticated: None };
     save_config(&cfg);
     cfg
 }
