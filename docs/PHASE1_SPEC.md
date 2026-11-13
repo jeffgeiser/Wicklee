@@ -165,6 +165,8 @@ Requirements:
 - **Supervised.** The tracker task runs under `supervisor.rs` like the other background loops.
 - **One code path.** CLI, HTTP and MCP call the same functions and return the same JSON.
 
+* **Controller-neutral.** Wicklee publishes evidence-based state, constraints and findings. It gives advice about inference conditions, such as "a longer keep-alive may reduce repeated loading." It does not issue instructions over infrastructure, such as "route requests to node B." Agents, schedulers and infrastructure controllers decide and act. Any translation into another system's schema lives in that system or in a separate adapter, never in Wicklee's core types.
+
 ## Data structures
 
 These are the Phase 1 types. Field names are proposals; the shapes and the invariants are the requirement.
@@ -206,12 +208,17 @@ pub(crate) struct Transition {
 pub(crate) enum Readiness { ReadyNow, RequiresLoading, MayRequireEviction, CannotDetermine }
 pub(crate) enum Displacement { Confirmed, Likely, UnknownVictim }
 
-pub(crate) struct Victim { pub model: String, pub in_use: Option<bool> }
+/// How the footprint was established.
+pub(crate) enum FitBasis { Measured, Estimated }
+/// Why a specific model can be named. A Victim cannot be built without one.
+pub(crate) enum VictimBasis { History { occurrences: u32 }, OnlyLoadedModel }
+pub(crate) struct Victim { pub model: String, pub in_use: Option<bool>, pub basis: VictimBasis }
 
 pub(crate) struct ModelReadiness {
     pub model: String,
     pub readiness: Readiness,
     pub displacement: Option<Displacement>, // only with MayRequireEviction
+    pub fit_basis: Option<FitBasis>,        // None when fit is unknown
     pub would_displace: Vec<Victim>,        // empty unless evidence names a model
     pub load_time_ms: Option<Range>,        // from observed loads only
     pub statements: Vec<Statement>,
@@ -362,6 +369,18 @@ A `ReadyNow` answer also reports pressure and placement, for example "loaded, 38
 | `UnknownVictim` | The footprint does not fit, several models are loaded, and history does not settle which one goes | No |
 
 `Confirmed` describes past behaviour on this host. The statement is labelled observed and worded as history: "loading X unloaded Y on 3 of 3 occasions." The prediction itself stays inferred.
+
+### Three kinds of knowledge
+
+Eviction risk is a stronger claim than listing loaded models, and the runtime may decide differently depending on memory, context settings and concurrency. The types keep three things apart:
+
+| Kind | What it covers | In the data model |
+| --- | --- | --- |
+| Observed | Which models are loaded and the memory they occupy | `ModelState`, from `/api/ps` |
+| Estimated | Whether another model fits in free memory | `fit_basis`: `Measured` or `Estimated` |
+| Uncertain | Which model, if any, the runtime will unload | `would_displace` stays empty unless a `VictimBasis` exists |
+
+A `Victim` cannot be constructed without a `VictimBasis`, so the code cannot name a model on a guess. Every statement about a future eviction is labelled inferred, whatever its basis. The reference agent demo must work with `UnknownVictim` answers too, so it does not depend on more certainty than the runtime gives.
 
 ### In use
 
@@ -520,6 +539,21 @@ New routes live under `/v1`. Existing `/api` routes are unchanged.
 
 The two `POST` routes accept connections from the local machine only. The agent can be configured to bind to all interfaces, so these routes check the peer address themselves (V8).
 
+### Remote access
+
+Phase 1 adds a startup rule, because the agent reports hardware, loaded models and operating conditions:
+
+| Configuration | Behaviour |
+| --- | --- |
+| Loopback, no token | Allowed |
+| Non-loopback, token configured | Allowed. Requests from other machines to `/v1` and MCP must present the token as a bearer token, compared in constant time |
+| Non-loopback, no token | Refuses to start |
+| Non-loopback, explicit `allow_unauthenticated` override | Allowed, with a prominent warning printed at every startup |
+
+Today the agent can be bound to all interfaces with no token, so this is a behaviour change and also belongs in the release notes.
+
+A token authenticates the caller and does not encrypt traffic. Remote access should use TLS or a trusted private network.
+
 ### MCP
 
 Three read-only tools are added. They return the same JSON as the HTTP routes.
@@ -647,6 +681,8 @@ These are replaced by Phase 1 work or are stale documents.
 | `docs/progress.md` | 2,718 lines | A journal. Git history holds the same record | Step 0 |
 | `docs/ROADMAP.md` | 481 lines | Rewrite to match v3.2. Do not delete | Final step |
 
+Also remove `routing_hint` from the observation engine in step 4. It issues instructions such as "steer away" with no evidence and no workload context, which the findings model replaces. The audit must first list what reads it, including the cloud push and any outside consumer.
+
 ### Freeze, do not touch
 
 These stay as they are and are excluded from Phase 1 builds of new features. The hosted site and checkout are live, so removing them is a product decision.
@@ -695,6 +731,8 @@ Steps are in dependency order. Each step ends with its tests passing and a short
 | 8 | Fault-injection scenarios and the reference controller with three policies in `scripts/bench/` | 3, 4, 6 | Each scenario runs end to end on the maintainer's host |
 | 9 | Acceptance runs on the maintainer's machines, then three outside machines. Overhead measurement | 8 | Both demonstrations pass, or the write-up states plainly what did not |
 | 10 | Update the README and `docs/ROADMAP.md`. Publish results with method and raw data | 9 | A new user can install, run `wicklee inspect`, and understand the output from the README alone |
+
+The remote-access rule is built in step 3, before the first `/v1` route ships.
 
 ### Notes for the implementer
 
