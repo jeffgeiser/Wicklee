@@ -57,6 +57,8 @@ mod model_fit;
 mod http_api;
 mod mcp;
 mod auth;
+mod ollama_client;
+mod caps;
 #[cfg(any(all(target_os = "linux", not(target_env = "musl")), target_os = "windows"))]
 use nvml_wrapper::{bitmasks::device::ThrottleReasons, enum_wrappers::device::{Clock, TemperatureSensor}, Nvml};
 // nvml-wrapper 0.10 only wraps nvmlDeviceGetMemoryInfo (v1), which returns
@@ -558,7 +560,7 @@ async fn main() {
     if probe_policy.enabled {
         eprintln!("[probe] idle probes every {} min (loaded models only)", probe_policy.interval.as_secs() / 60);
     }
-    let (ollama_metrics, probe_active) = harvester::start_ollama_harvester(
+    let (ollama_metrics, probe_active, ollama_caps) = harvester::start_ollama_harvester(
         Arc::clone(&apple_metrics),
         Arc::clone(&nvidia_metrics),
         proxy_arc,
@@ -979,7 +981,7 @@ async fn main() {
     let app = {
         let r = Router::new()
             .route("/api/health",         get(handle_health))         // diagnostic — always live
-            .route("/api/tags",           get(move || handle_tags(tags_port_rx.clone())))
+            .route("/api/tags",           get(move |caps| handle_tags(tags_port_rx.clone(), caps)))
             .route("/api/events/recent",  get(handle_events_recent))
             .route("/api/metrics",        get(handle_metrics))       // SSE fallback (1 Hz)
             .route("/api/metrics/snapshot", get(handle_metrics_snapshot)) // one-shot JSON of latest frame
@@ -1041,6 +1043,10 @@ async fn main() {
          .layer(axum::extract::Extension(NodeId(Arc::new(config.node_id.clone()))))
          .layer(axum::extract::Extension(ProxyPorts { listen: proxy_listen, target: proxy_target }))
          .layer(axum::extract::Extension(Arc::clone(&runtime_config_cache)))
+         // The capability record, filled in live by the Ollama harvester from
+         // the responses it sees and by /api/tags. Step 3 publishes it on
+         // GET /v1/state and step 4 gates rules on it.
+         .layer(axum::extract::Extension(Arc::clone(&ollama_caps)))
          .layer(cors)
          // Outermost layer: every route, including the embedded dashboard and
          // the static fallback, passes the peer-address and token check before
