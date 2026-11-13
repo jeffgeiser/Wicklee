@@ -206,7 +206,7 @@ The July 2026 Teams/Enterprise review found the Team tier strong and differentia
 
 **Packaging target once Phases 1–3 land:** Business = SSO + RBAC + audit export + org keys + SLO reports + cost governance (justifies $499). Enterprise = + self-hosted control plane + SCIM + custom SLA.
 
-### ★ GTM & Distribution Features (July 2026 — see docs/GTM.md)
+### ★ GTM & Distribution Features (July 2026)
 Features whose primary value is distribution and enterprise awareness, identified by the GTM review. Each is a product item that doubles as a channel:
 
 1. **Demo fleet mode (BUILT — deploy pending).** `npm run build:demo` → static `dist-demo/` bundle: the full cloud dashboard against a six-node synthetic fleet (deterministic seeded generator, scripted thermal-throttle / model-swap / node-offline stories) with no Clerk and no backend — a fake EventSource drives the production FleetStreamContext, and a fetch shim serves fixtures for every /api/* panel (writes → friendly read-only 403). Verified headlessly with Playwright (banner, nodes, models, zero page errors). See `docs/DEMO.md` for the demo.wicklee.dev + HF Space deploy steps (founder: DNS + HF account). Rock-2 checklist item.
@@ -262,7 +262,7 @@ Features whose primary value is distribution and enterprise awareness, identifie
    channel (r/LocalLLaMA, the blog, the "MPG for local AI" coinage) and undersells
    everywhere else.
 
-### ★ GTM Execution Tracker (non-code workstreams — see docs/GTM.md for strategy)
+### ★ GTM Execution Tracker (non-code workstreams — see `docs/STRATEGY.md`)
 Trackable checklist for the marketing motions. Check items off as they land; each is durable (stays live once done). Items marked **[draftable]** can be prepared by a coding session (copy, PR text, listing metadata, page builds) with only the final submit needing the founder's accounts.
 
 **Rock 1 — Registry & ecosystem blitz**
@@ -437,7 +437,7 @@ Carried over from the cloud auth/tenancy review (Pass 1, shipped) and the agent 
 Pre-existing-population note from Pass 1: nodes paired before the 64-bit node-ID change keep their legacy 16-bit `WK-XXXX` ids (and their collision/enumeration exposure) until they re-pair; the risk decays as new installs dominate. A forced re-pair migration was judged too disruptive.
 
 ### Full-Codebase Review — remaining MEDIUMs (June 2026; HIGHs all shipped)
-The mid-June four-surface review's HIGHs landed in five merged chunks (pairing hijack, Prometheus auth, org-tenancy sweep, agent races, frontend HIGHs, dead-code pass — see progress.md). Remaining verified MEDIUMs, roughly by value:
+The mid-June four-surface review's HIGHs landed in five merged chunks (pairing hijack, Prometheus auth, org-tenancy sweep, agent races, frontend HIGHs, dead-code pass — see the git history). Remaining verified MEDIUMs, roughly by value:
 1. **Cloud calculation fixes — SHIPPED** (wes_for_payload Apple SoC power, rollup straddling-bucket loss, the 24h hole in 7d+ charts, qf² in variant selection, plus the WES-drift evaluator that could never fire — its recent-24h window read metrics_5min, which never contains the last 24h). Still open from this group: OTel `export_interval_s` stored but ignored (fixed 30s tick).
 2. **Cloud perf/hardening**: N+1 per-node aggregation loops in wes-history / metrics-history / fleet-duty (single GROUP BY query instead); `auth_rate_limits` IP keys never evicted (slow leak; the spoofable-XFF read was fixed in PR #61 via `TRUSTED_PROXY_HOPS`); `/api/agent/version` hits the GitHub API uncached per request (60/hr anonymous limit — cache ~10 min); CSV export escaping (newlines/quotes/formula injection); signup runs bcrypt before the duplicate-email check (timing oracle + wasted work); duplicate `MAX_FREE_NODES`/`FREE_NODE_LIMIT` constants and the thrice-copied tier-limit ladder (`node_limit_for_tier()`); node session-token compare not constant-time (main.rs ~2294).
 3. **Agent**: Apple Silicon power double-counted in all DuckDB cost/WES queries (`Sample.gpu_power_w` holds SoC total, consumers add `cpu_power_w` on top; CPU-only Linux nodes get NULL → $0 cost) — fix at `BroadcastFrame::into_sample` with a canonical `total_power_w`; `/api/model-candidates` runs the "24h background" catalog refresh inline on the request path (first request of the day hangs minutes — spawn the documented background task); `[pm_raw]` debug dump on every powermetrics cycle into unrotated `/var/log/wicklee.log` + missing `MissedTickBehavior::Skip` makes powermetrics sample continuously; Windows blocking `wmic` in async loops every 2s (tokio::process + cache the failure); `sc create` binPath unquoted (classic unquoted-service-path; the validator defers to "quoting at the call site" that doesn't exist); Pattern P slope ×6 vs the correct ×60 on 1Hz data (fires ~10× late; Pattern R is correct); audit-export dismissals ignore the date window; CSV `model` column unescaped (client-controlled via proxy).
