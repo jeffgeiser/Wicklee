@@ -89,7 +89,7 @@ These matter for Phase 1 and should be fixed as part of it:
 
 These were not known when revision 1 was written. Each one blocks or changes part of Phase 1.
 
-- **`model_info` keys are hardcoded to `llama.*`.** The harvester reads context and KV-cache fields under `llama.`-prefixed keys. Those keys are absent for `qwen3.5`, which nulls the context and KV-cache fields for two of the three models installed on the maintainer's host. The keys are family-prefixed, and at least one — `qwen35.attention.head_count_kv` — is an **array**, not a scalar. Parsing must find the prefix from `details.family` and accept both shapes.
+- **`model_info` keys are hardcoded to `llama.*`.** The harvester reads context and KV-cache fields under `llama.`-prefixed keys. Those keys are absent for `qwen3.5`, which nulls the context and KV-cache fields for two of the three models installed on the maintainer's host. The keys are architecture-namespaced, and at least one — `qwen35.attention.head_count_kv` — is an **array**, not a scalar. Parsing reads the namespace from **`general.architecture`** and builds the keys from it, accepting both shapes. Note that `general.architecture` gives `qwen35`, which is not the same string as `details.family`, so the family field is not a substitute.
 - **No inbound authentication exists at all.** Zero hits for `ConnectInfo` or `SocketAddr` in `agent/src`. `session_token` is the *outbound* cloud credential, not an inbound one. With `bind_address = "0.0.0.0"`, `/api/pair/claim` and `/mcp` are reachable by anything on the network. There is nothing to extend, so step 1 builds this.
 - **The proxy listener address is a hardcoded literal.** `proxy.rs` binds `127.0.0.1:11434`; only the *upstream* port is configurable. On a default macOS Ollama install, where Ollama already holds 11434, the proxy cannot start at all. Either the listen address becomes configurable or the proxy is documented as unavailable in that configuration. This also makes callbacks, not the proxy, the only receipt source that works out of the box on macOS.
 - **The startup banner writes to stdout before argument parsing.** `main.rs:147` fires unconditionally, so `wicklee ready --json | jq` would break. The banner moves to stderr, or behind the subcommand dispatch, in step 3.
@@ -157,6 +157,7 @@ pub(crate) struct RuntimeCaps {
     pub gen_prompt_eval_count: bool,
     pub gen_prompt_eval_cached_count: bool,
     pub tags_available: bool,
+    pub tags_details_context_length: bool, // V7: removes an /api/show call
 }
 ```
 
@@ -303,7 +304,10 @@ pub(crate) struct Finding {
 /// Callback is the preferred path: no proxy, no synthetic load, and the only
 /// one that works on a default macOS install where Ollama holds 11434.
 pub(crate) enum ReceiptSource { Callback, Fingerprint, Proxy }
-pub(crate) enum StartState { Loaded, ColdCached, ColdUncached, ColdUnknown }
+/// V9: page-cache state is not readable without unsafe FFI, so a cold
+/// start can only ever be ColdUnknown in Phase 1. No Cached/Uncached
+/// variants, because nothing can produce them.
+pub(crate) enum StartState { Loaded, ColdUnknown }
 
 pub(crate) struct Receipt {
     pub id: String,
@@ -405,7 +409,11 @@ A `ReadyNow` answer also reports pressure and placement, for example "loaded, 38
 
 The context qualifier in the first case is not optional. V1 measured 8.7 GB of KV cache in an 11.4 GB resident model, so the same weights at a different context are a different footprint. A `size` observed at 8K says nothing useful about the same model at 64K, and must not be reused across context lengths.
 
-The second case is deliberately named `EstimatedWeightsOnly` rather than `Estimated`, because `scoring.rs` models weights and overhead and does not model KV cache. On a long-context workload it will underestimate, sometimes by more than the weights themselves. Any statement built on it says so: "about 7 GB of weights, excluding KV cache, which at this context may add several GB more."
+The second case is deliberately named `EstimatedWeightsOnly` rather than `Estimated`, because `scoring.rs` models weights and overhead and does not model KV cache. Any statement built on it says so: "about 7 GB of weights, excluding KV cache, which at this context may add several GB more."
+
+**Its error is two-sided, and revision 2 got the direction wrong.** V7 found that the `size` in `/api/tags` is the installed *file* size and is **larger** than the `size` `/api/ps` reports for the same model resident — `qwen3.5:4b` is 3.39 GB installed against 3.15 GB resident at context 4096. So source 2 starts from a number already above the observed resident footprint and then adds overhead on top, which overestimates the weights; and it omits KV cache, which underestimates the total. The net direction depends on the context and is not knowable in advance.
+
+Source 2 is therefore **calibrated against source 1 before it is trusted**: for any model where both a measured resident `size` and an installed file size exist, record the ratio, and use the accumulated ratios to correct the estimate for models never loaded on this host. Until at least one calibration pair exists, a source 2 estimate is reported with its uncertainty stated and must not be the sole basis for a `RequiresLoading` rather than `MayRequireEviction` classification.
 
 #### Non-uniform KV heads
 
@@ -434,6 +442,11 @@ Revision 1 had a `Confirmed` level, built on the assumption that loading X repea
 `LikelyAll` replaces it and is a stronger answer for a caller, not a weaker one. "Loading this will probably clear everything you have warm, including the model Workflow A is using" is more actionable than naming one victim, and it happens to be what the runtime does. The statement describing past behaviour is labelled observed and worded as history: "on 2 of 2 occasions, a load that did not fit cleared all resident models." The prediction stays inferred.
 
 Every level remains a prediction about a memory-gated decision made by software Wicklee does not control. No level is ever labelled verified.
+
+**Two deliberate differences from `docs/ollama-capabilities.md`.** That document is authoritative on runtime behaviour, and this spec follows it everywhere except two design recommendations, which are this spec's call to make:
+
+- It suggests **keeping `Confirmed` and expecting it to be unreachable.** This spec removes it. A level nothing can produce is dead code, and the cleanup rules forbid parallel engines and unused paths. If V4's conclusion is ever overturned on other hardware, the level can return with the evidence that justifies it.
+- It suggests **preferring `UnknownVictim` on multi-model hosts.** This spec adds `LikelyAll` instead, which names the whole resident set once the all-resident pattern has been observed twice. The evidence rules are satisfied — the history is observed, the prediction inferred — and "everything you have warm will probably go, including the one in use" is more actionable than declining to answer. The caution behind that recommendation is real and is handled by wording: because the runtime is non-deterministic, a non-fitting load may still clear only a subset, so the inferred statement is hedged and never asserts that all of them will go.
 
 ### Three kinds of knowledge
 
@@ -487,7 +500,7 @@ Phase 1 ships five rules. Each must pass the hard test: it says something the ru
 
 | Rule | Trigger | Observed statement | Inferred statement | Verify test | Needs |
 | --- | --- | --- | --- | --- | --- |
-| `cpu_split` | A loaded model has `size_vram` below `size` for three consecutive polls | Share outside accelerator memory, since when, and the running context | The context at which it was loaded, from the log, and that KV cache rather than weights is the likely cause | Generation rate now against the same model at a smaller context | V1, `ps_size_vram`, `ps_context_length` |
+| `cpu_split` | A loaded model has `size_vram` below `size` for three consecutive polls | Share of its **runtime footprint** outside accelerator memory, since when, and the running context | The context at which it was loaded, from the log, and that KV cache rather than weights is the likely cause | Generation rate now against the same model at a smaller context | V1, `ps_size_vram`, `ps_context_length` |
 | `context_reset` | A resident model's `context_length` dropped to the runtime default with a load in the same transition, twice or more | The context before and after, the count, and the measured load cost each time | A caller is omitting `num_ctx`, so each such request silently reloads the model at the default | Cold-load cost of the reset, and generation rate at both contexts | V3, `ps_context_length` |
 | `eviction_churn` | Two or more models repeatedly cleared and reloaded within an hour, each unload within 10 s of another model's load and before its own expiry | Count, times, and the models involved | Memory contention may be causing the reloads | Time for the declared model sequence, before and after the change | V4, V5 |
 | `expiry_reload` | A model unloaded at its expiry and was loaded again within 10 minutes, three or more times in a day | Count, gaps between requests, and the keep-alive in effect | The keep-alive may be shorter than the pause between steps | Cold-load time, which is the cost of each reload | V5, `ps_expires_at` |
@@ -547,7 +560,9 @@ A run refuses to start when it would displace a model that is in use, unless the
 
 ### Cold-start state
 
-Each cold receipt records one of `ColdCached`, `ColdUncached` or `ColdUnknown`. Phase 1 records `ColdUnknown` unless V9 shows a reliable way to check the page cache. Cold results with different start states are never averaged together.
+Every cold receipt records `ColdUnknown`. V9 answered this: the weights blob is locatable, but only through the manifest at `~/.ollama/models/manifests/...` rather than the `/api/tags` digest, which is the manifest digest and not the blob. Page-cache state is not readable without `unsafe` FFI, which Phase 1 does not take on.
+
+So the `ColdCached` and `ColdUncached` variants are gone rather than left unused. A cold-load measurement therefore carries unquantified variance from the page cache, and the output says so instead of implying the number is reproducible.
 
 ### Verify
 
@@ -583,8 +598,8 @@ Text output has three sections that match the three questions. Illustrative:
 $ wicklee inspect
 
 WHAT IS HAPPENING
-  F-12  OBSERVED  coder:14b has had 38% of its memory outside the GPU
-                  since 14:02.
+  F-12  OBSERVED  coder:14b has had 38% of its runtime footprint
+                  outside the GPU since 14:02.
         INFERRED  Its context grew from 8K to 32K at 14:02, which
                   likely caused the split.
 
