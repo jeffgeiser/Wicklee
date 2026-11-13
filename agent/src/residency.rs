@@ -1157,6 +1157,51 @@ mod tests {
     }
 
     #[test]
+    fn a_live_api_ps_response_folds_into_the_log() {
+        // Captured verbatim from the maintainer's host on 2026-11-13, Ollama
+        // 0.40.16, while the deployed agent was polling it. Nothing here is
+        // hand-written: if the tracker cannot read this, it cannot read the
+        // runtime it ships against.
+        const LIVE: &str = r#"{
+          "models": [{
+            "name": "llama3.1:8b",
+            "model": "llama3.1:8b",
+            "size": 5280104447,
+            "digest": "46e0c10c039e019119339687c3c1757cc81b9da49709a3b3924863ba87ca666e",
+            "details": {
+              "parent_model": "", "format": "gguf", "family": "llama",
+              "families": ["llama"], "parameter_size": "8.0B",
+              "quantization_level": "Q4_K_M"
+            },
+            "expires_at": "2026-11-13T14:53:13.400604-05:00",
+            "size_vram": 5280104447,
+            "context_length": 4096,
+            "runner": "llamacpp"
+          }]
+        }"#;
+
+        let ps: crate::ollama_client::PsResponse = serde_json::from_str(LIVE).unwrap();
+        let mut t = Tracker::new();
+        let out = t.observe(&Poll::from_ps(&ps, T0, Actor::User));
+
+        assert_eq!(kinds(&out), vec![TransitionKind::Loaded]);
+        let after = out[0].after.as_ref().unwrap();
+        assert_eq!(after.model, "llama3.1:8b");
+        assert_eq!(after.size_bytes, Some(5_280_104_447));
+        // Fully resident: size_vram equals size, so no placement split.
+        assert_eq!(after.size_vram_bytes, Some(5_280_104_447));
+        assert!(!after.is_split());
+        // The running context, not the model's maximum of 131072.
+        assert_eq!(after.context_length, Some(4096));
+        // The real local-offset timestamp, 14:53:13.400 at -05:00.
+        assert_eq!(after.expires_at_ms, Some(1_794_599_593_400));
+        assert_eq!(after.residency, Residency::Loaded);
+
+        // Polling the same response again changes nothing.
+        assert!(t.observe(&Poll::from_ps(&ps, T0 + 5_000, Actor::User)).is_empty());
+    }
+
+    #[test]
     fn rfc3339_parses_what_ollama_sends_and_rejects_the_rest() {
         // The verbatim shape from the maintainer's host. 09:26:44.305 at -05:00
         // is 14:26:44.305 UTC, and the sub-millisecond digits are dropped, not

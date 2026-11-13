@@ -2063,6 +2063,108 @@ mod tests {
         (store, dir)
     }
 
+    #[test]
+    fn transitions_survive_a_real_round_trip_through_duckdb() {
+        use crate::residency::{
+            Cause, ModelState, Residency, Transition, TransitionKind, derive_switches,
+        };
+        let (store, dir) = temp_store("transitions");
+
+        let state = |ctx: Option<u64>| {
+            Box::new(ModelState {
+                model: "qwen3.5:4b".into(),
+                digest: Some("sha256:abc".into()),
+                residency: Residency::Loaded,
+                size_bytes: Some(3_151_000_000),
+                size_vram_bytes: Some(3_151_000_000),
+                context_length: ctx,
+                expires_at_ms: Some(1_794_580_004_305),
+                last_activity_ms: Some(1_700_000_000_000),
+                installed_size_bytes: Some(3_389_983_735),
+                observed_at_ms: 1_700_000_000_000,
+            })
+        };
+
+        let rows = vec![
+            Transition {
+                id: 1,
+                ts_ms: 1_700_000_000_000,
+                model: "llama3.1:8b".into(),
+                kind: TransitionKind::Unloaded,
+                cause: Cause::ExpiryReached,
+                before: Some(state(Some(8192))),
+                after: None,
+                co_resident: vec![],
+            },
+            Transition {
+                id: 2,
+                ts_ms: 1_700_000_000_000,
+                model: "qwen3.5:4b".into(),
+                kind: TransitionKind::Loaded,
+                cause: Cause::User,
+                before: None,
+                after: Some(state(Some(4096))),
+                co_resident: vec!["qwen3.5:9b".into(), "llama3.1:8b".into()],
+            },
+            Transition {
+                id: 3,
+                ts_ms: 1_700_000_005_000,
+                model: "qwen3.5:4b".into(),
+                kind: TransitionKind::ContextChanged,
+                cause: Cause::Probe,
+                before: Some(state(Some(4096))),
+                after: Some(state(Some(2048))),
+                co_resident: vec![],
+            },
+        ];
+        store.write_transitions("WK-T", &rows).unwrap();
+
+        // A different node's log is not this node's.
+        store
+            .write_transitions(
+                "WK-OTHER",
+                &[Transition { id: 9, model: "elsewhere".into(), ..rows[1].clone() }],
+            )
+            .unwrap();
+
+        let back = store.query_transitions("WK-T", 0).unwrap();
+        assert_eq!(back.len(), 3, "a different node's rows must not come back");
+        assert_eq!(back, rows, "every field survives the round trip verbatim");
+
+        // The window is honoured, and ordering is ascending for derive_switches.
+        let recent = store.query_transitions("WK-T", 1_700_000_001_000).unwrap();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].kind, TransitionKind::ContextChanged);
+        assert_eq!(recent[0].cause, Cause::Probe);
+
+        // End to end: the stored log derives the swap the endpoint reports.
+        let out = derive_switches(&back, 24, false);
+        assert_eq!(out["total_swaps"], 1);
+        assert_eq!(out["swaps"][0]["from_model"], "llama3.1:8b");
+        assert_eq!(out["swaps"][0]["to_model"], "qwen3.5:4b");
+        assert_eq!(out["swaps"][0]["cause"], "expiry_reached");
+        assert_eq!(out["swaps"][0]["co_resident"][0], "qwen3.5:9b");
+
+        // A kind this binary does not know is skipped, not guessed at.
+        {
+            let conn = store.0.lock().unwrap();
+            conn.execute(
+                "INSERT INTO model_transitions
+                   (id, ts_ms, node_id, model, kind, cause, co_resident)
+                 VALUES (4, 1700000010000, 'WK-T', 'future:1b', 'teleported', 'user', '')",
+                [],
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            store.query_transitions("WK-T", 0).unwrap().len(),
+            3,
+            "a row from a newer agent is skipped rather than misread"
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     fn sample_json(ts_ms: i64) -> String {
         format!(
             r#"{{"node_id":"WK-T","timestamp_ms":{ts_ms},"cpu_usage_percent":10.0,
