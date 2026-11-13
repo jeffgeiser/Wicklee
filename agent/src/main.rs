@@ -59,6 +59,7 @@ mod mcp;
 mod auth;
 mod ollama_client;
 mod caps;
+mod residency;
 #[cfg(any(all(target_os = "linux", not(target_env = "musl")), target_os = "windows"))]
 use nvml_wrapper::{bitmasks::device::ThrottleReasons, enum_wrappers::device::{Clock, TemperatureSensor}, Nvml};
 // nvml-wrapper 0.10 only wraps nvmlDeviceGetMemoryInfo (v1), which returns
@@ -560,6 +561,10 @@ async fn main() {
     if probe_policy.enabled {
         eprintln!("[probe] idle probes every {} min (loaded models only)", probe_policy.interval.as_secs() / 60);
     }
+    // Per-model residency state and the transition log. Fed by the harvester's
+    // existing /api/ps poll — no new poller, per the Phase 1 architecture.
+    let residency_tracker: residency::SharedTracker =
+        Arc::new(Mutex::new(residency::Tracker::new()));
     let (ollama_metrics, probe_active, ollama_caps) = harvester::start_ollama_harvester(
         Arc::clone(&apple_metrics),
         Arc::clone(&nvidia_metrics),
@@ -567,6 +572,7 @@ async fn main() {
         ollama_port_rx,
         Arc::clone(&runtime_config_cache),
         probe_policy,
+        Arc::clone(&residency_tracker),
     );
     let rapl_metrics          = start_rapl_harvester();
     let linux_thermal_metrics = start_linux_thermal_harvester();
@@ -981,7 +987,7 @@ async fn main() {
     let app = {
         let r = Router::new()
             .route("/api/health",         get(handle_health))         // diagnostic — always live
-            .route("/api/tags",           get(move |caps| handle_tags(tags_port_rx.clone(), caps)))
+            .route("/api/tags",           get(move |caps, residency| handle_tags(tags_port_rx.clone(), caps, residency)))
             .route("/api/events/recent",  get(handle_events_recent))
             .route("/api/metrics",        get(handle_metrics))       // SSE fallback (1 Hz)
             .route("/api/metrics/snapshot", get(handle_metrics_snapshot)) // one-shot JSON of latest frame
@@ -1047,6 +1053,7 @@ async fn main() {
          // the responses it sees and by /api/tags. Step 3 publishes it on
          // GET /v1/state and step 4 gates rules on it.
          .layer(axum::extract::Extension(Arc::clone(&ollama_caps)))
+         .layer(axum::extract::Extension(Arc::clone(&residency_tracker)))
          .layer(cors)
          // Outermost layer: every route, including the embedded dashboard and
          // the static fallback, passes the peer-address and token check before

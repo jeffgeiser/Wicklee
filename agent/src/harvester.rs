@@ -263,6 +263,7 @@ pub(crate) fn start_ollama_harvester(
     port_rx: process_discovery::PortRx,
     runtime_config_cache: crate::runtime_config::RuntimeConfigCache,
     probe_policy: ProbePolicy,
+    residency: crate::residency::SharedTracker,
 ) -> (Arc<Mutex<OllamaMetrics>>, Arc<std::sync::atomic::AtomicBool>, SharedCaps) {
     let shared = Arc::new(Mutex::new(OllamaMetrics::default()));
     let caps: SharedCaps = Arc::new(Mutex::new(crate::caps::RuntimeCaps::default()));
@@ -279,6 +280,7 @@ pub(crate) fn start_ollama_harvester(
     let probe_active_harvester = Arc::clone(&probe_active);
     let rc_cache = runtime_config_cache.clone();
     let caps_harvester = Arc::clone(&caps);
+    let residency_harvester = Arc::clone(&residency);
     crate::supervisor::supervise_until("ollama-harvester", move || {
         let shared_main = shared_main.clone();
         let proxy_main = proxy_main.clone();
@@ -286,6 +288,7 @@ pub(crate) fn start_ollama_harvester(
         let probe_active_harvester = probe_active_harvester.clone();
         let rc_cache = rc_cache.clone();
         let caps_main = Arc::clone(&caps_harvester);
+        let residency_main = Arc::clone(&residency_harvester);
         async move {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(3))
@@ -428,9 +431,14 @@ pub(crate) fn start_ollama_harvester(
                 // size/size_vram/details/expires_at and silently skipped the
                 // running `context_length` this response carries.
                 let mut ps = crate::ollama_client::PsResponse::default();
+                // Whether the read succeeded, which is not the same question as
+                // whether it listed any models. The residency tracker must not
+                // see an empty list that came from a timeout.
+                let mut ps_ok = false;
                 if let Ok(resp) = client.get(format!("{base}/api/ps")).send().await
                     && let Ok(parsed) = resp.json::<crate::ollama_client::PsResponse>().await {
                         ps = parsed;
+                        ps_ok = true;
                     }
                 if let Ok(mut c) = caps_main.lock() { c.observe_ps(&ps); }
                 let ps_models = &ps.models;
@@ -647,6 +655,9 @@ pub(crate) fn start_ollama_harvester(
                 // race here erased probe_caused_next_reset — turning the probe's
                 // own expires_at reset into a false 15s user-LIVE state — and
                 // erased last_probe_end, sticking the "probing" display).
+                // Who the residency tracker should credit this poll to. Set
+                // inside the lock below, where the live probe flag is readable.
+                let mut poll_actor = crate::residency::Actor::User;
                 if let Ok(mut g) = shared_main.lock() {
                     // Probe-task-owned: always take the live values.
                     m.last_probe_start        = g.last_probe_start;
@@ -662,21 +673,42 @@ pub(crate) fn start_ollama_harvester(
                     }
 
                     // Attribute the expires_at change against the LIVE flag.
+                    let probe_active =
+                        probe_active_harvester.load(std::sync::atomic::Ordering::Acquire);
                     m.probe_caused_next_reset = g.probe_caused_next_reset;
+                    let mut probe_caused_this_tick = false;
                     if expires_changed {
-                        let result = attribute_expires_change(
-                            probe_active_harvester.load(std::sync::atomic::Ordering::Acquire),
-                            g.probe_caused_next_reset,
-                        );
+                        let result =
+                            attribute_expires_change(probe_active, g.probe_caused_next_reset);
                         if result.consume_probe_flag {
                             m.probe_caused_next_reset = false;
+                            probe_caused_this_tick = true;
                         }
                         if result.is_user_request {
                             m.last_user_request_ts = Some(std::time::Instant::now());
                         }
                     }
+                    // The same attribution the metrics use, so the transition
+                    // log and the LIVE display can never disagree about whose
+                    // request a reset was.
+                    if probe_active || probe_caused_this_tick {
+                        poll_actor = crate::residency::Actor::Probe;
+                    }
 
                     *g = m;
+                }
+
+                // Residency tracker. Outside the metrics lock, so the two are
+                // never held at once, and only on a poll that actually read.
+                if ps_ok {
+                    let poll = crate::residency::Poll::from_ps(
+                        &ps,
+                        crate::residency::now_ms(),
+                        poll_actor,
+                    );
+                    if let Ok(mut tracker) = residency_main.lock() {
+                        tracker.observe(&poll);
+                    }
                 }
             }
         }

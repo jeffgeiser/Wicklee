@@ -589,6 +589,9 @@ pub(crate) async fn handle_events_recent(
 pub(crate) async fn handle_tags(
     port_rx: tokio::sync::watch::Receiver<Option<u16>>,
     axum::extract::Extension(caps): axum::extract::Extension<crate::caps::SharedCaps>,
+    axum::extract::Extension(residency): axum::extract::Extension<
+        crate::residency::SharedTracker,
+    >,
 ) -> Json<TagsResponse> {
     let port = match *port_rx.borrow() {
         Some(p) => p,
@@ -601,6 +604,19 @@ pub(crate) async fn handle_tags(
             .send().await.ok()?;
         let parsed: crate::ollama_client::TagsResponse = resp.json().await.ok()?;
         if let Ok(mut c) = caps.lock() { c.observe_tags(&parsed); }
+        // Installed file sizes for the residency tracker. /api/tags is read on
+        // demand rather than polled, so this is the only place they arrive, and
+        // it adds no request of its own.
+        let installed: Vec<(String, u64)> = parsed.models.iter()
+            .filter_map(|m| {
+                let name = m.name.clone().or_else(|| m.model.clone())?;
+                Some((name, m.size?))
+            })
+            .collect();
+        if !installed.is_empty()
+            && let Ok(mut t) = residency.lock() {
+                t.observe_installed_sizes(&installed, crate::residency::now_ms());
+            }
         Some(parsed.models.iter().filter_map(|m| {
             Some(ModelInfo {
                 name: m.name.clone().or_else(|| m.model.clone())?,
@@ -625,6 +641,9 @@ pub(crate) struct StoreHealth(pub bool);
 pub(crate) async fn handle_health(
     axum::extract::Extension(store_healthy): axum::extract::Extension<StoreHealth>,
     axum::extract::Extension(caps): axum::extract::Extension<crate::caps::SharedCaps>,
+    axum::extract::Extension(residency): axum::extract::Extension<
+        crate::residency::SharedTracker,
+    >,
 ) -> Json<serde_json::Value> {
     // Routes that depend on the DuckDB store. Kept in sync with the
     // store-gated block in the router builder below.
@@ -641,6 +660,7 @@ pub(crate) async fn handle_health(
         "store_healthy":  store_healthy.0,
         "routes_available": if store_healthy.0 { STORE_GATED_ROUTES } else { &[] },
         "routes_unavailable": if store_healthy.0 { &[] as &[&str] } else { STORE_GATED_ROUTES },
+        "residency": residency.lock().ok().map(|t| t.summary()),
         // Which Ollama response fields this install has actually been observed
         // to return. Step 0's rule: documented does not mean present, and
         // nothing here is inferred from the version string. `unverified` lists
