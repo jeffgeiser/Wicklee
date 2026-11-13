@@ -197,6 +197,14 @@ Requirements:
 - **Supervised.** The tracker task runs under `supervisor.rs` like the other background loops.
 - **One code path.** CLI, HTTP and MCP call the same functions and return the same JSON.
 
+### Tracker invariants
+
+These come out of step 2 and are requirements, not implementation notes. Each one prevents a class of false finding.
+
+- **A failed poll is not an empty poll.** The `/api/ps` response struct is left empty on error, so folding a failed read into the tracker would record an unload for every resident model on a single timeout. Those phantom transitions would then feed `eviction_churn` and `expiry_reload` and manufacture findings on a healthy host — the exact failure the "quiet on healthy systems" acceptance test exists to catch. The tracker must receive the read's success or failure, and a failed read updates nothing.
+- **One attribution path.** Whether a change was caused by Wicklee's probe or by a caller is decided in one place, shared with whatever the UI uses to show live activity. The transition log and the display cannot be allowed to disagree about whose request caused a reset.
+- **No cause variant without a producer.** `Cause` and any actor enum carry only variants something can currently emit. `Fingerprint` arrives in step 5 alongside the runs that produce it, for the same reason `Displacement::Confirmed` was deleted: a variant nothing can produce is dead code that invites a reader to assume a capability exists.
+
 * **Controller-neutral.** Wicklee publishes evidence-based state, constraints and findings. It gives advice about inference conditions, such as "a longer keep-alive may reduce repeated loading." It does not issue instructions over infrastructure, such as "route requests to node B." Agents, schedulers and infrastructure controllers decide and act. Any translation into another system's schema lives in that system or in a separate adapter, never in Wicklee's core types.
 
 ## Data structures
@@ -223,7 +231,8 @@ pub(crate) struct ModelState {
 pub(crate) enum TransitionKind {
     Loaded, Unloaded, ExpiryReset, PlacementChanged, ContextChanged,
 }
-pub(crate) enum Cause { User, Probe, Fingerprint, ExpiryReached, Unknown }
+// `Fingerprint` is added in step 5 with the runs that emit it, not before.
+pub(crate) enum Cause { User, Probe, ExpiryReached, Unknown }
 
 pub(crate) struct Transition {
     pub id: u64,
@@ -362,6 +371,16 @@ Three new DuckDB tables: `model_transitions`, `receipts`, `findings` (with `veri
 On musl builds there is no DuckDB. The tracker keeps the last 2,000 transitions in memory, and findings and receipts last only until restart. `inspect` says so in its output.
 
 The proxy's `TraceRow` gains `load_duration_ns`, `prompt_eval_count` and `prompt_eval_cached_count`. Each proxied request then also yields a `Receipt` with source `Proxy`.
+
+### Replacing `query_model_switches`
+
+The existing query infers swaps with a `LAG()` window over `metrics_raw.model`, which cannot see co-residency and cannot tell a probe from a caller. It moves to the transition log, keeping its current response envelope because `ModelsPage.tsx` depends on the exact shape.
+
+Three constraints on the derivation:
+
+- **A swap is not one-to-one.** V4 found that a load which does not fit clears *every* resident model, so one `Loaded` can pair with several `Unloaded`. Pairing each `Loaded` with only the `Unloaded` immediately before it picks one victim arbitrarily and silently discards the rest, which understates churn and misattributes the cause. The rule must be explicit: emit one row per (load, unload) pair so the count reflects what actually happened, and carry the co-resident set so a consumer can tell a one-for-one swap from a clear-out.
+- **`gap_ms` cannot be the real swap cost.** Deriving it from poll timestamps bounds its resolution at the 5-second poll interval, and an unload and load inside the same interval collapse to zero or to sub-poll noise. It is an upper bound on the observable gap, not a measured cost, and must be labelled as such. The real cost of a swap is `load_duration` from a receipt, which arrives in step 5. Calling a poll-derived figure the swap cost would be the kind of overstatement the evidence rules exist to prevent.
+- **It must still work without DuckDB.** There is no store on musl builds, so the route reads the tracker's in-memory log there and says that history is limited to the current process. It must not fail or return a silent empty result that looks like "no swaps happened."
 
 ## Evidence rules
 
