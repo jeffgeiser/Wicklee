@@ -841,9 +841,9 @@ Everything above concerns code. This section concerns running services, which ar
 | Railway: cloud backend | `wicklee-cloud`, axum, internet-facing | **Turn the service off,** separately from the code freeze. See below |
 | Postgres and TimescaleDB | Fleet telemetry, accounts, API keys, billing records | **Turn off with the backend.** Export first if any data is worth keeping |
 | Paddle | Checkout and HMAC-verified webhooks | **Remove.** Paid tiers are withdrawn |
-| Cloudflare Pages project `wicklee-demo` | Builds on every commit | **Review.** If it serves the dashboard demo it follows the dashboard; if it is a preview of the marketing site it stays |
+| Cloudflare Pages project `wicklee-demo` | Builds on every commit | **Remove.** Decided: it demonstrates the old strategy and the dashboard, both of which Phase 1 replaces. Removing it also removes 750 lines of demo code, listed below |
 | Root `Dockerfile`, `nginx.conf`, `entrypoint.sh`, `railway.toml` | The Railway frontend deployment path | **Remove with the Railway services.** Cloudflare Pages builds from the repository directly and uses none of them |
-| HF Space | Demo deployment in `deploy/hf-space/` | **Re-point or retire.** It demonstrates the embedded dashboard, which Phase 1 removes |
+| HF Space | Demo deployment in `deploy/hf-space/` | **Retire,** for the same reason as `wicklee-demo`: it hosts the same demo build. Flagged for the maintainer to confirm, since only `wicklee-demo` was decided explicitly |
 | Helm chart, docker-compose | `deploy/helm/`, `deploy/self-hosted/`, bundling their own Postgres | **Keep, rewrite later.** They deploy today's hosted architecture — frontend, cloud, Postgres — not the self-hostable coordinator the strategy describes. Rewriting them belongs with that coordinator, not with Phase 1 |
 | Grafana dashboard JSON | `deploy/grafana/wicklee-fleet.json` | Documentation, not infrastructure. Follows the fleet view |
 
@@ -856,6 +856,23 @@ Everything above concerns code. This section concerns running services, which ar
 **One consequence to accept deliberately.** Retiring the Railway services removes the hosted fleet view, so `cloud/`, `src/cloud/` and the agent's `cloud_push.rs` and `pairing.rs` become not merely frozen but unreachable — there is no deployment left for them to talk to. That is consistent with the decisions above, and it strengthens the case for deleting that code rather than freezing it, which the maintainer has said he is open to. Until then it stays in the repository as dead code, and the README and docs must not describe a fleet view that no longer runs.
 
 **The Pages build will need narrowing.** `src/` holds both the marketing site in `src/site/` and the dashboard views in `src/cloud/`. The Cloudflare build currently ships both, and the dashboard routes call `/api/*`, which has no backend on Pages. Once the hosted views are gone the build should cover `src/site/` only. This is a follow-up to the dashboard removal in step 4, not Phase 1 work.
+
+**Removing the demo takes code with it.** The demo is a real subsystem, not just a Pages project, so retiring it is a clean 750-line deletion rather than a configuration change:
+
+| Item | Size | Note |
+| --- | --- | --- |
+| `src/demo/demoApi.ts` | 414 lines | Installs a `fetch` shim that fakes the agent's API |
+| `src/demo/demoFleet.ts` | 209 lines | Synthetic fleet data |
+| `src/demo/demoEventSource.ts` | 36 lines | Fake event stream |
+| `src/demo/DemoBanner.tsx` | 40 lines | Banner component |
+| `src/demo/__tests__/demoApi.test.ts` | 51 lines | Its tests |
+| `src/index.tsx` | 3 call sites | Dynamic imports of `demoApi` and `DemoBanner`, and the banner in the tree |
+| `vite.config.ts` | 1 line | The `mode === 'demo'` branch choosing `dist-demo` |
+| `package.json` | 1 line | The `build:demo` script |
+| `docs/DEMO.md` | 94 lines | Describes the demo |
+| `deploy/hf-space/README.md` | 48 lines | Deploys the same build |
+
+Order: disconnect the Cloudflare Pages project and the HF Space first so nothing is serving a build that is about to disappear, then delete the code in one commit. Check `src/components/Sidebar.tsx`, `src/App.tsx`, `src/components/ModelsPage.tsx` and `src/contexts/FleetStreamContext.tsx` for demo-conditional branches before deleting, since those reference the demo without importing from `src/demo/`.
 
 None of the above is Phase 1 implementation work. It is the maintainer's to sequence, and it is recorded here so the infrastructure footprint is decided deliberately rather than left running by default.
 
