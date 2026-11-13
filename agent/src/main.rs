@@ -557,6 +557,8 @@ async fn main() {
     let runtime_config_cache = runtime_config::new_cache();
     // Keep a receiver for /api/tags before the harvester takes ownership.
     let tags_port_rx = ollama_port_rx.clone();
+    // /v1/state reads /api/tags on demand too, so it needs its own receiver.
+    let state_port_rx = ollama_port_rx.clone();
     let probe_policy = ProbeConfig::policy(config.probe.as_ref());
     if probe_policy.enabled {
         eprintln!("[probe] idle probes every {} min (loaded models only)", probe_policy.interval.as_secs() / 60);
@@ -1025,6 +1027,11 @@ async fn main() {
             // Not store-gated: it reads the residency log, which falls back to
             // the tracker's in-memory window when there is no DuckDB.
             .route("/api/model-switches", get(handle_model_switches))
+            // ── /v1: the Phase 1 surface. Covered by the same inbound auth
+            // middleware as /api and /mcp, applied as the outermost layer.
+            .route("/v1/state", get(move |caps, residency, node_id| {
+                handle_v1_state(state_port_rx.clone(), caps, residency, node_id)
+            }))
             .route("/api/events/recent",  get(handle_events_recent))
             .route("/api/metrics",        get(handle_metrics))       // SSE fallback (1 Hz)
             .route("/api/metrics/snapshot", get(handle_metrics_snapshot)) // one-shot JSON of latest frame

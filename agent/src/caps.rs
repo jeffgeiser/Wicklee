@@ -112,6 +112,32 @@ impl RuntimeCaps {
 }
 
 /// Shared handle, written by the harvester and read by the rules layer.
+impl RuntimeCaps {
+    /// The record as the HTTP surface reports it.
+    ///
+    /// One builder, so `/api/health` and `/v1/state` cannot describe the same
+    /// runtime differently. `unverified` is the list of fields this runtime has
+    /// not been seen to return, which is what `inspect` cites when it says what
+    /// it could not check.
+    pub(crate) fn report(&self) -> serde_json::Value {
+        serde_json::json!({
+            "runtime_version": self.version,
+            "verified": {
+                "ps_size_vram":                 self.ps_size_vram,
+                "ps_context_length":            self.ps_context_length,
+                "ps_expires_at":                self.ps_expires_at,
+                "ps_digest":                    self.ps_digest,
+                "gen_load_duration":            self.gen_load_duration,
+                "gen_prompt_eval_count":        self.gen_prompt_eval_count,
+                "gen_prompt_eval_cached_count": self.gen_prompt_eval_cached_count,
+                "tags_available":               self.tags_available,
+                "tags_details_context_length":  self.tags_details_context_length,
+            },
+            "unverified": self.missing(),
+        })
+    }
+}
+
 pub(crate) type SharedCaps = std::sync::Arc<std::sync::Mutex<RuntimeCaps>>;
 
 #[cfg(test)]

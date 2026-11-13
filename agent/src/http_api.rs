@@ -690,6 +690,82 @@ pub(crate) async fn handle_tags(
     Json(TagsResponse { models })
 }
 
+/// GET /v1/state — every installed model with residency, placement, context,
+/// expiry, and the capability record.
+///
+/// "Every installed" needs `/api/tags`, which is read on demand here rather
+/// than polled: the architecture adds no new poller, and an on-request read is
+/// not one. The read also feeds the tracker, so a model this host has never
+/// loaded still appears — with `residency: not_loaded` and an installed file
+/// size, and nothing else claimed about it.
+///
+/// When the runtime is unreachable the response still returns, saying so. A
+/// caller must be able to tell "nothing is loaded" from "I could not look".
+pub(crate) async fn handle_v1_state(
+    port_rx: tokio::sync::watch::Receiver<Option<u16>>,
+    axum::extract::Extension(caps): axum::extract::Extension<crate::caps::SharedCaps>,
+    axum::extract::Extension(residency): axum::extract::Extension<
+        crate::residency::SharedTracker,
+    >,
+    axum::extract::Extension(node_id_ext): axum::extract::Extension<NodeId>,
+) -> Json<serde_json::Value> {
+    let port = *port_rx.borrow();
+    let mut runtime_reachable = false;
+
+    if let Some(port) = port
+        && let Some(tags) = async {
+            let resp = local_http_client()
+                .get(format!("http://127.0.0.1:{port}/api/tags"))
+                .timeout(Duration::from_secs(3))
+                .send()
+                .await
+                .ok()?;
+            resp.json::<crate::ollama_client::TagsResponse>().await.ok()
+        }
+        .await
+    {
+        runtime_reachable = true;
+        if let Ok(mut c) = caps.lock() {
+            c.observe_tags(&tags);
+        }
+        let installed: Vec<(String, u64)> = tags
+            .models
+            .iter()
+            .filter_map(|m| {
+                let name = m.name.clone().or_else(|| m.model.clone())?;
+                Some((name, m.size?))
+            })
+            .collect();
+        if !installed.is_empty()
+            && let Ok(mut t) = residency.lock() {
+                t.observe_installed_sizes(&installed, crate::residency::now_ms());
+            }
+    }
+
+    let (models, tracker) = match residency.lock() {
+        Ok(t) => (
+            t.states().map(crate::residency::ModelState::report).collect(),
+            Some(t.summary()),
+        ),
+        Err(_) => (Vec::new(), None),
+    };
+
+    Json(serde_json::json!({
+        "node_id":       node_id_ext.0.as_str(),
+        "observed_at_ms": crate::residency::now_ms(),
+        "runtime": {
+            "name":      "ollama",
+            "port":      port,
+            // Whether this request could read the runtime, not whether a
+            // process was once discovered on that port.
+            "reachable": runtime_reachable,
+        },
+        "models":        models,
+        "capabilities":  caps.lock().ok().map(|c| c.report()),
+        "tracker":       tracker,
+    }))
+}
+
 /// Health snapshot — operator-facing diagnostic for "are the API routes I
 /// expect actually live?". Reports agent version, build target, DuckDB
 /// store state (healthy / disabled), and which feature surface that gates.
@@ -729,21 +805,7 @@ pub(crate) async fn handle_health(
         // nothing here is inferred from the version string. `unverified` lists
         // what no response has proved yet, which is what gates a rule from
         // running and what `inspect` reports as "not checked" from step 4.
-        "ollama_caps": caps.lock().ok().map(|c| serde_json::json!({
-            "runtime_version": c.version,
-            "verified": {
-                "ps_size_vram":                 c.ps_size_vram,
-                "ps_context_length":            c.ps_context_length,
-                "ps_expires_at":                c.ps_expires_at,
-                "ps_digest":                    c.ps_digest,
-                "gen_load_duration":            c.gen_load_duration,
-                "gen_prompt_eval_count":        c.gen_prompt_eval_count,
-                "gen_prompt_eval_cached_count": c.gen_prompt_eval_cached_count,
-                "tags_available":               c.tags_available,
-                "tags_details_context_length":  c.tags_details_context_length,
-            },
-            "unverified": c.missing(),
-        })),
+        "ollama_caps": caps.lock().ok().map(|c| c.report()),
         "store_failure_hint": if store_healthy.0 {
             serde_json::Value::Null
         } else {

@@ -78,6 +78,44 @@ impl ModelState {
             _ => false,
         }
     }
+
+    /// Bytes of the runtime footprint outside accelerator memory.
+    ///
+    /// `None` when either figure is missing, because a split cannot be
+    /// computed from one of them. Step 0 V1 matched this remainder against the
+    /// runner's own buffer accounting to within 0.03 MiB, so it is a real
+    /// measurement rather than a derived guess.
+    pub(crate) fn outside_accelerator_bytes(&self) -> Option<u64> {
+        let (total, vram) = (self.size_bytes?, self.size_vram_bytes?);
+        Some(total.saturating_sub(vram))
+    }
+
+    /// That share of the footprint, to one decimal place.
+    pub(crate) fn outside_accelerator_percent(&self) -> Option<f64> {
+        let total = self.size_bytes?;
+        if total == 0 {
+            return None;
+        }
+        let outside = self.outside_accelerator_bytes()?;
+        Some(((outside as f64 / total as f64) * 1_000.0).round() / 10.0)
+    }
+
+    /// The state as `/v1/state` reports it: the stored fields plus the
+    /// placement figures derived from them.
+    pub(crate) fn report(&self) -> serde_json::Value {
+        let mut v = serde_json::to_value(self).unwrap_or_else(|_| serde_json::json!({}));
+        if let Some(obj) = v.as_object_mut() {
+            obj.insert(
+                "outside_accelerator_bytes".into(),
+                serde_json::json!(self.outside_accelerator_bytes()),
+            );
+            obj.insert(
+                "outside_accelerator_percent".into(),
+                serde_json::json!(self.outside_accelerator_percent()),
+            );
+        }
+        v
+    }
 }
 
 /// What changed. One poll can produce several of these for one model: a request
@@ -1154,6 +1192,41 @@ mod tests {
         let batch = t.take_pending();
         assert_eq!(kinds(&batch), vec![TransitionKind::Unloaded]);
         assert!(t.take_pending().is_empty(), "a drained batch is not handed out twice");
+    }
+
+    #[test]
+    fn placement_is_reported_only_when_both_figures_are_known() {
+        let mut t = Tracker::new();
+        // The spec's example: 38% of the footprint outside the GPU.
+        t.observe(&poll(
+            T0,
+            Actor::User,
+            vec![pm("a", 10_000, 6_200, 4096, T0 + 300_000)],
+        ));
+        let s = t.states().next().unwrap();
+        assert_eq!(s.outside_accelerator_bytes(), Some(3_800));
+        assert_eq!(s.outside_accelerator_percent(), Some(38.0));
+
+        let report = s.report();
+        assert_eq!(report["outside_accelerator_percent"], 38.0);
+        assert_eq!(report["residency"], "loaded");
+        assert_eq!(report["context_length"], 4096);
+
+        // Unloaded: the sizes are gone, so there is no placement to report and
+        // none is invented.
+        t.observe(&poll(T0 + 5_000, Actor::User, vec![]));
+        let s = t.states().next().unwrap();
+        assert_eq!(s.outside_accelerator_bytes(), None);
+        assert_eq!(s.outside_accelerator_percent(), None);
+        assert!(s.report()["outside_accelerator_percent"].is_null());
+
+        // A model known only from /api/tags has a file size and nothing else.
+        let mut t = Tracker::new();
+        t.observe_installed_sizes(&[("never-loaded".to_string(), 3_389_983_735)], T0);
+        let s = t.states().next().unwrap();
+        assert_eq!(s.residency, Residency::NotLoaded);
+        assert_eq!(s.installed_size_bytes, Some(3_389_983_735));
+        assert_eq!(s.outside_accelerator_percent(), None);
     }
 
     #[test]
