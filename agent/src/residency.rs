@@ -36,7 +36,7 @@ const EXPIRY_EPSILON_MS: i64 = 1_000;
 const EXPIRY_SKEW_MS: i64 = 2_000;
 
 /// Whether the runtime currently holds this model.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Residency {
     Loaded,
@@ -49,7 +49,7 @@ pub(crate) enum Residency {
 /// fields that are no longer true cleared. `last_activity_ms` and
 /// `installed_size_bytes` survive an unload, because the rules that ask "was
 /// this reloaded soon after it expired?" need what was known before.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub(crate) struct ModelState {
     pub(crate) model: String,
     pub(crate) digest: Option<String>,
@@ -110,6 +110,51 @@ pub(crate) enum Cause {
     /// the future lands here, because eviction and a `keep_alive: 0` from some
     /// other caller look identical from outside.
     Unknown,
+}
+
+impl TransitionKind {
+    /// The name the store writes and reads. Kept identical to the Serialize
+    /// name by a test, so a column value and a JSON value never diverge.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Loaded => "loaded",
+            Self::Unloaded => "unloaded",
+            Self::ExpiryReset => "expiry_reset",
+            Self::PlacementChanged => "placement_changed",
+            Self::ContextChanged => "context_changed",
+        }
+    }
+
+    /// `None` for a name this binary does not know, which is how a row written
+    /// by a newer agent is skipped instead of guessed at.
+    pub(crate) fn from_name(s: &str) -> Option<Self> {
+        [
+            Self::Loaded,
+            Self::Unloaded,
+            Self::ExpiryReset,
+            Self::PlacementChanged,
+            Self::ContextChanged,
+        ]
+        .into_iter()
+        .find(|k| k.as_str() == s)
+    }
+}
+
+impl Cause {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Probe => "probe",
+            Self::ExpiryReached => "expiry_reached",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    pub(crate) fn from_name(s: &str) -> Option<Self> {
+        [Self::User, Self::Probe, Self::ExpiryReached, Self::Unknown]
+            .into_iter()
+            .find(|c| c.as_str() == s)
+    }
 }
 
 /// Who, of the parties the agent knows about, was driving the runtime during
@@ -203,6 +248,12 @@ impl Poll {
 pub(crate) struct Tracker {
     states: BTreeMap<String, ModelState>,
     history: VecDeque<Transition>,
+    /// Transitions waiting for the persister. Only filled once a persister has
+    /// announced itself: on a build with no store there is nothing to drain it,
+    /// and a queue sitting at its cap would report a loss that is not real.
+    pending: VecDeque<Transition>,
+    persisting: bool,
+    dropped_before_persist: u64,
     next_id: u64,
 }
 
@@ -353,8 +404,36 @@ impl Tracker {
                 self.history.pop_front();
             }
             self.history.push_back(t.clone());
+            if self.persisting {
+                // Bounded, so a store that stops accepting writes cannot grow
+                // this without limit. What falls off is counted and reported,
+                // never silently discarded.
+                if self.pending.len() == HISTORY_CAP {
+                    self.pending.pop_front();
+                    self.dropped_before_persist += 1;
+                }
+                self.pending.push_back(t.clone());
+            }
         }
         out
+    }
+
+    /// Start queueing transitions for a persister to drain.
+    ///
+    /// Called once, by the task that owns the store. Transitions recorded
+    /// before this are in the in-memory log only.
+    ///
+    /// A musl build has no DuckDB and so no persister: there the in-memory log
+    /// is the whole history, by design, and these two have no caller.
+    #[cfg_attr(target_env = "musl", allow(dead_code))]
+    pub(crate) fn enable_persistence(&mut self) {
+        self.persisting = true;
+    }
+
+    /// Hand over everything queued since the last call.
+    #[cfg_attr(target_env = "musl", allow(dead_code))]
+    pub(crate) fn take_pending(&mut self) -> Vec<Transition> {
+        self.pending.drain(..).collect()
     }
 
     /// Record the installed file sizes from an `/api/tags` read.
@@ -418,6 +497,8 @@ impl Tracker {
             "transitions_recorded":  self.recorded(),
             "transitions_kept":      self.history().count(),
             "history_cap":           HISTORY_CAP,
+            "transitions_pending":   self.pending.len(),
+            "transitions_dropped_before_persist": self.dropped_before_persist,
             "latest":                self.history.back(),
         })
     }
@@ -480,6 +561,90 @@ impl Tracker {
         state.observed_at_ms = ts;
         Some(state.clone())
     }
+}
+
+/// How long before a load an unload may be and still read as part of the same
+/// swap. The same 10 s window the `eviction_churn` rule uses.
+const SWAP_WINDOW_MS: i64 = 10_000;
+
+/// Shape a window of transitions into the `/api/model-switches` envelope.
+///
+/// Pure, and the only derivation: the persisted path and the in-memory path
+/// produce identical output from identical rows. `transitions` must be in
+/// ascending `ts_ms` order, which both callers guarantee.
+///
+/// **A swap is not one-to-one.** Step 0 V4 found that a load which does not fit
+/// clears *every* resident model, so one load can pair with several unloads.
+/// Pairing each load with only the unload immediately before it would pick one
+/// victim arbitrarily and discard the rest, understating churn and
+/// misattributing the cause. One row per (load, unload) pair, each carrying
+/// what else was resident, so a consumer can tell a one-for-one swap from a
+/// clear-out.
+///
+/// **`gap_ms` is not the cost of a swap.** It is the distance between two poll
+/// observations, so the 5-second poll interval bounds its resolution and an
+/// unload and load inside one interval collapse to zero. It is an upper bound
+/// on the gap that was observable, and the envelope says so. The real cost of a
+/// swap is `load_duration` from a receipt, which arrives in step 5.
+pub(crate) fn derive_switches(
+    transitions: &[Transition],
+    hours_queried: i64,
+    process_limited: bool,
+) -> serde_json::Value {
+    /// The row cap the previous query applied, kept so the response size does
+    /// not change shape under churn.
+    const MAX_ROWS: usize = 100;
+
+    let mut swaps: Vec<serde_json::Value> = Vec::new();
+    let mut total_gap_ms: i64 = 0;
+    let mut window_start = 0usize;
+
+    for (i, load) in transitions.iter().enumerate() {
+        if load.kind != TransitionKind::Loaded {
+            continue;
+        }
+        // Ascending order makes this monotonic: a later load never needs an
+        // entry an earlier one has already walked past.
+        while window_start < i && load.ts_ms - transitions[window_start].ts_ms > SWAP_WINDOW_MS {
+            window_start += 1;
+        }
+        for unload in transitions[window_start..]
+            .iter()
+            .take_while(|t| t.ts_ms <= load.ts_ms)
+            .filter(|t| t.kind == TransitionKind::Unloaded && t.model != load.model)
+        {
+            let gap_ms = load.ts_ms - unload.ts_ms;
+            total_gap_ms += gap_ms;
+            swaps.push(serde_json::json!({
+                "ts_ms":       load.ts_ms,
+                "from_model":  unload.model,
+                "to_model":    load.model,
+                "gap_ms":      gap_ms,
+                "cause":       unload.cause,
+                "co_resident": load.co_resident,
+            }));
+        }
+    }
+
+    // Newest first, as the query this replaces returned them.
+    swaps.sort_by_key(|s| std::cmp::Reverse(s["ts_ms"].as_i64().unwrap_or(0)));
+    let total_swaps = swaps.len();
+    swaps.truncate(MAX_ROWS);
+
+    serde_json::json!({
+        "swaps":             swaps,
+        "total_swaps":       total_swaps,
+        "total_gap_ms":      total_gap_ms,
+        "total_gap_minutes": (total_gap_ms as f64 / 60_000.0 * 10.0).round() / 10.0,
+        "hours_queried":     hours_queried,
+        "gap_is_upper_bound": true,
+        "history_scope":     if process_limited { "process" } else { "persisted" },
+        "history_note":      if process_limited {
+            "No local store on this build, so history covers only the current agent process."
+        } else {
+            "Derived from the persisted transition log."
+        },
+    })
 }
 
 /// The tracker as the rest of the agent holds it.
@@ -856,6 +1021,139 @@ mod tests {
         assert_eq!(m.size_bytes, Some(3_151_000_000));
         assert_eq!(m.context_length, Some(4096));
         assert_eq!(m.expires_at_ms, rfc3339_to_ms("2026-11-13T09:26:44.305831-05:00"));
+    }
+
+    fn tr(id: u64, ts: i64, model: &str, kind: TransitionKind, co: &[&str]) -> Transition {
+        Transition {
+            id,
+            ts_ms: ts,
+            model: model.to_string(),
+            kind,
+            cause: Cause::User,
+            before: None,
+            after: None,
+            co_resident: co.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn column_names_and_json_names_cannot_diverge() {
+        for k in [
+            TransitionKind::Loaded,
+            TransitionKind::Unloaded,
+            TransitionKind::ExpiryReset,
+            TransitionKind::PlacementChanged,
+            TransitionKind::ContextChanged,
+        ] {
+            assert_eq!(serde_json::to_value(k).unwrap(), serde_json::json!(k.as_str()));
+            assert_eq!(TransitionKind::from_name(k.as_str()), Some(k));
+        }
+        for c in [Cause::User, Cause::Probe, Cause::ExpiryReached, Cause::Unknown] {
+            assert_eq!(serde_json::to_value(c).unwrap(), serde_json::json!(c.as_str()));
+            assert_eq!(Cause::from_name(c.as_str()), Some(c));
+        }
+        // A name from a newer agent is skipped, not guessed at.
+        assert_eq!(TransitionKind::from_name("teleported"), None);
+        assert_eq!(Cause::from_name("vibes"), None);
+    }
+
+    #[test]
+    fn a_clear_out_is_every_pair_and_not_one_arbitrary_victim() {
+        // Step 0 V4: a load that does not fit cleared every resident model.
+        // Three unloads and one load in the same poll is three swap rows, not
+        // one — pairing only the nearest unload would hide two thirds of it.
+        let rows = vec![
+            tr(1, T0, "a", TransitionKind::Unloaded, &[]),
+            tr(2, T0, "b", TransitionKind::Unloaded, &[]),
+            tr(3, T0, "c", TransitionKind::Unloaded, &[]),
+            tr(4, T0, "big", TransitionKind::Loaded, &[]),
+        ];
+        let out = derive_switches(&rows, 24, false);
+        assert_eq!(out["total_swaps"], 3);
+        let from: Vec<&str> = out["swaps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["from_model"].as_str().unwrap())
+            .collect();
+        assert_eq!(from, vec!["a", "b", "c"]);
+        for s in out["swaps"].as_array().unwrap() {
+            assert_eq!(s["to_model"], "big");
+            assert_eq!(s["gap_ms"], 0);
+        }
+    }
+
+    #[test]
+    fn a_load_with_nothing_evicted_is_not_a_swap() {
+        let rows = vec![tr(1, T0, "a", TransitionKind::Loaded, &[])];
+        let out = derive_switches(&rows, 24, false);
+        assert_eq!(out["total_swaps"], 0);
+        assert_eq!(out["total_gap_ms"], 0);
+        // The envelope the frontend reads is present even when empty.
+        for key in [
+            "swaps",
+            "total_swaps",
+            "total_gap_ms",
+            "total_gap_minutes",
+            "hours_queried",
+        ] {
+            assert!(out.get(key).is_some(), "{key} missing from the envelope");
+        }
+    }
+
+    #[test]
+    fn an_unload_outside_the_window_is_not_part_of_the_swap() {
+        let rows = vec![
+            tr(1, T0, "old", TransitionKind::Unloaded, &[]),
+            tr(2, T0 + SWAP_WINDOW_MS + 1, "new", TransitionKind::Loaded, &[]),
+        ];
+        assert_eq!(derive_switches(&rows, 24, false)["total_swaps"], 0);
+
+        let rows = vec![
+            tr(1, T0, "old", TransitionKind::Unloaded, &[]),
+            tr(2, T0 + SWAP_WINDOW_MS, "new", TransitionKind::Loaded, &[]),
+        ];
+        let out = derive_switches(&rows, 24, false);
+        assert_eq!(out["total_swaps"], 1);
+        assert_eq!(out["gap_is_upper_bound"], true);
+        assert_eq!(out["swaps"][0]["gap_ms"], SWAP_WINDOW_MS);
+    }
+
+    #[test]
+    fn a_reload_of_the_same_model_is_not_a_swap_with_itself() {
+        let rows = vec![
+            tr(1, T0, "a", TransitionKind::Unloaded, &[]),
+            tr(2, T0 + 2_000, "a", TransitionKind::Loaded, &[]),
+        ];
+        assert_eq!(derive_switches(&rows, 24, false)["total_swaps"], 0);
+    }
+
+    #[test]
+    fn the_scope_says_whether_history_outlives_the_process() {
+        let rows = vec![tr(1, T0, "a", TransitionKind::Loaded, &[])];
+        assert_eq!(derive_switches(&rows, 24, false)["history_scope"], "persisted");
+        let limited = derive_switches(&rows, 24, true);
+        assert_eq!(limited["history_scope"], "process");
+        assert!(
+            limited["history_note"].as_str().unwrap().contains("current agent process"),
+            "a reader must not mistake a short window for a quiet host"
+        );
+    }
+
+    #[test]
+    fn the_pending_queue_only_fills_once_a_persister_exists() {
+        let mut t = Tracker::new();
+        t.observe(&poll(T0, Actor::User, vec![pm("a", 100, 100, 4096, T0 + 300_000)]));
+        assert!(
+            t.take_pending().is_empty(),
+            "with no store to drain it, a queue at its cap would report a loss that is not real"
+        );
+
+        t.enable_persistence();
+        t.observe(&poll(T0 + 5_000, Actor::User, vec![]));
+        let batch = t.take_pending();
+        assert_eq!(kinds(&batch), vec![TransitionKind::Unloaded]);
+        assert!(t.take_pending().is_empty(), "a drained batch is not handed out twice");
     }
 
     #[test]

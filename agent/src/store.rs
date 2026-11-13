@@ -532,6 +532,29 @@ impl Store {
                 fetched_at  BIGINT  NOT NULL,
                 PRIMARY KEY (model_id, filename)
             );
+
+            -- Residency transition log: one row per observed change in what the
+            -- runtime holds. Written by the residency tracker, which is fed by
+            -- the harvester's existing /api/ps poll -- no new poller.
+            --
+            -- Append-only, and deliberately without a primary key. `id` is
+            -- unique within one agent process and restarts at 1, so it is not a
+            -- durable key; the durable identity of a row is
+            -- (node_id, ts_ms, model, kind). before_state and after_state hold
+            -- the serialised ModelState, so a reader can reconstruct the whole
+            -- transition without this schema having to grow a column for every
+            -- field a later rule wants.
+            CREATE TABLE IF NOT EXISTS model_transitions (
+                id           BIGINT  NOT NULL,
+                ts_ms        BIGINT  NOT NULL,
+                node_id      TEXT    NOT NULL,
+                model        TEXT    NOT NULL,
+                kind         TEXT    NOT NULL,
+                cause        TEXT    NOT NULL,
+                co_resident  TEXT    NOT NULL DEFAULT '',
+                before_state TEXT,
+                after_state  TEXT
+            );
         ")?;
 
         // ── Additive column migrations (tolerant) ────────────────────────────
@@ -649,6 +672,11 @@ impl Store {
         let min_cutoff   = now_ms - 30_i64 * 86_400_000_i64;  // 30 d
         let hr_cutoff    = now_ms - 90_i64 * 86_400_000_i64;  // 90 d
         let event_cutoff = now_ms - 7_i64 * 86_400_000_i64;   // 7 d
+        // Transitions are the evidence the diagnostic rules cite. The longest
+        // window any Phase 1 rule looks back over is a day (`expiry_reload`
+        // counts reloads per day), so a week leaves room for a rule to be
+        // re-evaluated over history without keeping it indefinitely.
+        let transition_cutoff = now_ms - 7_i64 * 86_400_000_i64;
 
         let conn = self.0.lock().unwrap();
 
@@ -745,6 +773,7 @@ impl Store {
             DELETE FROM metrics_1hr  WHERE ts_ms < {hr_cutoff};
             DELETE FROM inference_traces WHERE ts_ms < {raw_cutoff};
             DELETE FROM node_events WHERE ts_ms < {event_cutoff};
+            DELETE FROM model_transitions WHERE ts_ms < {transition_cutoff};
         "))?;
 
         // Fold the WAL into the main file after the hourly prune so deleted
@@ -1714,57 +1743,115 @@ impl Store {
     /// Model switching cost — detects model transitions and computes swap overhead.
     /// Returns: each swap event with from_model, to_model, timestamp, and estimated
     /// idle time (gap between last tok/s > 0 on old model and first tok/s > 0 on new model).
-    pub fn query_model_switches(
+    /// Persist a batch of residency transitions.
+    ///
+    /// One transaction for the batch, for the same reason `write_catalog` uses
+    /// one: per-row autocommit made every INSERT its own WAL commit while
+    /// holding the store mutex.
+    pub fn write_transitions(
         &self,
         node_id: &str,
-        hours: i64,
-    ) -> Result<serde_json::Value, duckdb::Error> {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
-        let from = now - hours * 3600 * 1000;
-        let conn = self.0.lock().unwrap();
-
-        // Use LAG() window function to detect model transitions
-        let mut stmt = conn.prepare(
-            "WITH transitions AS (
-                SELECT ts_ms, model,
-                       LAG(model) OVER (ORDER BY ts_ms) AS prev_model,
-                       LAG(ts_ms) OVER (ORDER BY ts_ms) AS prev_ts
-                FROM metrics_raw
-                WHERE node_id = ? AND ts_ms >= ? AND model IS NOT NULL AND model != ''
-            )
-            SELECT ts_ms, prev_model, model, ts_ms - prev_ts AS gap_ms
-            FROM transitions
-            WHERE prev_model IS NOT NULL AND model != prev_model
-            ORDER BY ts_ms DESC
-            LIMIT 100"
-        )?;
-        let mut rows = stmt.query(params![node_id, from])?;
-        let mut swaps = Vec::new();
-        let mut total_gap_ms: i64 = 0;
-
-        while let Some(row) = rows.next()? {
-            let ts: i64 = row.get(0)?;
-            let from_model: Option<String> = row.get(1)?;
-            let to_model: Option<String> = row.get(2)?;
-            let gap_ms: Option<i64> = row.get(3)?;
-            let gap = gap_ms.unwrap_or(0);
-            total_gap_ms += gap;
-            swaps.push(serde_json::json!({
-                "ts_ms": ts,
-                "from_model": from_model,
-                "to_model": to_model,
-                "gap_ms": gap,
-            }));
+        transitions: &[crate::residency::Transition],
+    ) -> Result<(), duckdb::Error> {
+        if transitions.is_empty() {
+            return Ok(());
         }
+        let mut conn = self.0.lock().unwrap();
+        let tx = conn.transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO model_transitions
+                   (id, ts_ms, node_id, model, kind, cause, co_resident,
+                    before_state, after_state)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )?;
+            for t in transitions {
+                // Model names cannot contain a comma, so joining is lossless
+                // and avoids a nested-type dependency in the schema.
+                let co_resident = t.co_resident.join(",");
+                let before = t
+                    .before
+                    .as_ref()
+                    .and_then(|s| serde_json::to_string(s).ok());
+                let after = t
+                    .after
+                    .as_ref()
+                    .and_then(|s| serde_json::to_string(s).ok());
+                stmt.execute(params![
+                    t.id as i64,
+                    t.ts_ms,
+                    node_id,
+                    t.model.as_str(),
+                    t.kind.as_str(),
+                    t.cause.as_str(),
+                    co_resident.as_str(),
+                    before,
+                    after,
+                ])?;
+            }
+        }
+        tx.commit()
+    }
 
-        Ok(serde_json::json!({
-            "swaps": swaps,
-            "total_swaps": swaps.len(),
-            "total_gap_ms": total_gap_ms,
-            "total_gap_minutes": (total_gap_ms as f64 / 60_000.0 * 10.0).round() / 10.0,
-            "hours_queried": hours,
-        }))
+    /// Read back the transition log from `from_ms` onward, oldest first.
+    ///
+    /// Ascending order is a precondition of
+    /// [`derive_switches`](crate::residency::derive_switches), and ties are
+    /// broken by `id` so the order within one poll survives the round trip.
+    /// A row whose `kind` or `cause` this binary does not recognise is skipped
+    /// rather than guessed at — that is what a log written by a newer agent
+    /// looks like.
+    pub fn query_transitions(
+        &self,
+        node_id: &str,
+        from_ms: i64,
+    ) -> Result<Vec<crate::residency::Transition>, duckdb::Error> {
+        const MAX_ROWS: i64 = 50_000;
+        let conn = self.0.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, ts_ms, model, kind, cause, co_resident, before_state, after_state
+             FROM model_transitions
+             WHERE node_id = ? AND ts_ms >= ?
+             ORDER BY ts_ms ASC, id ASC
+             LIMIT ?",
+        )?;
+        let mut rows = stmt.query(params![node_id, from_ms, MAX_ROWS])?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            let id: i64 = row.get(0)?;
+            let ts_ms: i64 = row.get(1)?;
+            let model: String = row.get(2)?;
+            let kind: String = row.get(3)?;
+            let cause: String = row.get(4)?;
+            let co_resident: String = row.get(5)?;
+            let before: Option<String> = row.get(6)?;
+            let after: Option<String> = row.get(7)?;
+            let (Some(kind), Some(cause)) = (
+                crate::residency::TransitionKind::from_name(&kind),
+                crate::residency::Cause::from_name(&cause),
+            ) else {
+                continue;
+            };
+            out.push(crate::residency::Transition {
+                id: id.max(0) as u64,
+                ts_ms,
+                model,
+                kind,
+                cause,
+                before: before
+                    .and_then(|j| serde_json::from_str(&j).ok())
+                    .map(Box::new),
+                after: after
+                    .and_then(|j| serde_json::from_str(&j).ok())
+                    .map(Box::new),
+                co_resident: if co_resident.is_empty() {
+                    Vec::new()
+                } else {
+                    co_resident.split(',').map(str::to_string).collect()
+                },
+            });
+        }
+        Ok(out)
     }
 
     // ── Model Catalog (HuggingFace GGUF cache) ─────────────────────────────

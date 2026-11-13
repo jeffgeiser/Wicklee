@@ -812,6 +812,40 @@ async fn main() {
                     });
                 }
 
+                // Residency transition writer — drains the tracker's queue and
+                // persists it. The tracker is fed by the harvester's existing
+                // /api/ps poll; this only moves rows to disk, and until it
+                // announces itself the tracker queues nothing.
+                {
+                    let store_clone = s.clone();
+                    let tracker = Arc::clone(&residency_tracker);
+                    let node_id_clone = config.node_id.clone();
+                    if let Ok(mut t) = tracker.lock() {
+                        t.enable_persistence();
+                    }
+                    tokio::spawn(async move {
+                        let mut interval = tokio::time::interval(Duration::from_secs(2));
+                        loop {
+                            interval.tick().await;
+                            let batch = match tracker.lock() {
+                                Ok(mut t) => t.take_pending(),
+                                Err(_) => continue,
+                            };
+                            if batch.is_empty() {
+                                continue;
+                            }
+                            let st = store_clone.clone();
+                            let nid = node_id_clone.clone();
+                            let _ = tokio::task::spawn_blocking(move || {
+                                if let Err(e) = st.write_transitions(&nid, &batch) {
+                                    eprintln!("[residency] transition write failed: {e}");
+                                }
+                            })
+                            .await;
+                        }
+                    });
+                }
+
                 // Model baseline updater — watches for model changes and queries
                 // DuckDB for per-model Normal-thermal baseline (median tok/s, watts).
                 {
@@ -988,6 +1022,9 @@ async fn main() {
         let r = Router::new()
             .route("/api/health",         get(handle_health))         // diagnostic — always live
             .route("/api/tags",           get(move |caps, residency| handle_tags(tags_port_rx.clone(), caps, residency)))
+            // Not store-gated: it reads the residency log, which falls back to
+            // the tracker's in-memory window when there is no DuckDB.
+            .route("/api/model-switches", get(handle_model_switches))
             .route("/api/events/recent",  get(handle_events_recent))
             .route("/api/metrics",        get(handle_metrics))       // SSE fallback (1 Hz)
             .route("/api/metrics/snapshot", get(handle_metrics_snapshot)) // one-shot JSON of latest frame
@@ -1021,7 +1058,6 @@ async fn main() {
              .route("/api/cost-by-model",       get(handle_cost_by_model))
              .route("/api/explain-slowdown",    get(handle_explain_slowdown))
              .route("/api/model-comparison",    get(handle_model_comparison))
-             .route("/api/model-switches",     get(handle_model_switches))
              .route("/api/model-candidates",   get(handle_model_candidates))
              .layer(axum::extract::Extension(st.clone()))
              .layer(axum::extract::Extension(Arc::clone(&observation_cache)))

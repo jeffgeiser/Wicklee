@@ -540,21 +540,84 @@ pub(crate) async fn handle_model_comparison(
     }
 }
 
-/// GET /api/model-switches?hours=24 — model swap frequency and overhead.
+/// GET /api/model-switches?hours=24 — model swaps derived from the residency
+/// transition log.
+///
+/// This replaces a `LAG()` window over `metrics_raw.model`, which could only
+/// see one active model at a time and so could not tell a one-for-one swap from
+/// a clear-out, nor a probe from a caller.
+///
+/// It works with or without DuckDB. With the store it reads the persisted log;
+/// without one — a musl build, or a store that failed to open — it reads the
+/// tracker's in-memory window and says history is limited to this process,
+/// rather than returning an empty result that reads as "no swaps happened".
 #[cfg(not(target_env = "musl"))]
 pub(crate) async fn handle_model_switches(
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
-    axum::extract::Extension(store): axum::extract::Extension<store::Store>,
+    axum::extract::Extension(residency): axum::extract::Extension<
+        crate::residency::SharedTracker,
+    >,
     axum::extract::Extension(node_id_ext): axum::extract::Extension<NodeId>,
-) -> impl IntoResponse {
-    let hours: i64 = params.get("hours").and_then(|v| v.parse().ok()).unwrap_or(24).min(720);
-    let node_id = node_id_ext.0.as_str().to_owned();
-    let result = tokio::task::spawn_blocking(move || store.query_model_switches(&node_id, hours)).await;
-    match result {
-        Ok(Ok(data)) => Json(data).into_response(),
-        Ok(Err(e)) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
-        Err(e) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+    store: Option<axum::extract::Extension<store::Store>>,
+) -> axum::response::Response {
+    let hours = switch_window_hours(&params);
+    let from_ms = crate::residency::now_ms() - hours * 3_600_000;
+    if let Some(axum::extract::Extension(st)) = store {
+        let node_id = node_id_ext.0.as_str().to_owned();
+        let rows =
+            tokio::task::spawn_blocking(move || st.query_transitions(&node_id, from_ms)).await;
+        return match rows {
+            Ok(Ok(rows)) => {
+                Json(crate::residency::derive_switches(&rows, hours, false)).into_response()
+            }
+            Ok(Err(e)) => (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response(),
+            Err(e) => (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response(),
+        };
     }
+    switches_from_memory(&residency, hours, from_ms)
+}
+
+/// The musl build has no store module at all, so it has no store to ask.
+#[cfg(target_env = "musl")]
+pub(crate) async fn handle_model_switches(
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+    axum::extract::Extension(residency): axum::extract::Extension<
+        crate::residency::SharedTracker,
+    >,
+) -> axum::response::Response {
+    let hours = switch_window_hours(&params);
+    let from_ms = crate::residency::now_ms() - hours * 3_600_000;
+    switches_from_memory(&residency, hours, from_ms)
+}
+
+fn switch_window_hours(params: &std::collections::HashMap<String, String>) -> i64 {
+    params
+        .get("hours")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(24)
+        .min(720)
+}
+
+/// Derive from the tracker's own capped window, for a build or a run with no
+/// store. Same derivation as the persisted path, so the two cannot disagree.
+fn switches_from_memory(
+    residency: &crate::residency::SharedTracker,
+    hours: i64,
+    from_ms: i64,
+) -> axum::response::Response {
+    let rows: Vec<crate::residency::Transition> = match residency.lock() {
+        Ok(t) => t.history().filter(|x| x.ts_ms >= from_ms).cloned().collect(),
+        Err(_) => Vec::new(),
+    };
+    Json(crate::residency::derive_switches(&rows, hours, true)).into_response()
 }
 
 /// Returns the last 20 lifecycle events from the recent_events_log ring buffer,
@@ -651,7 +714,7 @@ pub(crate) async fn handle_health(
         "/api/history", "/api/traces", "/api/events/history", "/api/export",
         "/api/insights/dismiss", "/api/insights/dismissed", "/api/observations",
         "/api/profile", "/api/sla", "/api/cost-by-model", "/api/explain-slowdown",
-        "/api/model-comparison", "/api/model-switches", "/api/model-candidates",
+        "/api/model-comparison", "/api/model-candidates",
     ];
     Json(serde_json::json!({
         "ok":             true,
