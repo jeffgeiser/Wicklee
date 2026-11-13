@@ -164,6 +164,50 @@ where
     })
 }
 
+/// Whether `--no-cloud` was passed: run the agent with every outbound fleet
+/// request suppressed for the life of the process.
+///
+/// This exists so a second agent can be started on a paired host — to exercise
+/// a route, reproduce a bug, check a build — without that agent pushing
+/// telemetry under the installed node's id, downloading and installing an
+/// update over it, or writing pairing fields into the config file the
+/// installed service reads. None of those are prevented by moving ports:
+/// `PORT` isolates the listener, not the identity.
+fn cloud_is_disabled<I, S>(args: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    args.into_iter().any(|a| a.as_ref() == "--no-cloud")
+}
+
+/// A flag `--no-cloud` cannot be combined with, and the reason.
+///
+/// `--no-cloud` governs *this* process. Combined with a flag that acts on the
+/// installed service, or that is itself a request to the fleet, it would be
+/// silently ignored — and a flag that appears to have been accepted while
+/// doing nothing is worse than no flag, because the whole point of this one is
+/// to be able to trust that nothing left the machine.
+fn no_cloud_conflict<I, S>(args: I) -> Option<(&'static str, &'static str)>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    const CONFLICTS: &[(&str, &str)] = &[
+        ("--pair", "pairing is itself a request to the fleet"),
+        ("--install-service", "the installed service does not inherit it"),
+        ("--uninstall-service", "the installed service does not inherit it"),
+    ];
+    let given: Vec<String> = args.into_iter().map(|a| a.as_ref().to_string()).collect();
+    if !cloud_is_disabled(&given) {
+        return None;
+    }
+    CONFLICTS
+        .iter()
+        .find(|(flag, _)| given.iter().any(|a| a == flag))
+        .copied()
+}
+
 #[tokio::main]
 async fn main() {
     // The version line is printed on every invocation — daemon startup and
@@ -200,6 +244,22 @@ async fn main() {
             eprintln!("{msg}");
             std::process::exit(2);
         }
+    }
+
+    // ── --no-cloud ────────────────────────────────────────────────────────────
+    // Read before the config, like the subcommands above, so a refusal costs
+    // nothing and writes nothing.
+    if let Some((flag, why)) = no_cloud_conflict(std::env::args()) {
+        eprintln!("[fatal] --no-cloud cannot be combined with {flag}: {why}.");
+        std::process::exit(2);
+    }
+    let no_cloud = cloud_is_disabled(std::env::args());
+    let pair_on_start = std::env::args().any(|a| a == "--pair");
+    if no_cloud {
+        eprintln!(
+            "[no-cloud] fleet disabled for this process: no telemetry push, no \
+             self-update, pairing routes refuse. Local routes are unaffected."
+        );
     }
 
     let config = load_or_create_config();
@@ -366,7 +426,6 @@ async fn main() {
     }
     let auth_policy = Arc::new(auth_policy);
 
-    let pair_on_start = std::env::args().any(|a| a == "--pair");
     if pair_on_start {
         let code = generate_code();
         let expires_at = now_ms() + 300_000;
@@ -400,7 +459,14 @@ async fn main() {
     }
 
     // Run diagnostics first so the output appears before the banner
-    diagnostics::run_startup_diagnostics(&config.node_id, if pair_on_start { "pending" } else { initial_status }, port, &config).await;
+    let diag_status = match (pair_on_start, no_cloud) {
+        (true, _) => "pending".to_string(),
+        // The config still says paired, and that is worth seeing — but on its
+        // own "connected" would be read as "this agent is feeding the fleet".
+        (false, true) => format!("{initial_status} · no-cloud"),
+        (false, false) => initial_status.to_string(),
+    };
+    diagnostics::run_startup_diagnostics(&config.node_id, &diag_status, port, &config).await;
 
     // ── Privilege warning (macOS only) ────────────────────────────────────────
     // powermetrics requires root to expose the SoC, GPU, and ANE power rails.
@@ -732,15 +798,23 @@ async fn main() {
         Arc::new(Mutex::new(DeploymentProfile::from_config(config.deployment_profile.as_deref())));
 
     // Start cloud telemetry push loop (2 s cadence, gated on session_token).
-    #[cfg(not(target_env = "musl"))]
-    cloud_push::start_cloud_push(
-        Arc::clone(&pairing_state),
-        broadcast_tx.clone(),
-        Arc::clone(&observation_cache),
-        Arc::clone(&deployment_profile),
-    );
-    #[cfg(target_env = "musl")]
-    cloud_push::start_cloud_push(Arc::clone(&pairing_state), broadcast_tx.clone(), Arc::clone(&deployment_profile));
+    // Not started under --no-cloud: the loop reads the session_token restored
+    // from the shared config, so a second agent on a paired host would
+    // otherwise interleave its own frames with the installed service's under
+    // one node id, and the fleet has no way to tell the two writers apart.
+    if no_cloud {
+        eprintln!("[no-cloud] telemetry push not started");
+    } else {
+        #[cfg(not(target_env = "musl"))]
+        cloud_push::start_cloud_push(
+            Arc::clone(&pairing_state),
+            broadcast_tx.clone(),
+            Arc::clone(&observation_cache),
+            Arc::clone(&deployment_profile),
+        );
+        #[cfg(target_env = "musl")]
+        cloud_push::start_cloud_push(Arc::clone(&pairing_state), broadcast_tx.clone(), Arc::clone(&deployment_profile));
+    }
 
     // ── Local metrics store (DuckDB) ──────────────────────────────────────────
     // Opens ~/.wicklee/metrics.db and subscribes to the broadcast channel.
@@ -1062,10 +1136,9 @@ async fn main() {
             .route("/api/metrics",        get(handle_metrics))       // SSE fallback (1 Hz)
             .route("/api/metrics/snapshot", get(handle_metrics_snapshot)) // one-shot JSON of latest frame
             .route("/ws",                 get(handle_ws))             // WebSocket primary (1 Hz)
+            // /api/pair/status stays live under --no-cloud: it is local,
+            // read-only, and is how a caller tells the two agents apart.
             .route("/api/pair/status",    get(handle_pair_status))
-            .route("/api/pair/generate",  post(handle_pair_generate))
-            .route("/api/pair/claim",     post(handle_pair_claim))
-            .route("/api/pair/disconnect",post(handle_pair_disconnect))
             // MCP (Model Context Protocol) — JSON-RPC 2.0 for AI agents
             .route("/mcp",                      post(handle_mcp))
             .route("/.well-known/mcp.json",     get(handle_mcp_manifest))
@@ -1073,6 +1146,20 @@ async fn main() {
             // available regardless of store health.
             .route("/api/runtime-config",       get(handle_runtime_config))
             .route("/api/deployment-profile",   get(handle_get_deployment_profile).put(handle_put_deployment_profile));
+
+        // The three pairing writes either reach the fleet or rewrite the
+        // config file the installed service reads. Under --no-cloud they are
+        // replaced by a handler that says so, rather than dropped: see
+        // handle_pair_disabled on why a 404 here would mislead.
+        let r = if no_cloud {
+            r.route("/api/pair/generate",   post(handle_pair_disabled))
+             .route("/api/pair/claim",      post(handle_pair_disabled))
+             .route("/api/pair/disconnect", post(handle_pair_disabled))
+        } else {
+            r.route("/api/pair/generate",   post(handle_pair_generate))
+             .route("/api/pair/claim",      post(handle_pair_claim))
+             .route("/api/pair/disconnect", post(handle_pair_disconnect))
+        };
 
         // Wire store-backed routes only when DuckDB opened successfully.
         // Includes: /api/history, /api/insights/dismiss (POST), /api/insights/dismissed (GET),
@@ -1100,6 +1187,7 @@ async fn main() {
 
         r.fallback(static_handler)
          .layer(axum::extract::Extension(store_healthy))
+        .layer(axum::extract::Extension(CloudDisabled(no_cloud)))
          .layer(axum::extract::Extension(Arc::clone(&pairing_state)))
          .layer(axum::extract::Extension(Arc::clone(&deployment_profile)))
          .layer(axum::extract::Extension(apple_metrics))
@@ -1174,7 +1262,13 @@ async fn main() {
     // ── Self-update check ─────────────────────────────────────────────────────
     // Runs once after the server is bound. Spawned so axum::serve is not delayed.
     // Sovereign Mode agents (unpaired) skip this entirely inside the function.
-    {
+    //
+    // Skipped under --no-cloud. This one is not merely outbound: on finding a
+    // newer build it downloads and replaces the binary on disk, which a
+    // throwaway agent must never do to an installed one.
+    if no_cloud {
+        eprintln!("[no-cloud] self-update check skipped");
+    } else {
         let pairing_state     = Arc::clone(&pairing_state);
         let live_events       = Arc::clone(&live_events);
         let recent_events_log = Arc::clone(&recent_events_log);
@@ -1224,7 +1318,7 @@ async fn main() {
 
 #[cfg(test)]
 mod version_output_tests {
-    use super::version_is_command_output;
+    use super::{cloud_is_disabled, no_cloud_conflict, version_is_command_output};
 
     #[test]
     fn version_flags_put_it_on_stdout() {
@@ -1264,5 +1358,44 @@ mod version_output_tests {
         ] {
             assert!(!version_is_command_output(&args), "{args:?} is not --version");
         }
+    }
+
+    #[test]
+    fn no_cloud_is_recognised_only_when_it_is_actually_passed() {
+        assert!(cloud_is_disabled(["wicklee", "--no-cloud"]));
+        assert!(cloud_is_disabled(["wicklee", "--no-cloud", "--pair"]));
+        for args in [
+            vec!["wicklee"],
+            vec!["wicklee", "--status"],
+            // Near misses must not disable the fleet by accident: an agent
+            // that silently stops pushing is the failure this flag exists to
+            // make visible, so it may only happen when asked for exactly.
+            vec!["wicklee", "--nocloud"],
+            vec!["wicklee", "--no-cloud-push"],
+            vec!["wicklee", "no-cloud"],
+        ] {
+            assert!(!cloud_is_disabled(&args), "{args:?} must not disable the fleet");
+        }
+    }
+
+    #[test]
+    fn no_cloud_refuses_the_flags_that_would_ignore_it() {
+        for flag in ["--pair", "--install-service", "--uninstall-service"] {
+            let got = no_cloud_conflict(["wicklee", "--no-cloud", flag]);
+            assert_eq!(got.map(|(f, _)| f), Some(flag), "{flag} must be refused");
+            assert!(got.unwrap().1.len() > 10, "a refusal has to say why");
+            // Order of the two flags cannot change the answer.
+            assert_eq!(
+                no_cloud_conflict(["wicklee", flag, "--no-cloud"]).map(|(f, _)| f),
+                Some(flag)
+            );
+            // And the flag on its own is still perfectly valid.
+            assert!(no_cloud_conflict(["wicklee", flag]).is_none());
+        }
+        assert!(no_cloud_conflict(["wicklee", "--no-cloud"]).is_none());
+        // --status and --mcp-stdio make no fleet request of their own, so
+        // there is nothing for --no-cloud to contradict.
+        assert!(no_cloud_conflict(["wicklee", "--no-cloud", "--status"]).is_none());
+        assert!(no_cloud_conflict(["wicklee", "--no-cloud", "--mcp-stdio"]).is_none());
     }
 }

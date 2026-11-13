@@ -858,8 +858,21 @@ pub(crate) async fn handle_v1_readiness(
 #[derive(Clone, Copy)]
 pub(crate) struct StoreHealth(pub bool);
 
+/// Whether this process was started with `--no-cloud`.
+///
+/// Reported by `/api/health` because the flag changes what the agent *does*
+/// without changing anything visible from outside: it still binds a port,
+/// still serves every local route, and still reports the paired node id it
+/// read from the shared config. When two agents are running on one host —
+/// the installed service and one started by hand — this is how you tell which
+/// one answered, and whether the one you are about to drive is the one
+/// pushing telemetry.
+#[derive(Clone, Copy)]
+pub(crate) struct CloudDisabled(pub bool);
+
 pub(crate) async fn handle_health(
     axum::extract::Extension(store_healthy): axum::extract::Extension<StoreHealth>,
+    axum::extract::Extension(cloud_disabled): axum::extract::Extension<CloudDisabled>,
     axum::extract::Extension(caps): axum::extract::Extension<crate::caps::SharedCaps>,
     axum::extract::Extension(residency): axum::extract::Extension<
         crate::residency::SharedTracker,
@@ -878,6 +891,20 @@ pub(crate) async fn handle_health(
         "agent_version":  env!("CARGO_PKG_VERSION"),
         "build_target":   std::env::consts::OS.to_string() + "-" + std::env::consts::ARCH,
         "store_healthy":  store_healthy.0,
+        // Every outbound fleet request this process can make, and whether it
+        // is on. Listed one by one rather than as a single boolean: "cloud is
+        // off" is not one switch, and a reader checking whether this agent
+        // can rewrite the shared config wants the pairing line specifically.
+        "cloud": {
+            "telemetry_push": if cloud_disabled.0 { "disabled" } else { "enabled" },
+            "self_update":    if cloud_disabled.0 { "disabled" } else { "enabled" },
+            "pairing_routes": if cloud_disabled.0 { "refused" }  else { "enabled" },
+            "reason": if cloud_disabled.0 {
+                Some("this process was started with --no-cloud")
+            } else {
+                None
+            },
+        },
         "routes_available": if store_healthy.0 { STORE_GATED_ROUTES } else { &[] },
         "routes_unavailable": if store_healthy.0 { &[] as &[&str] } else { STORE_GATED_ROUTES },
         "residency": residency.lock().ok().map(|t| t.summary()),

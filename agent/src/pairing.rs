@@ -145,6 +145,28 @@ pub(crate) async fn handle_pair_claim(
     Json(pairing_response(&state))
 }
 
+/// Stands in for every pairing write route under `--no-cloud`.
+///
+/// Refuses rather than 404s. A missing route reads as "this build is too old",
+/// and that is exactly the wrong conclusion to draw while two agents are
+/// running and you are working out which one you reached. All three writes are
+/// refused, disconnect included: it reaches no network, but it does clear
+/// `fleet_url` and `session_token` from the config file the *installed*
+/// service reads, which would unpair a host from a process that was only
+/// meant to answer questions.
+pub(crate) async fn handle_pair_disabled()
+-> (axum::http::StatusCode, Json<serde_json::Value>) {
+    (
+        axum::http::StatusCode::CONFLICT,
+        Json(serde_json::json!({
+            "error": "this agent was started with --no-cloud",
+            "hint":  "pairing, unpairing and telemetry push are off for the life of \
+                      this process. Restart it without --no-cloud to pair, or talk to \
+                      the installed service instead.",
+        })),
+    )
+}
+
 pub(crate) async fn handle_pair_disconnect(
     axum::extract::Extension(pairing_state): axum::extract::Extension<Arc<Mutex<PairingState>>>,
 ) -> Json<PairingStatusResponse> {
