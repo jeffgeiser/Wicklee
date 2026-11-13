@@ -836,12 +836,13 @@ Everything above concerns code. This section concerns running services, which ar
 | Component | What it is | Decision |
 | --- | --- | --- |
 | GitHub Releases | Agent binaries for macOS arm64, Windows x64 and Linux x64 glibc 2.31, plus the musl variant | **Keep.** This is the entire install path now, and it is the one piece that must not break |
-| Static site host | wicklee.dev: landing pages and docs | **Keep one.** See the open question below |
-| Railway: frontend | React app served by nginx, proxying `/api/*` to the cloud backend | **Retire with the hosted views.** Once the app is gone, the proxy layer goes with it and the site is purely static |
+| Cloudflare Pages | Serves wicklee.dev. Confirmed by the maintainer as the host the domain points to | **Keep, and it is the only web host needed.** It serves the static marketing site and docs |
+| Railway: frontend | React app served by nginx, proxying `/api/*` to the cloud backend | **Retire.** This service exists for the dashboard, which Phase 1 removes. Cloudflare Pages already serves the domain |
 | Railway: cloud backend | `wicklee-cloud`, axum, internet-facing | **Turn the service off,** separately from the code freeze. See below |
 | Postgres and TimescaleDB | Fleet telemetry, accounts, API keys, billing records | **Turn off with the backend.** Export first if any data is worth keeping |
 | Paddle | Checkout and HMAC-verified webhooks | **Remove.** Paid tiers are withdrawn |
-| Cloudflare Pages, projects `wicklee` and `wicklee-demo` | Build on every commit | **Resolve the duplication.** See the open question below |
+| Cloudflare Pages project `wicklee-demo` | Builds on every commit | **Review.** If it serves the dashboard demo it follows the dashboard; if it is a preview of the marketing site it stays |
+| Root `Dockerfile`, `nginx.conf`, `entrypoint.sh`, `railway.toml` | The Railway frontend deployment path | **Remove with the Railway services.** Cloudflare Pages builds from the repository directly and uses none of them |
 | HF Space | Demo deployment in `deploy/hf-space/` | **Re-point or retire.** It demonstrates the embedded dashboard, which Phase 1 removes |
 | Helm chart, docker-compose | `deploy/helm/`, `deploy/self-hosted/`, bundling their own Postgres | **Keep, rewrite later.** They deploy today's hosted architecture — frontend, cloud, Postgres — not the self-hostable coordinator the strategy describes. Rewriting them belongs with that coordinator, not with Phase 1 |
 | Grafana dashboard JSON | `deploy/grafana/wicklee-fleet.json` | Documentation, not infrastructure. Follows the fleet view |
@@ -850,7 +851,11 @@ Everything above concerns code. This section concerns running services, which ar
 
 **Paddle removal is not only code.** `src/site/LegalPage.tsx` names Paddle as merchant of record, which carries refund and billing terms. Those pages need editing rather than deleting, or the site will describe a payment relationship that no longer exists. Order: confirm no active subscriptions, cancel and refund any that exist, turn checkout off, take the pricing page down, then correct the legal pages, then remove the integration code.
 
-**Open question for the maintainer.** `railway.toml` says the React app is served from Railway at wicklee.dev, but two Cloudflare Pages projects also build on every commit. Which one answers the domain cannot be determined from the repository. Resolve this before retiring either, because the answer decides whether the static site needs any host beyond Cloudflare Pages.
+**Railway goes entirely.** With Cloudflare Pages confirmed as the host the domain points to, Railway's only purpose is the dashboard and the backend behind it. Both services and their Postgres can be shut down together, and the four root-level files that exist to build and serve that deployment go with them. The end state is Cloudflare Pages for the site and GitHub Releases for the binary.
+
+**One consequence to accept deliberately.** Retiring the Railway services removes the hosted fleet view, so `cloud/`, `src/cloud/` and the agent's `cloud_push.rs` and `pairing.rs` become not merely frozen but unreachable — there is no deployment left for them to talk to. That is consistent with the decisions above, and it strengthens the case for deleting that code rather than freezing it, which the maintainer has said he is open to. Until then it stays in the repository as dead code, and the README and docs must not describe a fleet view that no longer runs.
+
+**The Pages build will need narrowing.** `src/` holds both the marketing site in `src/site/` and the dashboard views in `src/cloud/`. The Cloudflare build currently ships both, and the dashboard routes call `/api/*`, which has no backend on Pages. Once the hosted views are gone the build should cover `src/site/` only. This is a follow-up to the dashboard removal in step 4, not Phase 1 work.
 
 None of the above is Phase 1 implementation work. It is the maintainer's to sequence, and it is recorded here so the infrastructure footprint is decided deliberately rather than left running by default.
 
