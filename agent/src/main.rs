@@ -140,12 +140,39 @@ fn push_event(
 
 // ── Server Bootstrap ──────────────────────────────────────────────────────────
 
+/// Whether the version line is the command's *output* rather than a log line.
+///
+/// It is output only for `--version` / `-V`, where the version is the whole
+/// point of the invocation. Everywhere else — daemon startup, `--status`,
+/// `--install-service`, and the `inspect` / `ready` / `findings` subcommands
+/// Phase 1 adds — it is a "which build is this?" log line and belongs on
+/// stderr, because stdout is reserved for machine-readable output.
+fn version_is_command_output<I, S>(args: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    args.into_iter().any(|a| {
+        let a = a.as_ref();
+        a == "--version" || a == "-V"
+    })
+}
+
 #[tokio::main]
 async fn main() {
-    // Print version on every invocation — CLI tools, daemon startup, and sudo
-    // install/uninstall all benefit from an immediate "which build is this?"
-    // confirmation without having to run --version separately.
-    println!("wicklee-agent v{}", env!("CARGO_PKG_VERSION"));
+    // The version line is printed on every invocation — daemon startup and
+    // sudo install/uninstall both benefit from an immediate "which build is
+    // this?" confirmation. It goes to **stderr**, because Phase 1 adds
+    // `wicklee ready --json` and `wicklee inspect --json` and a banner on
+    // stdout would be the first line a caller pipes into jq. `--version` is
+    // the exception: there the version is the command's output.
+    let version_line = format!("wicklee-agent v{}", env!("CARGO_PKG_VERSION"));
+    let version_flag = version_is_command_output(std::env::args());
+    if version_flag {
+        println!("{version_line}");
+    } else {
+        eprintln!("{version_line}");
+    }
 
     let config = load_or_create_config();
     let initial_status = if config.fleet_url.is_some() { "connected" } else { "unpaired" };
@@ -159,7 +186,7 @@ async fn main() {
         },
     }));
 
-    if std::env::args().any(|a| a == "--version" || a == "-V") {
+    if version_flag {
         return; // version already printed above
     }
 
@@ -1111,4 +1138,49 @@ async fn main() {
         .expect("Server exited unexpectedly");
 
     eprintln!("[agent] clean shutdown complete");
+}
+
+#[cfg(test)]
+mod version_output_tests {
+    use super::version_is_command_output;
+
+    #[test]
+    fn version_flags_put_it_on_stdout() {
+        assert!(version_is_command_output(["wicklee", "--version"]));
+        assert!(version_is_command_output(["wicklee", "-V"]));
+    }
+
+    #[test]
+    fn everything_else_keeps_stdout_clean() {
+        // Phase 1 adds `wicklee ready --json | jq`. A banner on stdout would be
+        // the first line jq reads, so every non-version invocation logs to
+        // stderr instead.
+        for args in [
+            vec!["wicklee"],
+            vec!["wicklee", "--status"],
+            vec!["wicklee", "ready", "--json"],
+            vec!["wicklee", "inspect", "--json"],
+            vec!["wicklee", "findings"],
+            vec!["wicklee", "--mcp-stdio"],
+            vec!["wicklee", "--install-service"],
+            vec!["wicklee", "--pair"],
+        ] {
+            assert!(
+                !version_is_command_output(&args),
+                "{args:?} must not print the banner to stdout",
+            );
+        }
+    }
+
+    #[test]
+    fn a_version_substring_is_not_a_version_flag() {
+        // Matched exactly, so these do not divert the banner to stdout.
+        for args in [
+            vec!["wicklee", "--versions"],
+            vec!["wicklee", "--version-check"],
+            vec!["wicklee", "-Version"],
+        ] {
+            assert!(!version_is_command_output(&args), "{args:?} is not --version");
+        }
+    }
 }
