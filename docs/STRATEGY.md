@@ -471,6 +471,8 @@ Its foundational utility should not be compromised to create speculative subscri
 
 Potential future offerings include managed or self-hostable fleet coordination, enterprise administration, support, compliance-oriented operations, or integration services. Commercial priorities should emerge from organizations already relying on Wicklee.
 
+The running infrastructure follows that decision. The Stage 1 product is a single binary reached over localhost, so it needs a static site and a binary distribution channel and nothing else. The hosted backend, its database and the payment integration exist to serve a product that has been withdrawn, and they are being shut down rather than left running — a frozen codebase and a running service are separate decisions. `docs/PHASE1_SPEC.md` holds the component-by-component sequence.
+
 **The immediate objective is meaningful usage, measurable technical value and external adoption, not short-term revenue.**
 
 ---

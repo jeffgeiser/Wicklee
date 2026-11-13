@@ -827,6 +827,33 @@ Order of work for these removals:
 
 The dashboard components are shared with the hosted fleet view on wicklee.dev. Removing the embedded dashboard takes them out of the agent binary. They stay in the repository for the hosted fleet view, which remains frozen. The maintainer is open to removing it later.
 
+### Deployed infrastructure
+
+Everything above concerns code. This section concerns running services, which are a separate decision: freezing a directory in the repository does not turn off the service built from it.
+
+**Phase 1's product needs two pieces of infrastructure.** Somewhere to serve a static site, and GitHub Releases to distribute the binary. The deliverable is a single binary a developer installs, reached through the CLI, HTTP on localhost and MCP. Nothing in this spec calls out to a server. Every other running component is either the withdrawn paid product or the frozen fleet view.
+
+| Component | What it is | Decision |
+| --- | --- | --- |
+| GitHub Releases | Agent binaries for macOS arm64, Windows x64 and Linux x64 glibc 2.31, plus the musl variant | **Keep.** This is the entire install path now, and it is the one piece that must not break |
+| Static site host | wicklee.dev: landing pages and docs | **Keep one.** See the open question below |
+| Railway: frontend | React app served by nginx, proxying `/api/*` to the cloud backend | **Retire with the hosted views.** Once the app is gone, the proxy layer goes with it and the site is purely static |
+| Railway: cloud backend | `wicklee-cloud`, axum, internet-facing | **Turn the service off,** separately from the code freeze. See below |
+| Postgres and TimescaleDB | Fleet telemetry, accounts, API keys, billing records | **Turn off with the backend.** Export first if any data is worth keeping |
+| Paddle | Checkout and HMAC-verified webhooks | **Remove.** Paid tiers are withdrawn |
+| Cloudflare Pages, projects `wicklee` and `wicklee-demo` | Build on every commit | **Resolve the duplication.** See the open question below |
+| HF Space | Demo deployment in `deploy/hf-space/` | **Re-point or retire.** It demonstrates the embedded dashboard, which Phase 1 removes |
+| Helm chart, docker-compose | `deploy/helm/`, `deploy/self-hosted/`, bundling their own Postgres | **Keep, rewrite later.** They deploy today's hosted architecture — frontend, cloud, Postgres — not the self-hostable coordinator the strategy describes. Rewriting them belongs with that coordinator, not with Phase 1 |
+| Grafana dashboard JSON | `deploy/grafana/wicklee-fleet.json` | Documentation, not infrastructure. Follows the fleet view |
+
+**Turning the cloud service off is a security decision, not only a cost one.** It is an internet-facing service holding accounts, API keys and billing records for a product with no paying users. That is attack surface maintained for no current benefit. The code can stay frozen in the repository, as decided, while the deployment is stopped. These are independent choices and revision 1 conflated them.
+
+**Paddle removal is not only code.** `src/site/LegalPage.tsx` names Paddle as merchant of record, which carries refund and billing terms. Those pages need editing rather than deleting, or the site will describe a payment relationship that no longer exists. Order: confirm no active subscriptions, cancel and refund any that exist, turn checkout off, take the pricing page down, then correct the legal pages, then remove the integration code.
+
+**Open question for the maintainer.** `railway.toml` says the React app is served from Railway at wicklee.dev, but two Cloudflare Pages projects also build on every commit. Which one answers the domain cannot be determined from the repository. Resolve this before retiring either, because the answer decides whether the static site needs any host beyond Cloudflare Pages.
+
+None of the above is Phase 1 implementation work. It is the maintainer's to sequence, and it is recorded here so the infrastructure footprint is decided deliberately rather than left running by default.
+
 ## Implementation plan
 
 Steps are in dependency order. Each step ends with its tests passing and a short note of what was verified.
