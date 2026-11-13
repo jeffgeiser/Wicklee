@@ -504,12 +504,12 @@ pub(crate) fn parse_vm_stat_swapouts(text: &str) -> Option<(u64, u64)> {
 
     for line in text.lines() {
         // Parse page size from the header line.
-        if line.starts_with("Mach Virtual Memory Statistics:") {
-            if let Some(pos) = line.find("page size of ") {
-                let rest = &line[pos + "page size of ".len()..];
-                let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-                if let Ok(v) = num.parse::<u64>() { page_size = v; }
-            }
+        if line.starts_with("Mach Virtual Memory Statistics:")
+            && let Some(pos) = line.find("page size of ")
+        {
+            let rest = &line[pos + "page size of ".len()..];
+            let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if let Ok(v) = num.parse::<u64>() { page_size = v; }
         }
         // Parse the Swapouts counter (trailing period stripped).
         if let Some(rest) = line.strip_prefix("Swapouts:") {
