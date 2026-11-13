@@ -1,4 +1,6 @@
 use crate::{AppleSiliconMetrics, NvidiaMetrics, OllamaMetrics, VllmMetrics, LlamacppMetrics};
+use crate::caps::SharedCaps;
+use crate::ollama_client::{GenerateResponse, PsResponse};
 use crate::proxy::ProxyState;
 use crate::process_discovery;
 use std::sync::{Arc, Mutex};
@@ -56,25 +58,83 @@ pub(crate) fn probe_due(
     last_attempt.is_none_or(|t| now.saturating_duration_since(t) >= interval)
 }
 
+/// Number of tokens the idle probe generates. Small on purpose: the probe
+/// exists to time a warm model, not to produce output.
+const PROBE_TOKENS: u32 = 20;
+
 /// True when an Ollama `/api/ps` response lists `model` as currently loaded.
-fn ps_lists_model(ps: &serde_json::Value, model: &str) -> bool {
-    ps["models"].as_array().is_some_and(|arr| {
-        arr.iter().any(|m| m["name"].as_str() == Some(model) || m["model"].as_str() == Some(model))
+///
+/// Production code goes through [`probe_target`], which answers residency and
+/// the running context in one pass. This remains as the subject of
+/// `ps_lists_model_matches_loaded_only`, which covers the name-or-model field
+/// matching that `PsResponse::find` does for both callers.
+#[cfg(test)]
+fn ps_lists_model(ps: &PsResponse, model: &str) -> bool {
+    ps.find(model).is_some()
+}
+
+/// What the probe is allowed to do for one model, decided from a fresh
+/// `/api/ps` read taken immediately before firing.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ProbeTarget {
+    /// Resident, and its running context is known. Probe with this `num_ctx`.
+    Probe { num_ctx: u64 },
+    /// Not listed as loaded. Probing would make Ollama load it (multi-GB, and
+    /// it resets the keep_alive timer), so skip.
+    NotResident,
+    /// Loaded, but `/api/ps` did not report a `context_length`. Skip rather
+    /// than guess — see [`probe_request_body`] for why omitting `num_ctx` is
+    /// not a safe default.
+    ContextUnknown,
+}
+
+/// Decide what to do about `model`, given a `/api/ps` response.
+pub(crate) fn probe_target(ps: &PsResponse, model: &str) -> ProbeTarget {
+    let Some(entry) = ps.find(model) else { return ProbeTarget::NotResident };
+    match entry.context_length.filter(|n| *n > 0) {
+        Some(num_ctx) => ProbeTarget::Probe { num_ctx },
+        None          => ProbeTarget::ContextUnknown,
+    }
+}
+
+/// Body of the idle probe's `/api/generate` request.
+///
+/// `num_ctx` is **mandatory**, and that is the whole point of this function
+/// existing. Step 0 verification item V3 measured that a request which omits
+/// `num_ctx` makes Ollama *reload the model at the server default* — 65536 →
+/// 4096 and 8192 → 4096, each with a multi-second `load_duration` on a model
+/// that was already resident. The probe used to omit it, so on any host
+/// running a non-default context it silently destroyed that context every
+/// probe interval and charged the user a reload for it.
+///
+/// Passing the context that `/api/ps` reports as *currently running* keeps the
+/// loaded configuration exactly as it was. There is no safe fallback value:
+/// any guess that differs from the running context causes the same reload, so
+/// an unknown context means no probe (see [`ProbeTarget::ContextUnknown`]).
+///
+/// `keep_alive` is still deliberately absent — Ollama has no "leave the expiry
+/// as it is" value, so sending one would override the operator's own
+/// `OLLAMA_KEEP_ALIVE`.
+pub(crate) fn probe_request_body(model: &str, num_ctx: u64) -> serde_json::Value {
+    serde_json::json!({
+        "model":   model,
+        "prompt":  " ",
+        "stream":  false,
+        "options": { "num_predict": PROBE_TOKENS, "num_ctx": num_ctx }
     })
 }
 
-/// Re-checks `/api/ps` immediately before a probe. The harvester's view can be
-/// up to 5 s old, and a generate request for a model that has just been
-/// evicted would make Ollama load it again (multi-GB, and it resets the
-/// keep_alive timer). Any failure is treated as "not resident" → skip.
-async fn ollama_model_resident(client: &reqwest::Client, port: u16, model: &str) -> bool {
+/// Re-reads `/api/ps` immediately before a probe and decides what to do. The
+/// harvester's own view can be up to 5 s old. Any transport or parse failure
+/// is treated as "not resident" → skip.
+async fn ollama_probe_target(client: &reqwest::Client, port: u16, model: &str) -> ProbeTarget {
     let url = format!("http://127.0.0.1:{port}/api/ps");
     match client.get(&url).timeout(Duration::from_secs(3)).send().await {
-        Ok(r) if r.status().is_success() => r
-            .json::<serde_json::Value>()
-            .await
-            .is_ok_and(|j| ps_lists_model(&j, model)),
-        _ => false,
+        Ok(r) if r.status().is_success() => match r.json::<PsResponse>().await {
+            Ok(ps) => probe_target(&ps, model),
+            Err(_) => ProbeTarget::NotResident,
+        },
+        _ => ProbeTarget::NotResident,
     }
 }
 
@@ -91,17 +151,18 @@ struct OllamaProbeResult {
 /// Fires a non-streaming 20-token generate probe and returns timing metrics
 /// derived from eval_count, eval_duration, prompt_eval_count, prompt_eval_duration,
 /// and load_duration returned by Ollama.
-async fn probe_ollama_tps(client: &reqwest::Client, port: u16, model: &str) -> OllamaProbeResult {
+async fn probe_ollama_tps(
+    client:  &reqwest::Client,
+    port:    u16,
+    model:   &str,
+    num_ctx: u64,
+    caps:    Option<&SharedCaps>,
+) -> OllamaProbeResult {
     // Explicit 127.0.0.1 (not localhost) to avoid Windows resolving localhost → ::1.
     let url = format!("http://127.0.0.1:{port}/api/generate");
     let resp = match client
         .post(&url)
-        .json(&serde_json::json!({
-            "model":   model,
-            "prompt":  " ",
-            "stream":  false,
-            "options": { "num_predict": 20 }
-        }))
+        .json(&probe_request_body(model, num_ctx))
         .send()
         .await
     {
@@ -111,50 +172,24 @@ async fn probe_ollama_tps(client: &reqwest::Client, port: u16, model: &str) -> O
 
     if !resp.status().is_success() { return OllamaProbeResult::default(); }
 
-    let text = match resp.text().await {
-        Ok(t) => t,
-        Err(_) => return OllamaProbeResult::default(),
+    // Typed: the derivations below used to be hand-rolled against raw Values
+    // at this call site. They now live on GenerateResponse, which both this
+    // probe and the step 5 receipt path share.
+    let Ok(done) = resp.json::<GenerateResponse>().await else {
+        return OllamaProbeResult::default();
     };
+    if let Some(c) = caps && let Ok(mut c) = c.lock() { c.observe_generate(&done); }
 
-    let json = match serde_json::from_str::<serde_json::Value>(&text) {
-        Ok(j) => j,
-        Err(_) => return OllamaProbeResult::default(),
-    };
-
-    let mut result = OllamaProbeResult::default();
-
-    // Generation tok/s (existing logic)
-    if let (Some(count), Some(dur_ns)) = (
-        json["eval_count"].as_u64(),
-        json["eval_duration"].as_u64(),
-    )
-        && count > 0 && dur_ns > 0 {
-            let tps = count as f64 / (dur_ns as f64 / 1_000_000_000.0);
-            if tps > 0.0 { result.tps = Some(tps as f32); }
-        }
-
-    // Prefill speed + TTFT (Phase 2: new)
-    if let (Some(pe_count), Some(pe_dur_ns)) = (
-        json["prompt_eval_count"].as_u64(),
-        json["prompt_eval_duration"].as_u64(),
-    ) {
-        // TTFT = prompt_eval_duration in milliseconds
-        if pe_dur_ns > 0 {
-            result.ttft_ms = Some((pe_dur_ns as f64 / 1_000_000.0) as f32);
-            // Prefill tok/s
-            if pe_count > 0 {
-                let pe_tps = pe_count as f64 / (pe_dur_ns as f64 / 1_000_000_000.0);
-                if pe_tps > 0.0 { result.prompt_eval_tps = Some(pe_tps as f32); }
-            }
-        }
+    OllamaProbeResult {
+        tps:              done.eval_tps(),
+        prompt_eval_tps:  done.prompt_eval_tps(),
+        // TTFT stand-in: prompt-processing time, in milliseconds.
+        ttft_ms:          done.prompt_eval_ms(),
+        // 0 when warm, >0 on a cold start. A non-zero value on a model that
+        // was already resident means the request forced a reload (V3) — which
+        // is exactly what `probe_request_body` now prevents.
+        load_duration_ms: done.load_ms(),
     }
-
-    // Model load duration (Phase 2: new — 0 when warm, >0 on cold start)
-    if let Some(load_ns) = json["load_duration"].as_u64() {
-        result.load_duration_ms = Some((load_ns as f64 / 1_000_000.0) as f32);
-    }
-
-    result
 }
 
 /// Fires a non-streaming 20-token completions probe against the vLLM
@@ -213,6 +248,14 @@ pub(crate) fn attribute_expires_change(
     }
 }
 
+/// Starts the Ollama harvester.
+///
+/// Returns the shared metrics, the probe-in-flight flag, and the
+/// [`RuntimeCaps`](crate::caps::RuntimeCaps) record this harvester fills in
+/// from the responses it actually sees. Nothing reads the capability record
+/// yet — the rules that gate on it arrive in step 4 and `/v1/state` in step 3 —
+/// but it is populated live from here so those steps inherit real data rather
+/// than a record that has to be backfilled.
 pub(crate) fn start_ollama_harvester(
     apple:     Arc<Mutex<AppleSiliconMetrics>>,
     nvidia:    Arc<Mutex<NvidiaMetrics>>,
@@ -220,8 +263,9 @@ pub(crate) fn start_ollama_harvester(
     port_rx: process_discovery::PortRx,
     runtime_config_cache: crate::runtime_config::RuntimeConfigCache,
     probe_policy: ProbePolicy,
-) -> (Arc<Mutex<OllamaMetrics>>, Arc<std::sync::atomic::AtomicBool>) {
+) -> (Arc<Mutex<OllamaMetrics>>, Arc<std::sync::atomic::AtomicBool>, SharedCaps) {
     let shared = Arc::new(Mutex::new(OllamaMetrics::default()));
+    let caps: SharedCaps = Arc::new(Mutex::new(crate::caps::RuntimeCaps::default()));
     // Atomic flag: true while the /api/generate probe is in-flight.
     // Owned here; cloned into the harvester task (for attribution) and
     // the probe task (to set/clear). Broadcast loops read it for Tier 3 gate.
@@ -234,12 +278,14 @@ pub(crate) fn start_ollama_harvester(
     let port_rx_main = port_rx.clone();
     let probe_active_harvester = Arc::clone(&probe_active);
     let rc_cache = runtime_config_cache.clone();
+    let caps_harvester = Arc::clone(&caps);
     crate::supervisor::supervise_until("ollama-harvester", move || {
         let shared_main = shared_main.clone();
         let proxy_main = proxy_main.clone();
         let mut port_rx_main = port_rx_main.clone();
         let probe_active_harvester = probe_active_harvester.clone();
         let rc_cache = rc_cache.clone();
+        let caps_main = Arc::clone(&caps_harvester);
         async move {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(3))
@@ -261,8 +307,18 @@ pub(crate) fn start_ollama_harvester(
             // health check; if it fails, fall back to the runtime's default port.
             let port = {
                 let check_url = format!("http://127.0.0.1:{discovered_port}/api/version");
-                let api_ok = client.get(&check_url).send().await
-                    .map(|r| r.status().is_success()).unwrap_or(false);
+                // Reuses the existing health check to record the version. It is
+                // informational only: capabilities are never inferred from it.
+                let api_ok = match client.get(&check_url).send().await {
+                    Ok(r) if r.status().is_success() => {
+                        if let Ok(v) = r.json::<crate::ollama_client::VersionResponse>().await
+                            && let Ok(mut c) = caps_main.lock() {
+                                c.observe_version(v.version.as_deref());
+                            }
+                        true
+                    }
+                    _ => false,
+                };
                 if api_ok {
                     discovered_port
                 } else {
@@ -366,12 +422,16 @@ pub(crate) fn start_ollama_harvester(
                 };
 
                 // Poll /api/ps for ALL loaded models and inference state.
-                let mut ps_models: Vec<serde_json::Value> = Vec::new();
+                // Typed via ollama_client: the previous raw-Value indexing read
+                // size/size_vram/details/expires_at and silently skipped the
+                // running `context_length` this response carries.
+                let mut ps = crate::ollama_client::PsResponse::default();
                 if let Ok(resp) = client.get(format!("{base}/api/ps")).send().await
-                    && let Ok(json) = resp.json::<serde_json::Value>().await
-                        && let Some(arr) = json["models"].as_array() {
-                            ps_models = arr.clone();
-                        }
+                    && let Ok(parsed) = resp.json::<crate::ollama_client::PsResponse>().await {
+                        ps = parsed;
+                    }
+                if let Ok(mut c) = caps_main.lock() { c.observe_ps(&ps); }
+                let ps_models = &ps.models;
 
                 // Read per-model proxy stats (if proxy active).
                 let proxy_model_stats: std::collections::HashMap<String, (f32, u64, u64, u64, std::time::Instant)> =
@@ -386,11 +446,11 @@ pub(crate) fn start_ollama_harvester(
                 let mut live_models: Vec<crate::ModelLiveMetrics> = Vec::new();
                 let mut most_recent_done: Option<(String, std::time::Instant)> = None;
 
-                for entry in &ps_models {
-                    let name = entry["name"].as_str().unwrap_or("").to_string();
-                    let size_gb = entry["size"].as_u64().map(|b| b as f32 / 1_073_741_824.0);
-                    let quant = entry["details"]["quantization_level"].as_str().map(|s| s.to_string());
-                    let vram_mb = entry["size_vram"].as_u64().map(|b| b / (1024 * 1024));
+                for entry in ps_models {
+                    let name = entry.name.clone().unwrap_or_default();
+                    let size_gb = entry.size.map(|b| b as f32 / 1_073_741_824.0);
+                    let quant = entry.details.quantization_level.clone();
+                    let vram_mb = entry.size_vram.map(|b| b / (1024 * 1024));
 
                     let (tok_s, avg_ttft, avg_lat, req_count) = if let Some(&(tps, ttft_ns, lat_ns, cnt, _)) = proxy_model_stats.get(&name) {
                         let ttft = if cnt > 0 { Some((ttft_ns as f64 / cnt as f64 / 1_000_000.0) as f32) } else { None };
@@ -415,12 +475,19 @@ pub(crate) fn start_ollama_harvester(
 
                 // Singular fields: use most-recently-active model (or first if no proxy stats).
                 let primary_model = most_recent_done.as_ref().map(|(n, _)| n.as_str())
-                    .or_else(|| ps_models.first().and_then(|m| m["name"].as_str()));
+                    .or_else(|| ps_models.first().and_then(|m| m.name.as_deref()));
                 if let Some(pm) = primary_model {
-                    let pm_entry = ps_models.iter().find(|e| e["name"].as_str() == Some(pm));
+                    let pm_entry = ps.find(pm);
                     m.ollama_active_model = Some(pm.to_string());
-                    m.ollama_model_size_gb = pm_entry.and_then(|e| e["size"].as_u64()).map(|b| b as f32 / 1_073_741_824.0);
-                    m.ollama_quantization = pm_entry.and_then(|e| e["details"]["quantization_level"].as_str()).map(|s| s.to_string());
+                    m.ollama_model_size_gb = pm_entry.and_then(|e| e.size).map(|b| b as f32 / 1_073_741_824.0);
+                    m.ollama_quantization = pm_entry.and_then(|e| e.details.quantization_level.clone());
+                    // NOTE: pm_entry.context_length is the context the model is
+                    // actually running at, and ollama_context_length below is its
+                    // maximum from /api/show. The running value is now parsed but
+                    // not yet published: surfacing it adds a MetricsPayload field,
+                    // which requires the agent/cloud/frontend three-way sync. That
+                    // belongs with the residency tracker in step 2. The probe
+                    // already consumes it directly via probe_target.
                 }
 
                 // Fetch context_length + parameter_count from /api/show when primary model changes.
@@ -432,21 +499,36 @@ pub(crate) fn start_ollama_harvester(
                             .json(&serde_json::json!({ "name": model_name }))
                             .send().await
                             && let Ok(show_json) = show_resp.json::<serde_json::Value>().await {
-                                let mi = &show_json["model_info"];
-                                cached_context_length = mi["general.context_length"].as_u64()
-                                    .or_else(|| mi["llama.context_length"].as_u64());
-                                cached_parameter_count = mi["general.parameter_count"].as_u64()
-                                    .or_else(|| mi["llama.parameter_count"].as_u64());
                                 // Architecture fields for KV cache estimation.
-                                // llama.block_count = transformer layer count.
-                                // llama.attention.head_count_kv = KV heads (< total heads on GQA models).
-                                // llama.attention.head_count = total attention heads.
-                                // llama.embedding_length = model embedding dimension.
+                                //   <arch>.block_count             = transformer layer count
+                                //   <arch>.attention.head_count_kv = KV heads (< total on GQA)
+                                //   <arch>.attention.head_count    = total attention heads
+                                //   <arch>.embedding_length        = embedding dimension
                                 // head_dim = embedding_length / head_count (derived on the frontend).
-                                cached_num_layers    = mi["llama.block_count"].as_u64();
-                                cached_kv_heads      = mi["llama.attention.head_count_kv"].as_u64();
-                                cached_num_heads     = mi["llama.attention.head_count"].as_u64();
-                                cached_embedding_dim = mi["llama.embedding_length"].as_u64();
+                                //
+                                // <arch> is the model's own family, NOT "llama". These keys were
+                                // hardcoded to `llama.*`, so every one of them read as None for
+                                // any other family — two of three models on the maintainer's host.
+                                // ollama_client resolves the prefix from details.family and accepts
+                                // the array-valued head_count_kv that hybrid-attention models use.
+                                let show: crate::ollama_client::ShowResponse =
+                                    serde_json::from_value(show_json.clone()).unwrap_or_default();
+                                let arch = show.model_info.architecture(show.details.family.as_deref());
+                                let arch = arch.as_deref();
+                                let mi = &show.model_info;
+                                cached_context_length  = mi.arch_u64(arch, "context_length");
+                                cached_parameter_count = mi.arch_u64(arch, "parameter_count");
+                                cached_num_layers      = mi.arch_u64(arch, "block_count");
+                                cached_kv_heads        = mi.arch_u64(arch, "attention.head_count_kv");
+                                cached_num_heads       = mi.arch_u64(arch, "attention.head_count");
+                                cached_embedding_dim   = mi.arch_u64(arch, "embedding_length");
+                                if cached_num_layers.is_none() {
+                                    eprintln!(
+                                        "[ollama] /api/show for {model_name}: no architecture keys \
+                                         under {:?} — KV-cache fields unavailable",
+                                        arch.unwrap_or("<unknown>"),
+                                    );
+                                }
 
                                 // v0.9.0: stash full runtime config (template + system prompt)
                                 // in the in-memory cache for the localhost endpoint.
@@ -477,7 +559,7 @@ pub(crate) fn start_ollama_harvester(
                 // as a user request (false 15s LIVE on idle nodes).
                 let mut expires_changed = false;
                 if let Some(first) = ps_models.first()
-                    && let Some(exp_str) = first["expires_at"].as_str() {
+                    && let Some(exp_str) = first.expires_at.as_deref() {
                         let exp_owned = exp_str.to_string();
                         if prev_expires.as_deref() != Some(&exp_owned) {
                             last_infer_ts = Some(std::time::Instant::now());
@@ -517,7 +599,7 @@ pub(crate) fn start_ollama_harvester(
 
                     // Cleanup: remove proxy stats for models no longer loaded in Ollama
                     let loaded_names: std::collections::HashSet<String> = ps_models.iter()
-                        .filter_map(|e| e["name"].as_str().map(|s| s.to_string())).collect();
+                        .filter_map(|e| e.name.clone()).collect();
                     let mut map = ps.per_model.lock().unwrap();
                     map.retain(|k, _| loaded_names.contains(k));
                 } else {
@@ -586,10 +668,11 @@ pub(crate) fn start_ollama_harvester(
     // targets an unloaded model, an idle model still unloads normally.
     if !probe_policy.enabled {
         eprintln!("[ollama] idle probe disabled ([probe] enabled = false)");
-        return (shared, probe_active);
+        return (shared, probe_active, caps);
     }
     let proxy_for_probe = proxy_arc.clone();
     {
+        let caps_probe = Arc::clone(&caps);
         let shared_probe = Arc::clone(&shared);
         let apple_probe  = Arc::clone(&apple);
         let nvidia_probe = Arc::clone(&nvidia);
@@ -682,11 +765,28 @@ pub(crate) fn start_ollama_harvester(
                     }
                 }
 
-                // Final residency check right before firing — never trigger a load.
-                if !ollama_model_resident(&probe_client, port, &model).await {
-                    eprintln!("[ollama] probe skip — {model} no longer resident on :{port}");
-                    continue;
-                }
+                // Final check right before firing. Never trigger a load, and
+                // never send a request that would reset the running context.
+                let num_ctx = match ollama_probe_target(&probe_client, port, &model).await {
+                    ProbeTarget::Probe { num_ctx } => num_ctx,
+                    ProbeTarget::NotResident => {
+                        eprintln!("[ollama] probe skip — {model} no longer resident on :{port}");
+                        continue;
+                    }
+                    ProbeTarget::ContextUnknown => {
+                        // Without the running context there is no safe request
+                        // to send: omitting num_ctx reloads the model at the
+                        // server default (V3). Back off for a full interval so
+                        // this does not spin on every 30 s tick.
+                        eprintln!(
+                            "[ollama] probe skip — {model} is loaded but /api/ps reports no \
+                             context_length; probing would reset its context"
+                        );
+                        last_attempt      = Some(std::time::Instant::now());
+                        last_probed_model = Some(model.clone());
+                        continue;
+                    }
+                };
                 last_attempt      = Some(std::time::Instant::now());
                 last_probed_model = Some(model.clone());
 
@@ -705,7 +805,8 @@ pub(crate) fn start_ollama_harvester(
                 scopeguard::defer! {
                     probe_active_clone.store(false, std::sync::atomic::Ordering::SeqCst);
                 }
-                let probe_result = probe_ollama_tps(&probe_client, port, &model).await;
+                let probe_result =
+                    probe_ollama_tps(&probe_client, port, &model, num_ctx, Some(&caps_probe)).await;
                 if let Ok(mut g) = shared_probe.lock() {
                     // Retain the last successful baseline on probe failure —
                     // probe_ollama_tps returns all-None on timeout/error, and
@@ -733,7 +834,7 @@ pub(crate) fn start_ollama_harvester(
         });
     }
 
-    (shared, probe_active)
+    (shared, probe_active, caps)
 }
 
 // ── vLLM Harvester ──────────────────────────────────────────────────────────────────────────────
@@ -1408,15 +1509,115 @@ mod tests {
         assert!(probe_due(true, None, "m", None, TEN_MIN, now));
     }
 
+    // ── The probe must never change a model's context (step 0, V3) ───────────
+
+    fn ps_with(model: &str, context_length: Option<u64>) -> PsResponse {
+        let mut entry = serde_json::json!({
+            "name":      model,
+            "model":     model,
+            "size":      5_280_104_447u64,
+            "size_vram": 5_280_104_447u64,
+            "digest":    "46e0c10c039e",
+            "expires_at": "2026-11-13T09:26:44.305831-05:00",
+        });
+        if let Some(n) = context_length {
+            entry["context_length"] = serde_json::json!(n);
+        }
+        serde_json::from_value(serde_json::json!({ "models": [entry] })).unwrap()
+    }
+
+    fn ps_json(v: serde_json::Value) -> PsResponse {
+        serde_json::from_value(v).unwrap()
+    }
+
+    #[test]
+    fn probe_body_always_carries_the_running_context() {
+        // The regression this guards: the old body was
+        //   {"options": {"num_predict": 20}}
+        // with no num_ctx, which made Ollama reload the model at 4096.
+        let body = probe_request_body("llama3.1:8b", 32768);
+        assert_eq!(body["options"]["num_ctx"], 32768);
+        assert_eq!(body["options"]["num_predict"], 20);
+        assert_eq!(body["model"], "llama3.1:8b");
+        assert_eq!(body["stream"], false);
+        // keep_alive must stay absent so the operator's OLLAMA_KEEP_ALIVE wins.
+        assert!(body.get("keep_alive").is_none(), "probe must not send keep_alive");
+    }
+
+    #[test]
+    fn probe_does_not_change_a_models_context() {
+        // End-to-end at the decision level: whatever context /api/ps reports
+        // as running is exactly what the probe request asks for, so the loaded
+        // configuration is unchanged. Covers the two values measured in V3
+        // plus the default.
+        for running in [4096u64, 8192, 32768, 65536, 262144] {
+            let ps = ps_with("qwen3.5:4b", Some(running));
+            let ProbeTarget::Probe { num_ctx } = probe_target(&ps, "qwen3.5:4b") else {
+                panic!("expected Probe for a resident model with context {running}");
+            };
+            assert_eq!(num_ctx, running, "probe must mirror the running context");
+            let body = probe_request_body("qwen3.5:4b", num_ctx);
+            assert_eq!(
+                body["options"]["num_ctx"].as_u64(),
+                Some(running),
+                "probe body must request the context the model is already running",
+            );
+        }
+    }
+
+    #[test]
+    fn probe_skips_when_the_running_context_is_unknown() {
+        // No context_length field at all — an older Ollama, or a field that
+        // disappeared. Guessing would reset the context, so skip.
+        let ps = ps_with("llama3.1:8b", None);
+        assert_eq!(probe_target(&ps, "llama3.1:8b"), ProbeTarget::ContextUnknown);
+
+        // Present but zero or unusable is treated the same way.
+        assert_eq!(probe_target(&ps_with("llama3.1:8b", Some(0)), "llama3.1:8b"), ProbeTarget::ContextUnknown);
+        // A non-numeric context_length deserializes to None, so it is also unknown.
+        let stringy = ps_json(serde_json::json!({
+            "models": [{ "name": "llama3.1:8b", "context_length": "4096" }]
+        }));
+        assert_eq!(probe_target(&stringy, "llama3.1:8b"), ProbeTarget::ContextUnknown);
+    }
+
+    #[test]
+    fn probe_skips_a_model_that_is_not_loaded() {
+        let ps = ps_with("llama3.1:8b", Some(4096));
+        assert_eq!(probe_target(&ps, "qwen3.5:9b"), ProbeTarget::NotResident);
+        assert_eq!(
+            probe_target(&ps_json(serde_json::json!({ "models": [] })), "llama3.1:8b"),
+            ProbeTarget::NotResident,
+        );
+        // A body with no models array must not be read as "resident".
+        assert_eq!(
+            probe_target(&ps_json(serde_json::json!({})), "llama3.1:8b"),
+            ProbeTarget::NotResident,
+        );
+    }
+
+    #[test]
+    fn probe_target_matches_on_either_name_or_model_field() {
+        let only_model = ps_json(serde_json::json!({
+            "models": [{ "model": "qwen3.5:4b", "context_length": 4096 }]
+        }));
+        assert_eq!(
+            probe_target(&only_model, "qwen3.5:4b"),
+            ProbeTarget::Probe { num_ctx: 4096 },
+        );
+    }
+
     #[test]
     fn ps_lists_model_matches_loaded_only() {
-        let ps = serde_json::json!({ "models": [
+        // Same assertions as before the typed client landed; the bodies now go
+        // through PsResponse's own deserialization rather than raw Values.
+        let ps = ps_json(serde_json::json!({ "models": [
             { "name": "llama3.2:3b", "model": "llama3.2:3b" }
-        ]});
+        ]}));
         assert!(ps_lists_model(&ps, "llama3.2:3b"));
         assert!(!ps_lists_model(&ps, "qwen2.5:7b"));
-        assert!(!ps_lists_model(&serde_json::json!({ "models": [] }), "llama3.2:3b"));
-        assert!(!ps_lists_model(&serde_json::json!({}), "llama3.2:3b"));
+        assert!(!ps_lists_model(&ps_json(serde_json::json!({ "models": [] })), "llama3.2:3b"));
+        assert!(!ps_lists_model(&ps_json(serde_json::json!({})), "llama3.2:3b"));
     }
 
     #[test]

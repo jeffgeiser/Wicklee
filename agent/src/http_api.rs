@@ -579,7 +579,17 @@ pub(crate) async fn handle_events_recent(
 /// instance (matching the public docs). Empty list when Ollama isn't
 /// running. Replaces a leftover demo stub that served three hardcoded
 /// fake models as if they were real.
-pub(crate) async fn handle_tags(port_rx: tokio::sync::watch::Receiver<Option<u16>>) -> Json<TagsResponse> {
+/// GET /api/tags — the installed models, proxied from Ollama.
+///
+/// Ollama's response is parsed with `ollama_client::TagsResponse` rather than
+/// raw Values, which also lets this call feed the capability record: a
+/// successful answer proves the endpoint exists, and `details.context_length`
+/// (when present) is a never-loaded model's maximum context without an
+/// `/api/show` round trip.
+pub(crate) async fn handle_tags(
+    port_rx: tokio::sync::watch::Receiver<Option<u16>>,
+    axum::extract::Extension(caps): axum::extract::Extension<crate::caps::SharedCaps>,
+) -> Json<TagsResponse> {
     let port = match *port_rx.borrow() {
         Some(p) => p,
         None => return Json(TagsResponse { models: vec![] }),
@@ -589,14 +599,14 @@ pub(crate) async fn handle_tags(port_rx: tokio::sync::watch::Receiver<Option<u16
             .get(format!("http://127.0.0.1:{port}/api/tags"))
             .timeout(Duration::from_secs(3))
             .send().await.ok()?;
-        let json: serde_json::Value = resp.json().await.ok()?;
-        let models = json["models"].as_array()?.iter().filter_map(|m| {
+        let parsed: crate::ollama_client::TagsResponse = resp.json().await.ok()?;
+        if let Ok(mut c) = caps.lock() { c.observe_tags(&parsed); }
+        Some(parsed.models.iter().filter_map(|m| {
             Some(ModelInfo {
-                name: m["name"].as_str()?.to_string(),
-                size: m["size"].as_u64().unwrap_or(0),
+                name: m.name.clone().or_else(|| m.model.clone())?,
+                size: m.size.unwrap_or(0),
             })
-        }).collect::<Vec<_>>();
-        Some(models)
+        }).collect::<Vec<_>>())
     }.await.unwrap_or_default();
     Json(TagsResponse { models })
 }
@@ -614,6 +624,7 @@ pub(crate) struct StoreHealth(pub bool);
 
 pub(crate) async fn handle_health(
     axum::extract::Extension(store_healthy): axum::extract::Extension<StoreHealth>,
+    axum::extract::Extension(caps): axum::extract::Extension<crate::caps::SharedCaps>,
 ) -> Json<serde_json::Value> {
     // Routes that depend on the DuckDB store. Kept in sync with the
     // store-gated block in the router builder below.
@@ -630,6 +641,26 @@ pub(crate) async fn handle_health(
         "store_healthy":  store_healthy.0,
         "routes_available": if store_healthy.0 { STORE_GATED_ROUTES } else { &[] },
         "routes_unavailable": if store_healthy.0 { &[] as &[&str] } else { STORE_GATED_ROUTES },
+        // Which Ollama response fields this install has actually been observed
+        // to return. Step 0's rule: documented does not mean present, and
+        // nothing here is inferred from the version string. `unverified` lists
+        // what no response has proved yet, which is what gates a rule from
+        // running and what `inspect` reports as "not checked" from step 4.
+        "ollama_caps": caps.lock().ok().map(|c| serde_json::json!({
+            "runtime_version": c.version,
+            "verified": {
+                "ps_size_vram":                 c.ps_size_vram,
+                "ps_context_length":            c.ps_context_length,
+                "ps_expires_at":                c.ps_expires_at,
+                "ps_digest":                    c.ps_digest,
+                "gen_load_duration":            c.gen_load_duration,
+                "gen_prompt_eval_count":        c.gen_prompt_eval_count,
+                "gen_prompt_eval_cached_count": c.gen_prompt_eval_cached_count,
+                "tags_available":               c.tags_available,
+                "tags_details_context_length":  c.tags_details_context_length,
+            },
+            "unverified": c.missing(),
+        })),
         "store_failure_hint": if store_healthy.0 {
             serde_json::Value::Null
         } else {

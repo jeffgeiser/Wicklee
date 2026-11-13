@@ -2,7 +2,7 @@
 
 **Strategic reference · November 2026 · Jeff Geiser**
 
-**Status:** This document is the strategic source of truth for Wicklee. It supersedes the v3.2 brief, `docs/GTM.md` and `docs/NEXT_STEPS.md`. Product capabilities described below include planned functionality and should not all be represented as currently available. `docs/OVERVIEW.md` is the shareable summary of this document. `docs/PHASE1_SPEC.md` is the implementation specification for the first stage.
+**Status:** This document is the strategic source of truth for Wicklee. It supersedes the v3.2 brief and the earlier GTM and next-steps documents, which were removed in Phase 1 step 1. Product capabilities described below include planned functionality and should not all be represented as currently available. `docs/OVERVIEW.md` is the shareable summary of this document. `docs/PHASE1_SPEC.md` is the implementation specification for the first stage.
 
 ---
 

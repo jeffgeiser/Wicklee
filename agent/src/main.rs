@@ -56,6 +56,9 @@ mod observations;
 mod model_fit;
 mod http_api;
 mod mcp;
+mod auth;
+mod ollama_client;
+mod caps;
 #[cfg(any(all(target_os = "linux", not(target_env = "musl")), target_os = "windows"))]
 use nvml_wrapper::{bitmasks::device::ThrottleReasons, enum_wrappers::device::{Clock, TemperatureSensor}, Nvml};
 // nvml-wrapper 0.10 only wraps nvmlDeviceGetMemoryInfo (v1), which returns
@@ -139,12 +142,39 @@ fn push_event(
 
 // ── Server Bootstrap ──────────────────────────────────────────────────────────
 
+/// Whether the version line is the command's *output* rather than a log line.
+///
+/// It is output only for `--version` / `-V`, where the version is the whole
+/// point of the invocation. Everywhere else — daemon startup, `--status`,
+/// `--install-service`, and the `inspect` / `ready` / `findings` subcommands
+/// Phase 1 adds — it is a "which build is this?" log line and belongs on
+/// stderr, because stdout is reserved for machine-readable output.
+fn version_is_command_output<I, S>(args: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    args.into_iter().any(|a| {
+        let a = a.as_ref();
+        a == "--version" || a == "-V"
+    })
+}
+
 #[tokio::main]
 async fn main() {
-    // Print version on every invocation — CLI tools, daemon startup, and sudo
-    // install/uninstall all benefit from an immediate "which build is this?"
-    // confirmation without having to run --version separately.
-    println!("wicklee-agent v{}", env!("CARGO_PKG_VERSION"));
+    // The version line is printed on every invocation — daemon startup and
+    // sudo install/uninstall both benefit from an immediate "which build is
+    // this?" confirmation. It goes to **stderr**, because Phase 1 adds
+    // `wicklee ready --json` and `wicklee inspect --json` and a banner on
+    // stdout would be the first line a caller pipes into jq. `--version` is
+    // the exception: there the version is the command's output.
+    let version_line = format!("wicklee-agent v{}", env!("CARGO_PKG_VERSION"));
+    let version_flag = version_is_command_output(std::env::args());
+    if version_flag {
+        println!("{version_line}");
+    } else {
+        eprintln!("{version_line}");
+    }
 
     let config = load_or_create_config();
     let initial_status = if config.fleet_url.is_some() { "connected" } else { "unpaired" };
@@ -158,7 +188,7 @@ async fn main() {
         },
     }));
 
-    if std::env::args().any(|a| a == "--version" || a == "-V") {
+    if version_flag {
         return; // version already printed above
     }
 
@@ -273,6 +303,42 @@ async fn main() {
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or(7700);
+
+    // ── Inbound auth: the Remote access startup rule ──────────────────────────
+    // Evaluated here, after every client-mode flag has returned (so `--status`
+    // and `--mcp-stdio` still work on a misconfigured host) and before any task
+    // is spawned or any port is bound. A non-loopback bind with no credential
+    // refuses to start rather than exposing hardware, loaded models and the
+    // writable /api/pair/claim and /mcp routes to the network.
+    let bind_addr_cfg = config.bind_address.clone().unwrap_or_else(|| "127.0.0.1".to_string());
+    let auth_policy = match auth::evaluate_startup(
+        &bind_addr_cfg,
+        config.auth_token.as_deref(),
+        config.allow_unauthenticated.unwrap_or(false),
+    ) {
+        auth::StartupDecision::Proceed(p) => p,
+        auth::StartupDecision::ProceedWithWarning(p, warning) => {
+            eprintln!("[warn] ╔══════════════════════════════════════════════════════════════╗");
+            eprintln!("[warn] ║  UNAUTHENTICATED REMOTE ACCESS                               ║");
+            eprintln!("[warn] ╚══════════════════════════════════════════════════════════════╝");
+            for line in warning.split('\n') {
+                eprintln!("[warn] {line}");
+            }
+            p
+        }
+        auth::StartupDecision::Refuse(reason) => {
+            eprintln!("[fatal] {reason}");
+            std::process::exit(1);
+        }
+    };
+    if auth_policy.non_loopback_bind && auth_policy.token.is_some() {
+        eprintln!(
+            "[auth] bound to {bind_addr_cfg} — requests from other machines must present \
+             the configured {} as a bearer token",
+            auth::TOKEN_KEY,
+        );
+    }
+    let auth_policy = Arc::new(auth_policy);
 
     let pair_on_start = std::env::args().any(|a| a == "--pair");
     if pair_on_start {
@@ -494,7 +560,7 @@ async fn main() {
     if probe_policy.enabled {
         eprintln!("[probe] idle probes every {} min (loaded models only)", probe_policy.interval.as_secs() / 60);
     }
-    let (ollama_metrics, probe_active) = harvester::start_ollama_harvester(
+    let (ollama_metrics, probe_active, ollama_caps) = harvester::start_ollama_harvester(
         Arc::clone(&apple_metrics),
         Arc::clone(&nvidia_metrics),
         proxy_arc,
@@ -915,7 +981,7 @@ async fn main() {
     let app = {
         let r = Router::new()
             .route("/api/health",         get(handle_health))         // diagnostic — always live
-            .route("/api/tags",           get(move || handle_tags(tags_port_rx.clone())))
+            .route("/api/tags",           get(move |caps| handle_tags(tags_port_rx.clone(), caps)))
             .route("/api/events/recent",  get(handle_events_recent))
             .route("/api/metrics",        get(handle_metrics))       // SSE fallback (1 Hz)
             .route("/api/metrics/snapshot", get(handle_metrics_snapshot)) // one-shot JSON of latest frame
@@ -977,7 +1043,18 @@ async fn main() {
          .layer(axum::extract::Extension(NodeId(Arc::new(config.node_id.clone()))))
          .layer(axum::extract::Extension(ProxyPorts { listen: proxy_listen, target: proxy_target }))
          .layer(axum::extract::Extension(Arc::clone(&runtime_config_cache)))
+         // The capability record, filled in live by the Ollama harvester from
+         // the responses it sees and by /api/tags. Step 3 publishes it on
+         // GET /v1/state and step 4 gates rules on it.
+         .layer(axum::extract::Extension(Arc::clone(&ollama_caps)))
          .layer(cors)
+         // Outermost layer: every route, including the embedded dashboard and
+         // the static fallback, passes the peer-address and token check before
+         // any handler or extractor runs.
+         .layer(axum::middleware::from_fn_with_state(
+             Arc::clone(&auth_policy),
+             auth::require_auth,
+         ))
     };
     // Suppress unused-variable warning on musl where metrics_store = None:()
     let _ = &metrics_store;
@@ -1055,10 +1132,61 @@ async fn main() {
         }
     };
 
-    axum::serve(listener, app)
+    // `into_make_service_with_connect_info` is what puts ConnectInfo<SocketAddr>
+    // into each request's extensions; without it the auth middleware has no
+    // peer address to check and fails closed.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
         .with_graceful_shutdown(shutdown)
         .await
         .expect("Server exited unexpectedly");
 
     eprintln!("[agent] clean shutdown complete");
+}
+
+#[cfg(test)]
+mod version_output_tests {
+    use super::version_is_command_output;
+
+    #[test]
+    fn version_flags_put_it_on_stdout() {
+        assert!(version_is_command_output(["wicklee", "--version"]));
+        assert!(version_is_command_output(["wicklee", "-V"]));
+    }
+
+    #[test]
+    fn everything_else_keeps_stdout_clean() {
+        // Phase 1 adds `wicklee ready --json | jq`. A banner on stdout would be
+        // the first line jq reads, so every non-version invocation logs to
+        // stderr instead.
+        for args in [
+            vec!["wicklee"],
+            vec!["wicklee", "--status"],
+            vec!["wicklee", "ready", "--json"],
+            vec!["wicklee", "inspect", "--json"],
+            vec!["wicklee", "findings"],
+            vec!["wicklee", "--mcp-stdio"],
+            vec!["wicklee", "--install-service"],
+            vec!["wicklee", "--pair"],
+        ] {
+            assert!(
+                !version_is_command_output(&args),
+                "{args:?} must not print the banner to stdout",
+            );
+        }
+    }
+
+    #[test]
+    fn a_version_substring_is_not_a_version_flag() {
+        // Matched exactly, so these do not divert the banner to stdout.
+        for args in [
+            vec!["wicklee", "--versions"],
+            vec!["wicklee", "--version-check"],
+            vec!["wicklee", "-Version"],
+        ] {
+            assert!(!version_is_command_output(&args), "{args:?} is not --version");
+        }
+    }
 }
