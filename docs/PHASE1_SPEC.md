@@ -407,6 +407,18 @@ The context qualifier in the first case is not optional. V1 measured 8.7 GB of K
 
 The second case is deliberately named `EstimatedWeightsOnly` rather than `Estimated`, because `scoring.rs` models weights and overhead and does not model KV cache. On a long-context workload it will underestimate, sometimes by more than the weights themselves. Any statement built on it says so: "about 7 GB of weights, excluding KV cache, which at this context may add several GB more."
 
+#### Non-uniform KV heads
+
+Step 1 found that `attention.head_count_kv` can be a per-layer **array** rather than a scalar — `qwen3.5` reports `[0, 0, 0, 4, …]`, a hybrid model where some layers hold no KV cache at all. Step 1 collapses such an array to the ceiling of its mean, giving 1 for this model, on the reasoning that consumers multiply by layer count: 32 × 1 recovers the true 32 head-layers, where the maximum of 4 would overestimate by 4×.
+
+**That reasoning is correct and the rounding is not.** Mean rather than maximum is right, because the quantity that determines KV cost is the sum over layers, and a per-layer scalar meant to be multiplied by layer count must therefore be the mean. But `ceil` is lossy and biased upward, and it is only exact when the mean is already an integer — which is why it happens to work here. A mean of 1.2 becomes 2, and 32 × 2 = 64 against a true total of 38.4, a 66% overestimate. A mean of 0.5 becomes 1, a 2× overestimate.
+
+This sits upstream of `FitBasis`, and the evidence rules forbid filling a gap with an estimate, so it is corrected before step 3 consumes it:
+
+- Carry the exact **sum** over layers as the KV-head total. That is the figure KV-cache math actually needs, and it requires no rounding.
+- Leave the per-layer scalar `None` when the array is non-uniform, so nothing can silently multiply a synthetic per-layer figure by the layer count. For a hybrid model there is no true per-layer value, and inventing one is the failure mode the evidence rules exist to prevent.
+- Where a per-layer figure is genuinely needed, keep the mean as a float and round at the point of use, not at the point of parsing.
+
 ### Displacement certainty
 
 `MayRequireEviction` always carries one of three levels. A model is named only when runtime evidence supports it.
@@ -790,8 +802,13 @@ These are replaced by Phase 1 work or are stale documents.
 | Raw JSON parsing of `/api/ps` in the harvester | Part of `harvester.rs` | Replaced by `ollama_client.rs` types | With the client step |
 | `docs/GTM.md`, `docs/NEXT_STEPS.md`, `docs/CODE_REVIEW.md` | 289 lines | Describe a strategy the v3.2 brief replaced | Step 0 |
 | `docs/progress.md` | 2,718 lines | A journal. Git history holds the same record | Step 0 |
-| `docs/progress-archive.md` | 1,831 lines | The same journal, older. Missed in revision 1 | Step 0 |
 | `docs/ROADMAP.md` | 481 lines | Rewrite to match v3.2. Do not delete | Final step |
+
+**Not removable, and not repository lines.** Revision 2 listed `docs/progress-archive.md` as 1,831 lines to delete. That was wrong: it is in `.gitignore` and was never tracked, so it is a local file on the maintainer's machine and not part of the repository at all. `git rm` cannot touch it and nothing in the repository references it. It is the maintainer's to delete or keep; no step removes it.
+
+`docs/progress.md` is a different case and the entry above is correct. It is *also* listed in `.gitignore`, but it was committed before that entry existed, and `.gitignore` does not untrack a tracked file. It is tracked at 2,718 lines and `git rm` works on it.
+
+`CLAUDE.md` is likewise gitignored and untracked. Edits to it cannot be committed, so any instruction it carries — such as a sync target pointing at a deleted document — has to be corrected on each machine by hand.
 
 Also remove `routing_hint` from the observation engine in step 4. It issues instructions such as "steer away" with no evidence and no workload context, which the findings model replaces. The audit must first list what reads it, including the cloud push and any outside consumer.
 
@@ -895,6 +912,27 @@ Steps are in dependency order. Each step ends with its tests passing and a short
 | 10 | Update the README and `docs/ROADMAP.md`. Publish results with method and raw data | 9 | A new user can install, run `wicklee inspect`, and understand the output from the README alone |
 
 The remote-access rule moved from step 3 to step 1, because V8 showed the existing routes are already exposed.
+
+### Measured: steps 0 and 1
+
+| Measure | Value |
+| --- | --- |
+| Agent lines, pristine 0.12.0 | 15,250 |
+| Agent lines, after step 1 | 17,219, of which about 1,163 are production code against the ~3,500 budget |
+| Release binary, pristine 0.12.0 | 24,411,328 bytes (23.28 MB) |
+| Release binary, after step 1 | 24,477,808 bytes, +0.27% |
+| Tests | 124 passing, clippy clean at every commit |
+
+Both binary figures were measured on the same toolchain, which is the only way the comparison means anything.
+
+**The probe fix is verified against a real runtime, not only unit tests.** The old request body took a model loaded at `num_ctx` 8192 down to 4096 with a 2,626 ms reload. The new body holds 8192 and returns in 3 ms. That is the V3 bug reproduced and then closed, with a measurement on each side.
+
+**Inbound auth did not break pairing or the dashboard.** All loopback routes verified 200.
+
+Two deviations from a literal reading of step 1, both accepted:
+
+- `RuntimeCaps` was given a real consumer on `/api/health` rather than leaving `missing()` dead. Correct — an unused capability record cannot be verified, and the spec requires `inspect` to report what it could not check.
+- The running `context_length` from `/api/ps` was **not** published as a `MetricsPayload` field, because that needs an agent, cloud and frontend three-way sync and `cloud/` is out of scope. The probe consumes it directly instead. Correct, and publishing belongs with the residency tracker in step 2, where the transition log needs it anyway.
 
 ### Notes for the implementer
 
