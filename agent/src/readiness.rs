@@ -148,6 +148,10 @@ pub(crate) struct ModelReadiness {
     pub(crate) readiness: Readiness,
     /// This model's own contention, not a victim's.
     pub(crate) in_use: Option<bool>,
+    /// When that activity was, so a caller can say "in use 12 s ago" rather
+    /// than only "in use". `None` when nothing has been attributed to a real
+    /// caller, which is not the same as the model being idle.
+    pub(crate) last_activity_ms: Option<i64>,
     /// Only present with `MayRequireEviction`.
     pub(crate) displacement: Option<Displacement>,
     pub(crate) fit_basis: Option<FitBasis>,
@@ -414,6 +418,7 @@ fn assess_state(
         model: state.model.clone(),
         readiness,
         in_use: mine,
+        last_activity_ms: state.last_activity_ms,
         displacement,
         fit_basis: fit.as_ref().map(|f| f.basis),
         footprint: fit,

@@ -62,6 +62,7 @@ mod caps;
 mod residency;
 mod findings;
 mod readiness;
+mod cli;
 #[cfg(any(all(target_os = "linux", not(target_env = "musl")), target_os = "windows"))]
 use nvml_wrapper::{bitmasks::device::ThrottleReasons, enum_wrappers::device::{Clock, TemperatureSensor}, Nvml};
 // nvml-wrapper 0.10 only wraps nvmlDeviceGetMemoryInfo (v1), which returns
@@ -177,6 +178,28 @@ async fn main() {
         println!("{version_line}");
     } else {
         eprintln!("{version_line}");
+    }
+
+    // ── Subcommands ───────────────────────────────────────────────────────────
+    // A first argument that does not start with `--` is a subcommand. Every
+    // existing flag, and `wicklee` with no arguments, falls through untouched.
+    //
+    // This sits before the config is read, because a client subcommand has no
+    // business touching it: load_or_create_config() *creates* a config when
+    // none exists, and `wicklee ready` asking a running agent a question
+    // should not write to disk. A typo must not boot a daemon either, so an
+    // unrecognised subcommand exits rather than falling through.
+    match cli::parse(&std::env::args().skip(1).collect::<Vec<_>>()) {
+        cli::Invocation::Agent => {}
+        cli::Invocation::Run(cmd) => {
+            let port: u16 =
+                std::env::var("PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(7700);
+            std::process::exit(cli::run(cmd, port).await);
+        }
+        cli::Invocation::Unknown(msg) => {
+            eprintln!("{msg}");
+            std::process::exit(2);
+        }
     }
 
     let config = load_or_create_config();
