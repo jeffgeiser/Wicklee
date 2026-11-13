@@ -43,6 +43,23 @@ pub(crate) enum Residency {
     NotLoaded,
 }
 
+/// A footprint actually measured while the model was loaded.
+///
+/// Kept after the model unloads, because it is the only *measured* basis for
+/// deciding whether that model fits next time. The context is part of the
+/// measurement and not a label on it: step 0 V1 found 8.7 GB of KV cache in an
+/// 11.4 GB resident model, so the same weights at a different context are a
+/// different footprint, and a size observed at 8K says nothing about 64K.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub(crate) struct MeasuredFootprint {
+    pub(crate) size_bytes: u64,
+    pub(crate) context_length: u64,
+    /// The digest it was measured for. A model rebuilt under the same tag is a
+    /// different model, and its old measurement does not transfer.
+    pub(crate) digest: Option<String>,
+    pub(crate) observed_at_ms: i64,
+}
+
 /// What is known about one model right now.
 ///
 /// A state is kept after the model unloads, with `residency` flipped and the
@@ -67,6 +84,8 @@ pub(crate) struct ModelState {
     /// Installed file size from `/api/tags`. Not the resident footprint: step 0
     /// V7 measured the installed size *above* the resident size.
     pub(crate) installed_size_bytes: Option<u64>,
+    /// The last footprint measured while loaded, which survives an unload.
+    pub(crate) measured: Option<MeasuredFootprint>,
     pub(crate) observed_at_ms: i64,
 }
 
@@ -495,6 +514,7 @@ impl Tracker {
                             expires_at_ms: None,
                             last_activity_ms: None,
                             installed_size_bytes: Some(*bytes),
+                            measured: None,
                             observed_at_ms: ts_ms,
                         },
                     );
@@ -564,6 +584,7 @@ impl Tracker {
                 previous.and_then(|p| p.last_activity_ms)
             },
             installed_size_bytes: previous.and_then(|p| p.installed_size_bytes),
+            measured: measure(polled, ts).or_else(|| previous.and_then(|p| p.measured.clone())),
             observed_at_ms: ts,
         };
         self.states.insert(polled.model.clone(), state.clone());
@@ -581,6 +602,7 @@ impl Tracker {
             expires_at_ms: polled.expires_at_ms,
             last_activity_ms: before.last_activity_ms,
             installed_size_bytes: before.installed_size_bytes,
+            measured: measure(polled, ts).or_else(|| before.measured.clone()),
             observed_at_ms: ts,
         };
         self.states.insert(polled.model.clone(), state.clone());
@@ -597,8 +619,24 @@ impl Tracker {
         state.context_length = None;
         state.expires_at_ms = None;
         state.observed_at_ms = ts;
+        // `measured` is deliberately not cleared: it remains a true statement
+        // about a footprint that was observed, and it is the only measured
+        // basis a readiness answer for an unloaded model can cite.
         Some(state.clone())
     }
+}
+
+/// A measurement from this poll, when the poll carries both halves of one.
+///
+/// Both the size and the context it was running at, or nothing: a size without
+/// its context is not a footprint that can be compared to anything later.
+fn measure(polled: &PolledModel, ts: i64) -> Option<MeasuredFootprint> {
+    Some(MeasuredFootprint {
+        size_bytes: polled.size_bytes?,
+        context_length: polled.context_length?,
+        digest: polled.digest.clone(),
+        observed_at_ms: ts,
+    })
 }
 
 /// How long before a load an unload may be and still read as part of the same

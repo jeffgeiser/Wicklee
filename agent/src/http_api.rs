@@ -766,6 +766,87 @@ pub(crate) async fn handle_v1_state(
     }))
 }
 
+/// GET /v1/readiness, and `?model=` for one.
+///
+/// Readiness is a pure function; this handler only gathers its inputs and
+/// serialises the result, so every classification branch is reachable from a
+/// test without a runtime.
+pub(crate) async fn handle_v1_readiness(
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+    axum::extract::Extension(residency): axum::extract::Extension<
+        crate::residency::SharedTracker,
+    >,
+    axum::extract::Extension(caps): axum::extract::Extension<crate::caps::SharedCaps>,
+    axum::extract::Extension(apple): axum::extract::Extension<
+        Arc<Mutex<crate::metrics::AppleSiliconMetrics>>,
+    >,
+    axum::extract::Extension(nvidia): axum::extract::Extension<
+        Arc<Mutex<crate::metrics::NvidiaMetrics>>,
+    >,
+    axum::extract::Extension(node_id_ext): axum::extract::Extension<NodeId>,
+) -> axum::response::Response {
+    let (states, transitions) = match residency.lock() {
+        Ok(t) => (
+            t.states().cloned().collect::<Vec<_>>(),
+            t.history().cloned().collect::<Vec<_>>(),
+        ),
+        Err(_) => (Vec::new(), Vec::new()),
+    };
+    let refs: Vec<&crate::residency::ModelState> = states.iter().collect();
+
+    let apple_now = apple.lock().map(|g| g.clone()).unwrap_or_default();
+    let nvidia_now = nvidia.lock().map(|g| g.clone()).unwrap_or_default();
+    let headroom = crate::readiness::headroom(&apple_now, &nvidia_now, &refs);
+    let calibration = crate::readiness::calibrate(&refs);
+    // The only activity signal in Phase 1 so far. A rule that needs a missing
+    // capability does not run, and without expires_at there is no way to tell
+    // an idle model from a busy one, so in_use comes back unknown.
+    let activity_signal = caps.lock().map(|c| c.ps_expires_at).unwrap_or(false);
+
+    let inputs = crate::readiness::Inputs {
+        states: refs,
+        transitions: &transitions,
+        headroom,
+        activity_signal,
+        now_ms: crate::residency::now_ms(),
+    };
+
+    let envelope = |body: serde_json::Value| -> serde_json::Value {
+        let mut v = serde_json::json!({
+            "node_id":     node_id_ext.0.as_str(),
+            "headroom":    headroom,
+            "calibration": calibration,
+            "activity_signal": activity_signal,
+        });
+        if let (Some(o), Some(b)) = (v.as_object_mut(), body.as_object()) {
+            for (k, val) in b {
+                o.insert(k.clone(), val.clone());
+            }
+        }
+        v
+    };
+
+    match params.get("model").map(String::as_str) {
+        Some(model) => match crate::readiness::assess_one(&inputs, model) {
+            Some(r) => Json(envelope(serde_json::json!({ "readiness": r }))).into_response(),
+            // Not an empty answer: this host has never seen the model, which is
+            // a different thing from it not being ready.
+            None => (
+                axum::http::StatusCode::NOT_FOUND,
+                Json(serde_json::json!({
+                    "error": format!("{model} is not installed on this host, or has not been seen yet"),
+                    "hint":  "GET /v1/state lists what is known",
+                })),
+            )
+                .into_response(),
+        },
+        None => {
+            Json(envelope(serde_json::json!({ "models": crate::readiness::assess(&inputs) })))
+                .into_response()
+        }
+    }
+}
+
 /// Health snapshot — operator-facing diagnostic for "are the API routes I
 /// expect actually live?". Reports agent version, build target, DuckDB
 /// store state (healthy / disabled), and which feature surface that gates.

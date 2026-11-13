@@ -2080,6 +2080,14 @@ mod tests {
                 context_length: ctx,
                 expires_at_ms: Some(1_794_580_004_305),
                 last_activity_ms: Some(1_700_000_000_000),
+                // A real measurement, so the nested struct is covered by the
+                // round trip rather than serialising as null.
+                measured: Some(crate::residency::MeasuredFootprint {
+                    size_bytes: 3_151_000_000,
+                    context_length: ctx.unwrap_or(4096),
+                    digest: Some("sha256:abc".into()),
+                    observed_at_ms: 1_700_000_000_000,
+                }),
                 installed_size_bytes: Some(3_389_983_735),
                 observed_at_ms: 1_700_000_000_000,
             })

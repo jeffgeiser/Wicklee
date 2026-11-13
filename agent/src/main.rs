@@ -60,6 +60,8 @@ mod auth;
 mod ollama_client;
 mod caps;
 mod residency;
+mod findings;
+mod readiness;
 #[cfg(any(all(target_os = "linux", not(target_env = "musl")), target_os = "windows"))]
 use nvml_wrapper::{bitmasks::device::ThrottleReasons, enum_wrappers::device::{Clock, TemperatureSensor}, Nvml};
 // nvml-wrapper 0.10 only wraps nvmlDeviceGetMemoryInfo (v1), which returns
@@ -1032,6 +1034,7 @@ async fn main() {
             .route("/v1/state", get(move |caps, residency, node_id| {
                 handle_v1_state(state_port_rx.clone(), caps, residency, node_id)
             }))
+            .route("/v1/readiness", get(handle_v1_readiness))
             .route("/api/events/recent",  get(handle_events_recent))
             .route("/api/metrics",        get(handle_metrics))       // SSE fallback (1 Hz)
             .route("/api/metrics/snapshot", get(handle_metrics_snapshot)) // one-shot JSON of latest frame
