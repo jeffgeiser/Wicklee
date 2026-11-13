@@ -228,64 +228,122 @@ impl ModelInfo {
         self.0.keys().any(|k| k.starts_with(&needle))
     }
 
-    /// Read `<arch>.<suffix>` as a single number, with `general.<suffix>` as a
+    /// Read `<arch>.<suffix>` as a typed value, with `general.<suffix>` as a
     /// fallback.
     ///
-    /// Accepts both a scalar and an array. `qwen35.attention.head_count_kv` is
-    /// an array of per-layer KV head counts — `[0,0,0,4,0,0,0,4, …]` for a
-    /// hybrid-attention model, where the zeros are layers that keep no KV
-    /// cache. A scalar read (`as_u64`) returns `None` on those, which is how
-    /// the old code lost the field entirely.
-    ///
-    /// For an array the summary returned is the **mean over all layers,
-    /// rounded up**. Every consumer of these fields multiplies by the layer
-    /// count, and the mean is the only summary that preserves the total: 8
-    /// layers of 4 heads across 32 layers gives a mean of 1, and 32 × 1
-    /// recovers the real 32 head-layers, where the maximum (4) would
-    /// overestimate by 4x. Rounding up keeps the estimate conservative for a
-    /// headroom question.
-    ///
-    /// A single scalar cannot describe a hybrid model honestly, so a consumer
-    /// that needs the real per-layer shape should read the raw value through
-    /// [`Self::get`] rather than trusting this summary.
-    pub(crate) fn arch_u64(&self, arch: Option<&str>, suffix: &str) -> Option<u64> {
+    /// Returns the shape the runtime actually reported. See [`ArchValue`] for
+    /// why that shape is preserved here instead of collapsed to one number.
+    pub(crate) fn arch_value(&self, arch: Option<&str>, suffix: &str) -> Option<ArchValue> {
         let candidates = arch
             .map(|a| format!("{a}.{suffix}"))
             .into_iter()
             .chain(std::iter::once(format!("general.{suffix}")));
         for key in candidates {
             if let Some(v) = self.0.get(&key)
-                && let Some(n) = value_as_u64(v)
+                && let Some(parsed) = ArchValue::parse(v)
             {
-                return Some(n);
+                return Some(parsed);
             }
         }
         None
     }
 
+    /// Read `<arch>.<suffix>` as a single number.
+    ///
+    /// `None` when the runtime reported a non-uniform per-layer array, because
+    /// no single number is true of such a model. `qwen35.attention.head_count_kv`
+    /// is one: most of its layers hold no KV cache at all. Callers that need
+    /// the array form use [`Self::arch_value`].
+    pub(crate) fn arch_u64(&self, arch: Option<&str>, suffix: &str) -> Option<u64> {
+        self.arch_value(arch, suffix).and_then(ArchValue::scalar)
+    }
+
 }
 
-/// Coerce one `model_info` value to a number.
+/// One numeric `model_info` value, in the shape the runtime reported it.
 ///
-/// Scalars pass through. Arrays collapse to the ceiling of their mean, for the
-/// reason given on [`ModelInfo::arch_u64`]. An empty array, a string, or a
-/// nested structure yields `None` rather than a guess.
-fn value_as_u64(v: &serde_json::Value) -> Option<u64> {
-    if let Some(n) = v.as_u64() {
-        return Some(n);
+/// `attention.head_count_kv` is a scalar on most models and a per-layer array
+/// on hybrid-attention ones. `qwen3.5` reports `[0,0,0,4,0,0,0,4, ...]`, where
+/// the zeros are layers that hold no KV cache at all.
+///
+/// Step 1 collapsed such an array to the ceiling of its mean. The mean is the
+/// right summary — KV cost is the sum over layers, so a per-layer figure that
+/// a consumer multiplies by the layer count has to be the mean and not the
+/// maximum — but `ceil` is biased upward and is exact only when the mean is
+/// already an integer, which is the sole reason it looked right on `qwen3.5`.
+/// A mean of 1.2 becomes 2, and 32 x 2 = 64 against a true total of 38.4.
+///
+/// So nothing is rounded here. [`Self::layer_total`] carries the exact sum,
+/// which is the figure KV-cache math actually needs, and [`Self::scalar`]
+/// offers a per-layer number only where one is true of every layer. A caller
+/// that genuinely needs a fractional per-layer figure divides the total by
+/// [`Self::layers`] and rounds at the point of use, never here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ArchValue {
+    /// A single number, reported for the whole model.
+    Scalar(u64),
+    /// A per-layer array. `total` is the exact sum across `layers`; `uniform`
+    /// is set only when every layer carries the same value, in which case that
+    /// value is a true per-layer figure.
+    PerLayer {
+        total: u64,
+        layers: u32,
+        uniform: Option<u64>,
+    },
+}
+
+impl ArchValue {
+    /// Parse one `model_info` value. An empty array, a string, a negative
+    /// number, or a nested structure yields `None` rather than a guess.
+    fn parse(v: &serde_json::Value) -> Option<Self> {
+        if let Some(n) = v.as_u64() {
+            return Some(Self::Scalar(n));
+        }
+        let arr = v.as_array()?;
+        let first = arr.first()?.as_u64()?;
+        // Every element must be a number; a mixed array is not a layer vector.
+        let mut total: u64 = 0;
+        for item in arr {
+            total = total.checked_add(item.as_u64()?)?;
+        }
+        let uniform = arr
+            .iter()
+            .all(|item| item.as_u64() == Some(first))
+            .then_some(first);
+        Some(Self::PerLayer {
+            total,
+            layers: u32::try_from(arr.len()).ok()?,
+            uniform,
+        })
     }
-    let arr = v.as_array()?;
-    if arr.is_empty() {
-        return None;
+
+    /// The value as one number, where one is true of the whole model: a scalar
+    /// as reported, or a uniform array's repeated element.
+    pub(crate) fn scalar(self) -> Option<u64> {
+        match self {
+            Self::Scalar(n) => Some(n),
+            Self::PerLayer { uniform, .. } => uniform,
+        }
     }
-    // Every element must be a number; a mixed array is not something to average.
-    let mut sum: u64 = 0;
-    for item in arr {
-        sum = sum.checked_add(item.as_u64()?)?;
+
+    /// The exact sum across layers. A scalar has no total of its own — it must
+    /// be multiplied by the layer count, which is a separate `model_info` key.
+    pub(crate) fn layer_total(self) -> Option<u64> {
+        match self {
+            Self::Scalar(_) => None,
+            Self::PerLayer { total, .. } => Some(total),
+        }
     }
-    let len = arr.len() as u64;
-    // Ceiling division, so a fractional mean rounds up.
-    Some(sum.div_ceil(len))
+
+    /// How many layers the array described, when the value was an array. Worth
+    /// checking against `block_count`: a disagreement means the array is not
+    /// the layer vector it is being read as.
+    pub(crate) fn layers(self) -> Option<u32> {
+        match self {
+            Self::Scalar(_) => None,
+            Self::PerLayer { layers, .. } => Some(layers),
+        }
+    }
 }
 
 // ── /api/generate (final, non-streaming response) ─────────────────────────────
@@ -512,13 +570,18 @@ mod tests {
         assert_eq!(show.model_info.arch_u64(a, "embedding_length"), Some(2560));
         assert_eq!(show.model_info.arch_u64(a, "attention.head_count"), Some(16));
 
-        // The array case. 8 layers of 4 heads over 32 layers: mean = 1, and
-        // 32 layers x 1 head recovers the real 32 head-layers.
+        // The array case. 8 layers of 4 heads over 32 layers: there is no true
+        // per-layer figure, so no single number is offered.
         assert_eq!(
             show.model_info.arch_u64(a, "attention.head_count_kv"),
-            Some(1),
-            "array must collapse to the layer-preserving mean, not None",
+            None,
+            "a non-uniform array has no honest per-layer scalar",
         );
+        // The exact total is what KV-cache math needs, and it is carried whole.
+        let kv = show.model_info.arch_value(a, "attention.head_count_kv").unwrap();
+        assert_eq!(kv.layer_total(), Some(32));
+        assert_eq!(kv.layers(), Some(32));
+        assert_eq!(kv.scalar(), None);
         // The raw value stays reachable for a consumer that needs per-layer data.
         let raw = show.model_info.get("qwen35.attention.head_count_kv").unwrap();
         let per_layer: Vec<u64> = raw.as_array().unwrap().iter().filter_map(|v| v.as_u64()).collect();
@@ -564,16 +627,34 @@ mod tests {
     }
 
     #[test]
-    fn value_coercion_rejects_what_it_cannot_average() {
-        assert_eq!(value_as_u64(&serde_json::json!(7)), Some(7));
-        assert_eq!(value_as_u64(&serde_json::json!([2, 4])), Some(3));
-        // Ceiling: mean of 1.5 rounds up to 2, keeping headroom conservative.
-        assert_eq!(value_as_u64(&serde_json::json!([1, 2])), Some(2));
-        assert_eq!(value_as_u64(&serde_json::json!([])), None);
-        assert_eq!(value_as_u64(&serde_json::json!("4096")), None);
-        assert_eq!(value_as_u64(&serde_json::json!([1, "x"])), None);
-        assert_eq!(value_as_u64(&serde_json::json!(-1)), None);
-        assert_eq!(value_as_u64(&serde_json::json!(null)), None);
+    fn value_coercion_keeps_the_exact_total_and_rounds_nothing() {
+        let parse = |v: serde_json::Value| ArchValue::parse(&v);
+
+        // A scalar is a scalar, and is a true per-layer figure.
+        assert_eq!(parse(serde_json::json!(7)), Some(ArchValue::Scalar(7)));
+        assert_eq!(parse(serde_json::json!(7)).unwrap().scalar(), Some(7));
+        assert_eq!(parse(serde_json::json!(7)).unwrap().layer_total(), None);
+
+        // A uniform array has one: every layer carries it.
+        let uniform = parse(serde_json::json!([4, 4, 4])).unwrap();
+        assert_eq!(uniform.scalar(), Some(4));
+        assert_eq!(uniform.layer_total(), Some(12));
+        assert_eq!(uniform.layers(), Some(3));
+
+        // A non-uniform array does not. This is the case step 1 rounded: the
+        // mean of [1, 2] is 1.5, and `ceil` made it 2 — a 33% overestimate
+        // once a consumer multiplies it back up by the layer count.
+        let mixed = parse(serde_json::json!([1, 2])).unwrap();
+        assert_eq!(mixed.scalar(), None);
+        assert_eq!(mixed.layer_total(), Some(3));
+        assert_eq!(mixed.layers(), Some(2));
+
+        // Nothing that is not a layer vector is coerced into one.
+        assert_eq!(parse(serde_json::json!([])), None);
+        assert_eq!(parse(serde_json::json!("4096")), None);
+        assert_eq!(parse(serde_json::json!([1, "x"])), None);
+        assert_eq!(parse(serde_json::json!(-1)), None);
+        assert_eq!(parse(serde_json::json!(null)), None);
     }
 
     // ── /api/tags ────────────────────────────────────────────────────────────

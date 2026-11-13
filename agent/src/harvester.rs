@@ -362,6 +362,7 @@ pub(crate) fn start_ollama_harvester(
             // Architecture fields from /api/show — needed for KV cache math.
             let mut cached_num_layers:      Option<u64> = None;
             let mut cached_kv_heads:        Option<u64> = None;
+            let mut cached_kv_head_layers:  Option<u64> = None;
             let mut cached_num_heads:       Option<u64> = None;
             let mut cached_embedding_dim:   Option<u64> = None;
             let mut last_infer_ts: Option<std::time::Instant> = None;
@@ -416,6 +417,7 @@ pub(crate) fn start_ollama_harvester(
                     ollama_parameter_count:   prev_state.ollama_parameter_count,
                     ollama_num_layers:        prev_state.ollama_num_layers,
                     ollama_kv_heads:          prev_state.ollama_kv_heads,
+                    ollama_kv_head_layers:    prev_state.ollama_kv_head_layers,
                     ollama_num_heads:         prev_state.ollama_num_heads,
                     ollama_embedding_dim:     prev_state.ollama_embedding_dim,
                     ..Default::default()
@@ -519,7 +521,36 @@ pub(crate) fn start_ollama_harvester(
                                 cached_context_length  = mi.arch_u64(arch, "context_length");
                                 cached_parameter_count = mi.arch_u64(arch, "parameter_count");
                                 cached_num_layers      = mi.arch_u64(arch, "block_count");
-                                cached_kv_heads        = mi.arch_u64(arch, "attention.head_count_kv");
+                                // head_count_kv is a scalar on most models and
+                                // a per-layer array on hybrid-attention ones.
+                                // The per-layer scalar is offered only where one
+                                // is true of every layer; the exact total across
+                                // layers is carried either way, because that is
+                                // the figure KV-cache math needs.
+                                let kv = mi.arch_value(arch, "attention.head_count_kv");
+                                cached_kv_heads = kv.and_then(crate::ollama_client::ArchValue::scalar);
+                                cached_kv_head_layers = kv.and_then(|v| {
+                                    v.layer_total().or_else(|| {
+                                        v.scalar()
+                                            .zip(cached_num_layers)
+                                            .map(|(heads, layers)| heads.saturating_mul(layers))
+                                    })
+                                });
+                                // An array whose length disagrees with
+                                // block_count is not the layer vector it is
+                                // being read as, so its sum is not a KV-head
+                                // total. Drop it rather than report it.
+                                if let Some(v) = kv
+                                    && let (Some(entries), Some(blocks)) = (v.layers(), cached_num_layers)
+                                    && u64::from(entries) != blocks
+                                {
+                                    eprintln!(
+                                        "[ollama] /api/show for {model_name}: head_count_kv has \
+                                         {entries} entries against block_count {blocks} — not read \
+                                         as a layer vector"
+                                    );
+                                    cached_kv_head_layers = None;
+                                }
                                 cached_num_heads       = mi.arch_u64(arch, "attention.head_count");
                                 cached_embedding_dim   = mi.arch_u64(arch, "embedding_length");
                                 if cached_num_layers.is_none() {
@@ -547,6 +578,7 @@ pub(crate) fn start_ollama_harvester(
                 m.ollama_parameter_count = cached_parameter_count;
                 m.ollama_num_layers    = cached_num_layers;
                 m.ollama_kv_heads      = cached_kv_heads;
+                m.ollama_kv_head_layers = cached_kv_head_layers;
                 m.ollama_num_heads     = cached_num_heads;
                 m.ollama_embedding_dim = cached_embedding_dim;
 

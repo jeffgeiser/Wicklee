@@ -502,7 +502,7 @@ pub(crate) async fn handle_mcp(
                     };
 
                     // ── Context Runway ───────────────────────────────────────
-                    // KV cache bytes = 2 × layers × kv_heads × head_dim × ctx_tokens × 2 (FP16)
+                    // KV cache bytes = 2 × kv_head_layers × head_dim × ctx_tokens × 2 (FP16)
                     let ctx_runway = (|| -> Option<serde_json::Value> {
                         let headroom_gb = if memory_pool_label == "VRAM" {
                             pool_available_gb
@@ -512,11 +512,16 @@ pub(crate) async fn handle_mcp(
                         };
                         if headroom_gb <= 0.0 { return None; }
 
-                        // Try exact arch fields first
-                        let (layers, kv_heads, head_dim, max_ctx, is_exact) =
-                            if let (Some(l), Some(kv), Some(nh), Some(ed)) = (
-                                ollama.ollama_num_layers,
-                                ollama.ollama_kv_heads,
+                        // Try exact arch fields first.
+                        //
+                        // One figure, not two: KV cost is the sum of KV heads
+                        // over layers, and `ollama_kv_head_layers` carries that
+                        // sum exactly. A hybrid-attention model has no per-layer
+                        // head count to multiply by the layer count, so reading
+                        // `layers x kv_heads` would have to invent one.
+                        let (kv_head_layers, head_dim, max_ctx, is_exact) =
+                            if let (Some(kvl), Some(nh), Some(ed)) = (
+                                ollama.ollama_kv_head_layers,
                                 ollama.ollama_num_heads,
                                 ollama.ollama_embedding_dim,
                             ) {
@@ -524,13 +529,13 @@ pub(crate) async fn handle_mcp(
                                 let hd = ed / nh;
                                 if hd == 0 { return None; }
                                 let mc = ollama.ollama_context_length.unwrap_or(8_192);
-                                (l, kv, hd, mc, true)
+                                (kvl, hd, mc, true)
                             } else {
                                 // Fallback: estimate from parameter count
                                 let params = ollama.ollama_parameter_count?;
                                 let b = params as f64 / 1e9;
                                 let mc = ollama.ollama_context_length.unwrap_or(8_192);
-                                // [minB, maxB, layers, kv_heads, head_dim]
+                                // [layers, kv_heads, head_dim]
                                 let entry = if b < 2.0        { (22u64, 8u64, 64u64) }
                                     else if b < 4.5  { (28, 8, 128) }
                                     else if b < 9.0  { (32, 8, 128) }
@@ -538,7 +543,7 @@ pub(crate) async fn handle_mcp(
                                     else if b < 40.0 { (48, 8, 128) }
                                     else if b < 80.0 { (80, 8, 128) }
                                     else             { (96, 8, 128) };
-                                (entry.0, entry.1, entry.2, mc, false)
+                                (entry.0 * entry.1, entry.2, mc, false)
                             };
 
                         let headroom_bytes = headroom_gb * 1024.0 * 1024.0 * 1024.0;
@@ -550,8 +555,8 @@ pub(crate) async fn handle_mcp(
 
                         for &ctx in &milestones {
                             if ctx > max_ctx { break; }
-                            // kv bytes = 2 × layers × kv_heads × head_dim × ctx × 2 (FP16)
-                            let kv_bytes = 2.0 * layers as f64 * kv_heads as f64 * head_dim as f64 * ctx as f64 * 2.0;
+                            // kv bytes = 2 × kv_head_layers × head_dim × ctx × 2 (FP16)
+                            let kv_bytes = 2.0 * kv_head_layers as f64 * head_dim as f64 * ctx as f64 * 2.0;
                             let kv_gb    = kv_bytes / (1024.0_f64).powi(3);
                             let fits     = kv_bytes <= headroom_bytes;
                             if fits { max_fits_ctx = Some(ctx); }
@@ -565,7 +570,7 @@ pub(crate) async fn handle_mcp(
 
                         // Add model's own max_ctx if not a milestone
                         if !milestones.contains(&max_ctx) {
-                            let kv_bytes = 2.0 * layers as f64 * kv_heads as f64 * head_dim as f64 * max_ctx as f64 * 2.0;
+                            let kv_bytes = 2.0 * kv_head_layers as f64 * head_dim as f64 * max_ctx as f64 * 2.0;
                             let kv_gb    = kv_bytes / (1024.0_f64).powi(3);
                             let fits     = kv_bytes <= headroom_bytes;
                             if fits { max_fits_ctx = Some(max_ctx); }
@@ -581,7 +586,7 @@ pub(crate) async fn handle_mcp(
 
                         let summary = match max_fits_ctx {
                             None => {
-                                let smallest_kv = 2.0 * layers as f64 * kv_heads as f64 * head_dim as f64 * 4096.0 * 2.0 / (1024.0_f64).powi(3);
+                                let smallest_kv = 2.0 * kv_head_layers as f64 * head_dim as f64 * 4096.0 * 2.0 / (1024.0_f64).powi(3);
                                 format!("KV cache exceeds {headroom_gb:.1} GB headroom even at 4k context ({approx_prefix}{smallest_kv:.1} GB). Swapping likely.")
                             }
                             Some(mfc) if mfc >= max_ctx => {

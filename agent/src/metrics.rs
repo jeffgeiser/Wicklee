@@ -46,6 +46,13 @@ pub(crate) struct OllamaMetrics {
     /// For GQA models this is < num_heads; for MHA it equals num_heads.
     /// KV cache scales with kv_heads, not total heads — critical for GQA accuracy.
     pub(crate) ollama_kv_heads:          Option<u64>,
+    /// Exact total of KV attention heads summed across every layer.
+    ///
+    /// On a hybrid-attention model `head_count_kv` is a per-layer array with no
+    /// true per-layer value, so `ollama_kv_heads` is None and this total is the
+    /// only honest input to KV-cache math. On a scalar model it is simply
+    /// kv_heads x num_layers. Internal state only, not on `MetricsPayload`.
+    pub(crate) ollama_kv_head_layers:    Option<u64>,
     /// Total attention heads (llama.attention.head_count).
     /// Used with embedding_dim to derive head_dim = embedding_dim / num_heads.
     pub(crate) ollama_num_heads:         Option<u64>,
