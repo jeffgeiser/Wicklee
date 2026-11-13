@@ -326,9 +326,14 @@ The first three total **289 lines**, matching the spec exactly.
 
 Two files the spec's table does not mention, found in `docs/`:
 
-- `docs/progress-archive.md`, 1,831 lines — the same kind of journal as
-  `progress.md`. If `progress.md` goes for being a journal, this should too.
-  **Not listed in the spec; needs a decision.**
+- `docs/progress-archive.md`, 1,831 lines on disk — **not repository content.**
+  It is listed in `.gitignore` and was never tracked, so it is a local file on
+  the maintainer's machine. `git rm` cannot touch it, `rm` would be
+  unrecoverable, and nothing in the repository references it. It is the
+  maintainer's to delete or keep, and no step should remove it. (Corrected
+  after the first draft of this audit, which read it as a 1,831-line journal in
+  the repository and asked for a decision on deleting it. The spec's revision 2
+  carried the same error and dropped the row in `f088468`.)
 - `docs/leaderboard-charter.md`, 168 lines — this is the "WES leaderboard
   charter" the spec lists as "keep if that idea continues". Filename differs
   from the spec's description.
@@ -337,10 +342,27 @@ Enterprise docs, which the spec says follow the cloud-code decision (frozen):
 `SSO.md` 107 · `MODEL_GOVERNANCE.md` 108 · `TERRAFORM.md` 104 ·
 `SELF_HOSTING.md` 157 · `BILLING.md` 161 = **637 lines**, matching the spec.
 
+### `.gitignore` is not the test for whether a file can be removed
+
+Three files here are all listed in `.gitignore`, and they behave in three
+different ways. The deciding question is whether git *tracks* the file, not
+whether it is ignored — `.gitignore` is only consulted for untracked paths, so
+it never untracks something already committed.
+
+| File | In `.gitignore` | Tracked | Removable |
+| --- | --- | --- | --- |
+| `docs/progress.md` | yes, line 56 | **yes** — committed before the ignore entry existed | **Yes.** `git rm` works. The 2,718-line entry stands |
+| `docs/progress-archive.md` | yes, line 57 | no | No. Never in the repository |
+| `CLAUDE.md` | yes, lines 50 and 61 | no | n/a. Edits to it are local to each machine |
+
+So the archive finding does **not** apply to `progress.md`: check
+`git ls-files` before concluding a file is untracked.
+
 **Caveat on `progress.md`:** `CLAUDE.md` lists it under "AI/Agent Discovery
-Files (keep in sync)" and requires updating it when endpoints or metrics change.
-Deleting it contradicts a standing instruction in `CLAUDE.md`, so `CLAUDE.md`
-must be edited in the same commit.
+Files (keep in sync)" and requires updating it when endpoints or metrics
+change. Deleting `progress.md` leaves that instruction pointing at nothing, so
+the line has to go too — but because `CLAUDE.md` is untracked, that edit cannot
+be committed and has to be repeated on every machine that has a copy.
 
 ## Candidate 10 — Paid tiers (precondition, not a removal)
 
@@ -631,5 +653,5 @@ enterprise docs).
 | **Reword** | `cpu_split` statements (6), `eviction_churn` inferred cause (8) |
 | **Tighten** | displacement model (7), footprint source 2 (10) |
 | **Make configurable** | proxy listen port (2) |
-| **Needs a maintainer decision** | cloud-side model discovery vs the `cloud/` freeze (candidate 1); `/api/explain-slowdown` vs the frozen cloud MCP tool (candidate 8); `docs/progress-archive.md` (candidate 9); updating the host to 0.12.0 (3) |
+| **Needs a maintainer decision** | cloud-side model discovery vs the `cloud/` freeze (candidate 1); `/api/explain-slowdown` vs the frozen cloud MCP tool (candidate 8); updating the host to 0.12.0 (3) |
 | **Blocked, not Claude Code's to do** | paid-tier takedown (candidate 10) |

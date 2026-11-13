@@ -501,14 +501,25 @@ Per the spec's cleanup rule 5.
 | `agent/src` total | **15,250 lines** (22 files) — matches the spec's figure exactly |
 | Largest modules | `store.rs` 2,031 · `observations.rs` 1,846 · `harvester.rs` 1,457 · `hardware.rs` 1,079 · `main.rs` 1,064 |
 | `Cargo.toml` version | `0.12.0` |
-| Release binary | **22.7 MB** — measured from the installed `~/.wicklee/bin/wicklee`, which is **v0.11.1**, not 0.12.0 |
+| Release binary | **22.7 MB**, from the installed `~/.wicklee/bin/wicklee` — but that is **v0.11.1**, not 0.12.0. Superseded; see below |
 
-The binary figure is the one weak number here. No release build of 0.12.0 was
-produced, because step 0 is scoped to exclude writing or building product code,
-so the only binary on the host is the deployed 0.11.1 one. A `cargo build
---release` on `origin/main` should be run at the start of step 1 to replace it,
-or the "before and after" comparison the cleanup plan asks for will compare two
-different versions.
+The binary figure was the one weak number in this document. Step 0 is scoped to
+exclude writing or building product code, so the only binary on the host was the
+deployed 0.11.1 one, and the "before and after" the cleanup plan asks for would
+have compared two different versions.
+
+**Resolved in step 1.** `cargo build --release` was run on pristine
+`origin/main` at `65fb3d9`, same host and toolchain (rustc 1.94.1,
+aarch64-apple-darwin):
+
+| Measurement | Value |
+| --- | --- |
+| **Phase 1 baseline — pristine 0.12.0 release binary** | **24,411,328 bytes (23.28 MB)** |
+| `agent/src` at that commit | 15,250 lines |
+| After step 1 | 24,477,808 bytes (23.34 MB), 17,219 lines |
+| Delta | +66,480 bytes (+0.27%), +1,969 lines |
+
+Use 24,411,328 bytes as the before-Phase-1 figure, not the 22.7 MB above.
 
 ## What changes in the spec
 
