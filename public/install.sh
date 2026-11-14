@@ -102,9 +102,13 @@ if [[ -x "$CANONICAL_BIN" ]]; then
 fi
 
 # ── NVIDIA detection (Linux) ─────────────────────────────────────────────────
-# Prefer the glibc+NVML build when an NVIDIA GPU is present. The nvidia
-# variant dlopen-s libnvidia-ml.so at runtime (ships with NVIDIA drivers) —
-# no CUDA toolkit required. Falls back to the plain glibc 2.31 build
+# Picks the -nvidia asset when an NVIDIA GPU is present, so a host runs the
+# build it is named for and self-updates from that same name. Both builds
+# dlopen libnvidia-ml.so at runtime (it ships with the NVIDIA drivers; no CUDA
+# toolkit required) because nvml-wrapper is target-gated rather than gated on
+# the --cfg no_nvml used by the plain build — so the two assets per arch are
+# the same build under different names, and this choice is naming correctness
+# rather than a capability gate. Falls back to the plain glibc 2.31 build
 # otherwise — v0.8.2 retired the musl asset, so there is no static variant
 # to fall back to. Supported arches: x86_64-nvidia, aarch64-nvidia.
 NVIDIA_SUFFIX=""
@@ -112,7 +116,7 @@ if [[ "$OS_TAG" == "linux" ]]; then
   if command -v nvidia-smi >/dev/null 2>&1 || [[ -c /dev/nvidia0 ]]; then
     NVIDIA_SUFFIX="-nvidia"
     echo "  NVIDIA GPU detected — downloading GPU-enabled build…"
-    dim "     (VRAM, GPU utilisation, GPU temp, and power draw will be active)"
+    dim "     (VRAM, GPU utilisation, GPU temp, and power draw read via NVML)"
   fi
 fi
 

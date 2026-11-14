@@ -140,10 +140,15 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      # No NVML headers needed: --cfg no_nvml strips the nvml-wrapper
-      # link dependency at compile time. Runtime nvidia-smi probing is
-      # disabled in this build; users with NVIDIA GPUs should download
-      # the -nvidia variant instead (install.sh auto-detects).
+      # No NVML headers installed here, and none are needed — but note that
+      # --cfg no_nvml does NOT strip nvml-wrapper, as this comment used to
+      # say. It is target-gated in Cargo.toml, so this job compiles and links
+      # it anyway; that it succeeds with no CUDA repo and no cuda-nvml-dev is
+      # the proof headers were never required. The cfg only changes the
+      # platform string in update.rs, i.e. which asset this build self-updates
+      # from. This binary and the -nvidia one are the same build under two
+      # names. install.sh still auto-detects and prefers -nvidia on NVIDIA
+      # hosts, which keeps the naming honest even though capability is equal.
       - name: Build agent (glibc 2.31, no NVML)
         run: cargo build --release
         working-directory: agent

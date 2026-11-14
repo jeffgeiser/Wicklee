@@ -16,7 +16,7 @@ grouped by feature, not by version, so this table is the index.
 
 | Version | Date | Content |
 | --- | --- | --- |
-| v0.13.1 | 2026-11-14 | ARM64 NVIDIA self-update fix — `agent_platform()` had no aarch64 NVML branch, so those nodes self-updated onto the no-NVML binary and lost GPU metrics silently; the cloud version endpoint was missing the matching arm |
+| v0.13.1 | 2026-11-14 | ARM64 NVIDIA self-update fix — `agent_platform()` had no aarch64 NVML branch, so those builds reported a name that did not match the asset they were published as, and the cloud version endpoint had no arm for the name they should have reported. **Correction, 2026-11-14:** the original note here said those nodes "lost GPU metrics silently." They did not. `--cfg no_nvml` strips nothing — `nvml-wrapper` is target-gated, so both Linux assets per arch are the same build under different names. The fix is naming correctness, not a capability repair |
 | v0.13.0 | 2026-11-14 | Phase 1 steps 0 to 3 (see Planned). Release pipeline repairs: macOS runner pin, both NVIDIA Linux assets moved to the glibc 2.31 floor, musl build added to CI |
 | v0.12.0 | 2026-10-03 | `main.rs` split into modules on both agent and cloud; Apache 2.0 for the agent and local dashboard, FSL retained on the control plane; legal pages and Paddle merchant-of-record; the report energy/token integration fix (weight rows by real duration) |
 | v0.11.1 | 2026-07-16 | Self-hosted control plane, Helm chart, idle-waste report with weekly digest, capacity planner and migration advisor, demo fleet mode |

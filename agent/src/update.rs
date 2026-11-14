@@ -68,15 +68,28 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
 #[allow(unreachable_code)]
 pub(crate) fn agent_platform() -> &'static str {
     #[cfg(all(target_os = "macos",   target_arch = "aarch64"))]              { return "darwin-aarch64";      }
-    // Each Linux arch ships TWO release binaries: the NVML build (no `no_nvml`
-    // cfg) and the plain one (`RUSTFLAGS='--cfg no_nvml'`), both on glibc 2.31
-    // since v0.8.2 retired the musl asset. A build must pull its own binary on
-    // auto-update — swapping them loses GPU metrics.
+    // Each Linux arch ships TWO release binaries, both on glibc 2.31 since
+    // v0.8.2 retired the musl asset. What differs between them is ONLY this
+    // string, and therefore which asset the build self-updates from.
     //
-    // aarch64 carried no NVIDIA branch until this commit, so every ARM64 NVML
-    // build reported "linux-aarch64" and self-updated onto the no-NVML binary:
-    // a DGX Spark installed with GPU metrics and silently lost them on the
-    // first update. Keep the two arches symmetric.
+    // `no_nvml` does not strip NVML. `nvml-wrapper` is gated in Cargo.toml by
+    // target — linux/windows, non-musl — not by this cfg, so both Linux builds
+    // compile and link it, and both dlopen libnvidia-ml at runtime. Verified:
+    // `cargo tree --target x86_64-unknown-linux-gnu` lists the same three nvml
+    // crates with and without `RUSTFLAGS='--cfg no_nvml'`, and the release
+    // workflow's non-NVIDIA jobs compile them with no NVML headers installed.
+    //
+    // So the two assets per arch are the same build under different names, and
+    // an agent that pulls the other one loses nothing. Routing is still kept
+    // consistent — a build should fetch the asset it was published as, or the
+    // names stop meaning anything — but this is naming hygiene, not capability.
+    //
+    // This corrects the comment shipped in v0.13.1, which claimed an ARM64
+    // NVML build self-updating onto the plain asset "silently lost GPU
+    // metrics". It did not. The real defect was narrower: aarch64 had no
+    // NVIDIA branch here, so it reported a name that did not match its own
+    // asset, and the cloud's version endpoint had no arm for the one it should
+    // have reported. Both are fixed; keep the two arches symmetric.
     #[cfg(all(target_os = "linux",   target_arch = "x86_64",  not(no_nvml)))] { return "linux-x86_64-nvidia";  }
     #[cfg(all(target_os = "linux",   target_arch = "x86_64",  no_nvml))]      { return "linux-x86_64";         }
     #[cfg(all(target_os = "linux",   target_arch = "aarch64", not(no_nvml)))] { return "linux-aarch64-nvidia"; }
