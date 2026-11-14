@@ -47,10 +47,15 @@ sha2          = "0.10"
 duckdb        = { version = "1.1", features = ["bundled"] }
 
 # ── Platform-specific dependencies ────────────────────────────────────────────
-# sysctl exposes macOS/Linux kernel tunables — not available on Windows.
 [target.'cfg(not(target_os = "windows"))'.dependencies]
-sysctl        = "0.5"
 libc          = "0.2"
+
+# sysctl's only callers are read_thermal_sysctl and read_iogpu_wired_limit_mb,
+# both `#[cfg(target_os = "macos")]`. It was declared for every non-Windows
+# target, so each Linux build compiled and linked a crate it never called —
+# which cargo reports as an unused dependency, surfaced by the musl job.
+[target.'cfg(target_os = "macos")'.dependencies]
+sysctl        = "0.5"
 
 # nvml-wrapper links against libnvidia-ml which ships with NVIDIA drivers on
 # both Linux and Windows. Gating here avoids the link requirement on macOS.
