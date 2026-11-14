@@ -276,7 +276,7 @@ jobs:
           path: wicklee-agent-linux-x86_64-nvidia
 
   # ── Publish versioned release (v* tags only) ──────────────────────────────────
-  # Creates a named GitHub release (e.g. v0.4.8), attaches all four binaries,
+  # Creates a named GitHub release (e.g. v0.4.8), attaches all six binaries,
   # and marks it as the latest release. Never runs on branch pushes.
   release-versioned:
     name: Publish Release · ${{ github.ref_name }}

@@ -886,7 +886,7 @@ Everything above concerns code. This section concerns running services, which ar
 
 | Component | What it is | Decision |
 | --- | --- | --- |
-| GitHub Releases | Agent binaries for macOS arm64, Windows x64 and Linux x64 glibc 2.31, plus the musl variant | **Keep.** This is the entire install path now, and it is the one piece that must not break |
+| GitHub Releases | Six agent binaries — macOS arm64, Windows x64, Linux x64 and Linux arm64, the last two each in a plain and an NVIDIA variant — plus the `SHA256SUMS` file the self-update verifies against and refuses to install without. The plain Linux pair is built in an `ubuntu:20.04` container for a glibc 2.31 floor; the NVIDIA pair is built on the runner's own glibc. No musl asset: v0.8.2 retired it after musl silently stripped the 14 store-backed routes. CI builds the musl target so its cfg gates stay honest, and publishes nothing | **Keep.** This is the entire install path now, and it is the one piece that must not break |
 | Cloudflare Pages | Serves wicklee.dev. Confirmed by the maintainer as the host the domain points to | **Keep, and it is the only web host needed.** It serves the static marketing site and docs |
 | Railway: frontend | React app served by nginx, proxying `/api/*` to the cloud backend | **Retire.** This service exists for the dashboard, which Phase 1 removes. Cloudflare Pages already serves the domain |
 | Railway: cloud backend | `wicklee-cloud`, axum, internet-facing | **Turn the service off,** separately from the code freeze. See below |
