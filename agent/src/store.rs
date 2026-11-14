@@ -555,6 +555,38 @@ impl Store {
                 before_state TEXT,
                 after_state  TEXT
             );
+
+            -- Open and resolved findings.
+            --
+            -- Unlike model_transitions this one HAS a durable key: a finding's
+            -- id is content-derived from its rule and the models it names, so
+            -- the same condition keeps the same row across restarts. That is
+            -- the whole reason the id is not a counter — step 6's `verify`
+            -- compares two runs of one finding and needs to find the earlier
+            -- one.
+            --
+            -- A row is open while resolved_at_ms IS NULL. Resolution is
+            -- observed rather than scheduled: an evaluation that no longer
+            -- produces a finding resolves it, so the column records when
+            -- Wicklee last looked and did not see it, not when the condition
+            -- actually stopped.
+            --
+            -- statements holds the serialised Vec<Statement>, for the same
+            -- reason before_state does above: a later rule's new field must not
+            -- need a schema change.
+            CREATE TABLE IF NOT EXISTS findings (
+                node_id        TEXT   NOT NULL,
+                id             TEXT   NOT NULL,
+                rule           TEXT   NOT NULL,
+                severity       TEXT   NOT NULL,
+                title          TEXT   NOT NULL,
+                models         TEXT   NOT NULL DEFAULT '',
+                statements     TEXT,
+                first_seen_ms  BIGINT NOT NULL,
+                last_seen_ms   BIGINT NOT NULL,
+                resolved_at_ms BIGINT,
+                PRIMARY KEY (node_id, id)
+            );
         ")?;
 
         // ── Additive column migrations (tolerant) ────────────────────────────
@@ -677,6 +709,12 @@ impl Store {
         // counts reloads per day), so a week leaves room for a rule to be
         // re-evaluated over history without keeping it indefinitely.
         let transition_cutoff = now_ms - 7_i64 * 86_400_000_i64;
+        // Resolved findings outlive the transitions they were built from: the
+        // point of keeping them is "this used to happen and stopped", which is
+        // worth more than the log that proved it. Open findings are never
+        // pruned — an open finding with no evidence left in the window is
+        // still true, and the next evaluation will resolve it if it is not.
+        let finding_cutoff = now_ms - 30_i64 * 86_400_000_i64;
 
         let conn = self.0.lock().unwrap();
 
@@ -774,6 +812,8 @@ impl Store {
             DELETE FROM inference_traces WHERE ts_ms < {raw_cutoff};
             DELETE FROM node_events WHERE ts_ms < {event_cutoff};
             DELETE FROM model_transitions WHERE ts_ms < {transition_cutoff};
+            DELETE FROM findings
+             WHERE resolved_at_ms IS NOT NULL AND resolved_at_ms < {finding_cutoff};
         "))?;
 
         // Fold the WAL into the main file after the hourly prune so deleted
@@ -2064,6 +2104,107 @@ mod tests {
     }
 
     #[test]
+    fn findings_survive_a_real_round_trip_and_resolve_when_they_stop_firing() {
+        use crate::findings::{Finding, Statement};
+        use crate::residency::{Cause, ModelState, Residency, Transition, TransitionKind};
+
+        let (store, dir) = temp_store("findings");
+        let t0 = 1_700_000_000_000_i64;
+
+        let tr = |model: &str| Transition {
+            id: 1,
+            ts_ms: t0,
+            model: model.to_string(),
+            kind: TransitionKind::Unloaded,
+            cause: Cause::ExpiryReached,
+            before: None,
+            after: Some(Box::new(ModelState {
+                model: model.to_string(),
+                digest: None,
+                residency: Residency::NotLoaded,
+                size_bytes: None,
+                size_vram_bytes: None,
+                context_length: None,
+                expires_at_ms: None,
+                last_activity_ms: None,
+                installed_size_bytes: None,
+                measured: None,
+                observed_at_ms: t0,
+            })),
+            co_resident: Vec::new(),
+        };
+
+        let finding = |rule: &'static str, model: &str| {
+            let t = tr(model);
+            let obs = Statement::observed(format!("{model} did a thing."), &[&t]).unwrap();
+            let inf = Statement::inferred("It may matter.", &[&obs]).unwrap();
+            Finding::new(rule, "warning", format!("{model}: {rule}"), vec![obs, inf], t0, t0)
+                .unwrap()
+        };
+
+        let a = finding("cpu_split", "coder:14b");
+        let b = finding("expiry_reload", "classifier:3b");
+
+        // First evaluation: both open, nothing to resolve.
+        assert_eq!(store.reconcile_findings("WK-TEST", &[a.clone(), b.clone()], t0).unwrap(), 0);
+        let open = store.query_findings("WK-TEST", false).unwrap();
+        assert_eq!(open.len(), 2, "both findings stored");
+        let stored_a = open.iter().find(|f| f.id == a.id).expect("a is there");
+        assert_eq!(stored_a.rule, "cpu_split");
+        assert_eq!(stored_a.models, vec!["coder:14b".to_string()]);
+        assert!(stored_a.resolved_at_ms.is_none());
+        // The statements round-trip as the rule wrote them, labels included.
+        assert_eq!(stored_a.statements.as_array().map(Vec::len), Some(2));
+        assert_eq!(stored_a.statements[0]["label"], "observed");
+        assert_eq!(stored_a.statements[1]["label"], "inferred");
+
+        // Second evaluation, same two: an upsert, not a duplicate.
+        let later = t0 + 60_000;
+        assert_eq!(store.reconcile_findings("WK-TEST", &[a.clone(), b.clone()], later).unwrap(), 0);
+        let open = store.query_findings("WK-TEST", false).unwrap();
+        assert_eq!(open.len(), 2, "the content-derived id keyed the update");
+
+        // Third evaluation: only `a` still fires, so `b` resolves.
+        let later2 = t0 + 120_000;
+        assert_eq!(store.reconcile_findings("WK-TEST", std::slice::from_ref(&a), later2).unwrap(), 1);
+        let open = store.query_findings("WK-TEST", false).unwrap();
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].id, a.id);
+
+        let all = store.query_findings("WK-TEST", true).unwrap();
+        assert_eq!(all.len(), 2, "the resolved one is still on record");
+        // Open first, as the CLI's two sections expect.
+        assert!(all[0].resolved_at_ms.is_none(), "open rows sort first");
+        let stored_b = all.iter().find(|f| f.id == b.id).expect("b is there");
+        assert_eq!(stored_b.resolved_at_ms, Some(later2));
+
+        // `b` fires again: the row reopens rather than a second one appearing.
+        assert_eq!(store.reconcile_findings("WK-TEST", &[a.clone(), b.clone()], t0 + 180_000).unwrap(), 0);
+        let all = store.query_findings("WK-TEST", true).unwrap();
+        assert_eq!(all.len(), 2, "no duplicate on reopen");
+        assert!(
+            all.iter().all(|f| f.resolved_at_ms.is_none()),
+            "both are open again"
+        );
+
+        // Another node's findings are its own.
+        assert_eq!(store.reconcile_findings("WK-OTHER", &[], t0 + 240_000).unwrap(), 0);
+        assert_eq!(
+            store.query_findings("WK-TEST", false).unwrap().len(),
+            2,
+            "reconciling an empty set for one node must not resolve another's"
+        );
+        assert!(store.query_findings("WK-OTHER", true).unwrap().is_empty());
+
+        // An empty evaluation resolves everything this node had open.
+        assert_eq!(store.reconcile_findings("WK-TEST", &[], t0 + 300_000).unwrap(), 2);
+        assert!(store.query_findings("WK-TEST", false).unwrap().is_empty());
+        assert_eq!(store.query_findings("WK-TEST", true).unwrap().len(), 2);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn transitions_survive_a_real_round_trip_through_duckdb() {
         use crate::residency::{
             Cause, ModelState, Residency, Transition, TransitionKind, derive_switches,
@@ -2224,5 +2365,174 @@ mod tests {
         assert_eq!(store.query_catalog(None, 100).unwrap().len(), 5);
         drop(store);
         let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+/// One finding as the store holds it.
+///
+/// `statements` is passed through as JSON rather than deserialised: `Statement`
+/// is Serialize-only by design, and a reader of this row wants exactly what the
+/// rule wrote, not a round trip through a second type that could disagree with
+/// it.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StoredFinding {
+    pub id:             String,
+    pub rule:           String,
+    pub severity:       String,
+    pub title:          String,
+    pub models:         Vec<String>,
+    pub statements:     serde_json::Value,
+    pub first_seen_ms:  i64,
+    pub last_seen_ms:   i64,
+    /// `None` while the finding is open.
+    pub resolved_at_ms: Option<i64>,
+}
+
+impl Store {
+    /// Record this evaluation's findings and resolve the ones it no longer
+    /// produced. Returns how many it resolved.
+    ///
+    /// Resolution is observed, not scheduled: a finding resolves because an
+    /// evaluation ran and did not produce it. So `resolved_at_ms` is when
+    /// Wicklee last looked and did not see it, which is all it can honestly
+    /// claim — the condition may have stopped at any point since the previous
+    /// evaluation.
+    pub fn reconcile_findings(
+        &self,
+        node_id: &str,
+        open: &[crate::findings::Finding],
+        now_ms: i64,
+    ) -> Result<usize, duckdb::Error> {
+        let mut conn = self.0.lock().unwrap();
+        let tx = conn.transaction()?;
+
+        // UPDATE then INSERT rather than ON CONFLICT: the upsert syntax has
+        // moved across DuckDB versions and this runs on a request path, so two
+        // portable statements beat one that might not parse.
+        {
+            let mut upd = tx.prepare(
+                "UPDATE findings
+                    SET rule = ?, severity = ?, title = ?, models = ?,
+                        statements = ?, first_seen_ms = ?, last_seen_ms = ?,
+                        resolved_at_ms = NULL
+                  WHERE node_id = ? AND id = ?",
+            )?;
+            let mut ins = tx.prepare(
+                "INSERT INTO findings
+                   (node_id, id, rule, severity, title, models, statements,
+                    first_seen_ms, last_seen_ms, resolved_at_ms)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)",
+            )?;
+            for f in open {
+                // Model names cannot contain a comma, as write_transitions
+                // already relies on for co_resident.
+                let models = f.models.join(",");
+                let statements = serde_json::to_string(&f.statements).ok();
+                // first_seen_ms is the rule's, derived from the log, so a
+                // finding that recurs after a quiet spell reports the current
+                // occurrence rather than the first one ever recorded.
+                let changed = upd.execute(params![
+                    f.rule,
+                    f.severity,
+                    f.title.as_str(),
+                    models.as_str(),
+                    statements,
+                    f.first_seen_ms,
+                    f.last_seen_ms,
+                    node_id,
+                    f.id.as_str(),
+                ])?;
+                if changed == 0 {
+                    ins.execute(params![
+                        node_id,
+                        f.id.as_str(),
+                        f.rule,
+                        f.severity,
+                        f.title.as_str(),
+                        models.as_str(),
+                        statements,
+                        f.first_seen_ms,
+                        f.last_seen_ms,
+                    ])?;
+                }
+            }
+        }
+
+        // Which rows are open now that this evaluation's findings are written.
+        // Read the ids and update them one at a time rather than building a
+        // `NOT IN (...)` list: a handful of findings makes the statement count
+        // irrelevant, and nothing is interpolated into SQL.
+        let still_open: Vec<String> = {
+            let mut stmt = tx.prepare(
+                "SELECT id FROM findings WHERE node_id = ? AND resolved_at_ms IS NULL",
+            )?;
+            let rows = stmt.query_map(params![node_id], |r| r.get::<_, String>(0))?;
+            rows.filter_map(Result::ok).collect()
+        };
+        let mut resolved = 0usize;
+        {
+            let mut res = tx.prepare(
+                "UPDATE findings SET resolved_at_ms = ? WHERE node_id = ? AND id = ?",
+            )?;
+            for id in &still_open {
+                if !open.iter().any(|f| f.id == *id) {
+                    resolved += res.execute(params![now_ms, node_id, id.as_str()])?;
+                }
+            }
+        }
+
+        tx.commit()?;
+        Ok(resolved)
+    }
+
+    /// Findings for a node: the open ones, and the resolved ones when asked.
+    ///
+    /// Open first, then most recently seen, so `wicklee findings --all` reads
+    /// as "what is wrong now, and what used to be".
+    pub fn query_findings(
+        &self,
+        node_id: &str,
+        include_resolved: bool,
+    ) -> Result<Vec<StoredFinding>, duckdb::Error> {
+        const COLS: &str = "id, rule, severity, title, models, statements,
+                            first_seen_ms, last_seen_ms, resolved_at_ms";
+        let conn = self.0.lock().unwrap();
+        let sql = if include_resolved {
+            format!(
+                "SELECT {COLS} FROM findings WHERE node_id = ?
+                  ORDER BY resolved_at_ms IS NOT NULL, last_seen_ms DESC"
+            )
+        } else {
+            format!(
+                "SELECT {COLS} FROM findings
+                  WHERE node_id = ? AND resolved_at_ms IS NULL
+                  ORDER BY last_seen_ms DESC"
+            )
+        };
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![node_id], |r| {
+            let models: String = r.get(4)?;
+            let statements: Option<String> = r.get(5)?;
+            Ok(StoredFinding {
+                id:       r.get(0)?,
+                rule:     r.get(1)?,
+                severity: r.get(2)?,
+                title:    r.get(3)?,
+                models:   models
+                    .split(',')
+                    .filter(|m| !m.is_empty())
+                    .map(str::to_string)
+                    .collect(),
+                // An unreadable statements column costs the sentences, not the
+                // row: the title still says what was found.
+                statements: statements
+                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .unwrap_or_else(|| serde_json::json!([])),
+                first_seen_ms:  r.get(6)?,
+                last_seen_ms:   r.get(7)?,
+                resolved_at_ms: r.get(8)?,
+            })
+        })?;
+        Ok(rows.filter_map(Result::ok).collect())
     }
 }

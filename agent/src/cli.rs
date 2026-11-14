@@ -21,11 +21,19 @@ pub(crate) enum Invocation {
 pub(crate) enum Command {
     /// `wicklee ready [MODEL] [--json]`
     Ready { model: Option<String>, json: bool },
+    /// `wicklee inspect [--since 24h] [--json]`
+    Inspect { since: Option<String>, json: bool },
+    /// `wicklee findings [--all] [--json]`
+    Findings { all: bool, json: bool },
 }
 
 /// Column the description starts in, and the width text wraps at.
 const NAME_WIDTH: usize = 16;
 const WRAP_AT: usize = 62;
+
+/// Finding lines carry an id and an evidence label before the text.
+const ID_WIDTH: usize = 10;
+const LABEL_WIDTH: usize = 10;
 
 pub(crate) fn parse(args: &[String]) -> Invocation {
     let Some(first) = args.first() else {
@@ -44,9 +52,28 @@ pub(crate) fn parse(args: &[String]) -> Invocation {
                 .cloned();
             Invocation::Run(Command::Ready { model, json })
         }
+        "inspect" => {
+            let json = args.iter().any(|a| a == "--json");
+            // `--since 24h`, and `--since=24h`.
+            let since = args
+                .iter()
+                .position(|a| a == "--since")
+                .and_then(|i| args.get(i + 1).cloned())
+                .or_else(|| {
+                    args.iter()
+                        .find_map(|a| a.strip_prefix("--since=").map(str::to_string))
+                });
+            Invocation::Run(Command::Inspect { since, json })
+        }
+        "findings" => Invocation::Run(Command::Findings {
+            all: args.iter().any(|a| a == "--all"),
+            json: args.iter().any(|a| a == "--json"),
+        }),
         other => Invocation::Unknown(format!(
             "wicklee: unknown subcommand {other:?}\n\nAvailable:\n  \
-             wicklee ready [MODEL] [--json]   which models can run now\n\n\
+             wicklee inspect [--since 24h] [--json]   what is happening\n  \
+             wicklee ready [MODEL] [--json]           which models can run now\n  \
+             wicklee findings [--all] [--json]        findings, open or resolved\n\n\
              Run `wicklee` with no arguments to start the agent in the foreground."
         )),
     }
@@ -107,7 +134,70 @@ pub(crate) async fn run(cmd: Command, port: u16) -> i32 {
                 }
             }
         }
+        Command::Inspect { since, json } => {
+            let mut url = format!("http://127.0.0.1:{port}/v1/inspect");
+            if let Some(w) = since.as_deref() {
+                url.push_str("?since=");
+                url.push_str(&urlencode(w));
+            }
+            fetch_and_render(&url, port, json, is_inspect_answer, render_inspect).await
+        }
+        Command::Findings { all, json } => {
+            let mut url = format!("http://127.0.0.1:{port}/v1/findings");
+            if all {
+                url.push_str("?all=true");
+            }
+            fetch_and_render(&url, port, json, is_findings_answer, render_findings).await
+        }
     }
+}
+
+/// Fetch a `/v1` route and render it, or explain why it could not.
+///
+/// Shared by `inspect` and `findings`: the same three failure modes — no agent,
+/// an older agent whose SPA handler answers 200 with HTML, and a 4xx with a
+/// message worth printing — and one place that gets them right.
+async fn fetch_and_render(
+    url: &str,
+    port: u16,
+    json: bool,
+    looks_right: fn(&serde_json::Value) -> bool,
+    render: fn(&serde_json::Value) -> String,
+) -> i32 {
+    let Ok(resp) = reqwest::get(url).await else {
+        eprintln!("wicklee: the agent is not responding on 127.0.0.1:{port}.");
+        eprintln!("{}", start_hint());
+        return 1;
+    };
+    let status = resp.status();
+    let parsed: Option<serde_json::Value> = resp.json().await.ok();
+    let Some(body) = parsed.filter(|b| !status.is_success() || looks_right(b)) else {
+        eprintln!(
+            "wicklee: the agent on 127.0.0.1:{port} did not return an answer this \
+             command understands."
+        );
+        eprintln!(
+            "         It is probably an older build that does not serve this route \
+             yet. Check which one is running with: wicklee --status"
+        );
+        return 1;
+    };
+    if !status.is_success() {
+        eprintln!(
+            "wicklee: {}",
+            body["error"].as_str().unwrap_or("the agent returned an error")
+        );
+        if let Some(hint) = body["hint"].as_str() {
+            eprintln!("         {hint}");
+        }
+        return 1;
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body).unwrap_or_default());
+    } else {
+        print!("{}", render(&body));
+    }
+    0
 }
 
 /// How to start the agent on this platform.
@@ -147,6 +237,166 @@ fn urlencode(s: &str) -> String {
 /// Either shape the route serves: the whole fleet of models, or one model.
 pub(crate) fn is_readiness_answer(body: &serde_json::Value) -> bool {
     body["models"].is_array() || body["readiness"].is_object()
+}
+
+/// Whether a 200 body is an inspect answer.
+pub(crate) fn is_inspect_answer(body: &serde_json::Value) -> bool {
+    body["findings"].is_array() && body["not_checked"].is_array()
+}
+
+/// Whether a 200 body is a findings answer.
+pub(crate) fn is_findings_answer(body: &serde_json::Value) -> bool {
+    body["findings"].is_array() || body["finding"].is_object()
+}
+
+/// The whole `inspect` output: what is happening, then what can run, then what
+/// was not checked.
+///
+/// The spec's example carries a third section, "WHAT TO CHANGE", whose every
+/// line is a `wicklee verify` command. `verify` is step 6, so the section is
+/// left out rather than printed with commands that do not run yet.
+pub(crate) fn render_inspect(body: &serde_json::Value) -> String {
+    let mut out = String::from("WHAT IS HAPPENING\n");
+    let findings = body["findings"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+    if findings.is_empty() {
+        out.push_str("  No significant issues found.\n");
+    } else {
+        for f in findings {
+            out.push_str(&render_finding(f));
+        }
+    }
+
+    out.push('\n');
+    out.push_str(&render_ready(&serde_json::json!({
+        "models":          body["readiness"].clone(),
+        "activity_signal": body["activity_signal"].clone(),
+    })));
+
+    out.push_str(&render_not_checked(body));
+    out.push_str(&render_history_scope(body));
+    out
+}
+
+/// The `findings` output: the findings alone.
+pub(crate) fn render_findings(body: &serde_json::Value) -> String {
+    let rows: Vec<&serde_json::Value> = match (&body["findings"], &body["finding"]) {
+        (serde_json::Value::Array(a), _) => a.iter().collect(),
+        (_, f) if f.is_object() => vec![f],
+        _ => Vec::new(),
+    };
+    let (open, resolved): (Vec<&serde_json::Value>, Vec<&serde_json::Value>) =
+        rows.into_iter().partition(|f| f["resolved_at_ms"].is_null());
+
+    let mut out = String::from("FINDINGS\n");
+    if open.is_empty() {
+        out.push_str("  No open findings.\n");
+    } else {
+        for f in &open {
+            out.push_str(&render_finding(f));
+        }
+    }
+
+    if !resolved.is_empty() {
+        out.push_str("\nRESOLVED\n");
+        for f in &resolved {
+            out.push_str(&render_finding(f));
+        }
+    }
+
+    out.push_str(&render_not_checked(body));
+
+    // Three different states, and conflating them is the whole hazard: asked
+    // and got them, asked and the store could not answer, did not ask.
+    let asked = body["includes_resolved"] == serde_json::Value::Bool(true);
+    if !asked && body["persisted"] == serde_json::Value::Bool(false) {
+        out.push_str(
+            "\nFindings are not being stored, so they last only until this agent\n  \
+             restarts and there is no resolved history to list.\n",
+        );
+    } else if !asked {
+        out.push_str("\nResolved findings are not listed. Add --all to include them.\n");
+    } else if resolved.is_empty() {
+        out.push_str("\nNo resolved findings on record.\n");
+    }
+    out
+}
+
+/// One finding: its id, then one line per statement with its evidence label.
+fn render_finding(f: &serde_json::Value) -> String {
+    let id = f["id"].as_str().unwrap_or("?");
+    let mut out = String::new();
+    let statements = f["statements"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+    if statements.is_empty() {
+        // Should not happen: a finding needs an observed statement. Printing
+        // the title is better than printing an id with nothing beside it.
+        out.push_str(&wrap_statement(id, "", f["title"].as_str().unwrap_or("")));
+        return out;
+    }
+    for (i, st) in statements.iter().enumerate() {
+        let label = st["label"].as_str().unwrap_or("").to_ascii_uppercase();
+        out.push_str(&wrap_statement(
+            if i == 0 { id } else { "" },
+            &label,
+            st["text"].as_str().unwrap_or(""),
+        ));
+    }
+    out.push('\n');
+    out
+}
+
+/// The trailing "Not checked:" lines, one per rule that did not run.
+fn render_not_checked(body: &serde_json::Value) -> String {
+    let rows = body["not_checked"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+    if rows.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("\n");
+    for n in rows {
+        let (Some(rule), Some(reason)) = (n["rule"].as_str(), n["reason"].as_str()) else {
+            continue;
+        };
+        out.push_str(&format!("Not checked: {rule} ({reason})\n"));
+    }
+    out
+}
+
+/// A note when the rules only had this process's log to read.
+///
+/// Without it a short history reads as a quiet host, which is exactly the
+/// silent-empty-result failure the spec warns about for musl builds.
+fn render_history_scope(body: &serde_json::Value) -> String {
+    if body["history"]["persisted"] == serde_json::Value::Bool(false) {
+        let n = body["history"]["transitions"].as_i64().unwrap_or(0);
+        return format!(
+            "\nHistory: {n} transitions, from this agent process only — \
+             findings that need a longer\n  window cannot fire yet.\n"
+        );
+    }
+    String::new()
+}
+
+/// Wrap a statement under an id column and an evidence-label column.
+fn wrap_statement(id: &str, label: &str, text: &str) -> String {
+    let indent = 2 + ID_WIDTH + LABEL_WIDTH;
+    let mut out = format!("  {id:<ID_WIDTH$}{label:<LABEL_WIDTH$}");
+    let mut col = 0usize;
+    for word in text.split_whitespace() {
+        if col == 0 {
+            out.push_str(word);
+            col = word.len();
+        } else if col + 1 + word.len() <= WRAP_AT {
+            out.push(' ');
+            out.push_str(word);
+            col += 1 + word.len();
+        } else {
+            out.push('\n');
+            out.push_str(&" ".repeat(indent));
+            out.push_str(word);
+            col = word.len();
+        }
+    }
+    out.push('\n');
+    out
 }
 
 /// The "which models can run safely now" section.
@@ -515,5 +765,211 @@ mod tests {
         body["activity_signal"] = serde_json::Value::Bool(false);
         let out = render_ready(&body);
         assert!(out.contains("Not checked: whether any model is in use"), "got:\n{out}");
+    }
+
+    // ── inspect and findings ─────────────────────────────────────────────────
+
+    fn inspect_body() -> serde_json::Value {
+        serde_json::json!({
+            "findings": [{
+                "id": "F-a3f29c",
+                "rule": "cpu_split",
+                "severity": "warning",
+                "title": "coder:14b is partly outside accelerator memory",
+                "models": ["coder:14b"],
+                "statements": [
+                    { "label": "observed",
+                      "text": "coder:14b has had 40% of its runtime footprint (4.0 GiB) outside accelerator memory for 22 minutes, running at a 32768-token context." },
+                    { "label": "inferred",
+                      "text": "Its context grew from 8192 to 32768 tokens 3 minutes before the split, so KV cache rather than weights is the likely cause." },
+                ],
+                "first_seen_ms": 1_700_000_000_000_i64,
+                "last_seen_ms": 1_700_000_060_000_i64,
+            }],
+            "not_checked": [
+                { "rule": "baseline_regression", "reason": "no fingerprint baseline yet" },
+            ],
+            "readiness": [{
+                "model": "coder:14b",
+                "readiness": "ready_now",
+                "in_use": true,
+                "last_activity_ms": 1_700_000_000_000_i64,
+                "observed_at_ms":   1_700_000_012_000_i64,
+            }],
+            "activity_signal": true,
+            "history": { "transitions": 412, "persisted": true, "scope": "stored" },
+        })
+    }
+
+    #[test]
+    fn inspect_takes_a_window_in_either_spelling() {
+        let Invocation::Run(Command::Inspect { since, json }) = parse(&args(&["inspect"])) else {
+            panic!("expected inspect");
+        };
+        assert_eq!((since, json), (None, false));
+
+        for spelling in [vec!["inspect", "--since", "24h"], vec!["inspect", "--since=24h"]] {
+            let Invocation::Run(Command::Inspect { since, .. }) = parse(&args(&spelling)) else {
+                panic!("expected inspect");
+            };
+            assert_eq!(since.as_deref(), Some("24h"), "{spelling:?}");
+        }
+
+        let Invocation::Run(Command::Inspect { since, json }) =
+            parse(&args(&["inspect", "--json", "--since", "7d"]))
+        else {
+            panic!("expected inspect");
+        };
+        assert_eq!((since.as_deref(), json), (Some("7d"), true));
+    }
+
+    #[test]
+    fn findings_takes_all_and_json() {
+        let Invocation::Run(Command::Findings { all, json }) =
+            parse(&args(&["findings", "--json"]))
+        else {
+            panic!("expected findings");
+        };
+        assert_eq!((all, json), (false, true));
+
+        let Invocation::Run(Command::Findings { all, json }) =
+            parse(&args(&["findings", "--all"]))
+        else {
+            panic!("expected findings");
+        };
+        assert_eq!((all, json), (true, false));
+    }
+
+    #[test]
+    fn findings_separates_open_from_resolved() {
+        let mut body = inspect_body();
+        let mut was = body["findings"][0].clone();
+        was["id"] = serde_json::json!("F-b11111");
+        was["resolved_at_ms"] = serde_json::json!(1_700_000_500_000_i64);
+        body["findings"] = serde_json::json!([body["findings"][0].clone(), was]);
+        body["includes_resolved"] = serde_json::json!(true);
+        body["persisted"] = serde_json::json!(true);
+
+        let out = render_findings(&body);
+        let (open_at, resolved_at) = (
+            out.find("F-a3f29c").expect("open finding"),
+            out.find("F-b11111").expect("resolved finding"),
+        );
+        let heading = out.find("RESOLVED").expect("a RESOLVED heading");
+        assert!(open_at < heading, "open findings come first: {out}");
+        assert!(heading < resolved_at, "the resolved one sits under it: {out}");
+    }
+
+    #[test]
+    fn findings_distinguishes_not_asked_from_cannot_answer() {
+        // Did not ask, and the store is there: say how to ask.
+        let mut body = inspect_body();
+        body["includes_resolved"] = serde_json::json!(false);
+        body["persisted"] = serde_json::json!(true);
+        let out = render_findings(&body);
+        assert!(out.contains("Add --all"), "{out}");
+
+        // Did not ask, and nothing is stored: say that instead, because --all
+        // would not help.
+        body["persisted"] = serde_json::json!(false);
+        let out = render_findings(&body);
+        assert!(out.contains("not being stored"), "{out}");
+        assert!(!out.contains("Add --all"), "{out}");
+
+        // Asked, got an answer, and there is nothing in it.
+        body["includes_resolved"] = serde_json::json!(true);
+        body["persisted"] = serde_json::json!(true);
+        let out = render_findings(&body);
+        assert!(out.contains("No resolved findings on record."), "{out}");
+    }
+
+    #[test]
+    fn the_help_lists_every_subcommand_that_exists() {
+        let Invocation::Unknown(msg) = parse(&args(&["wat"])) else {
+            panic!("expected unknown");
+        };
+        for cmd in ["wicklee inspect", "wicklee ready", "wicklee findings"] {
+            assert!(msg.contains(cmd), "{cmd} is missing from the help: {msg}");
+        }
+    }
+
+    #[test]
+    fn inspect_renders_three_sections_and_keeps_its_evidence_labels() {
+        let out = render_inspect(&inspect_body());
+        assert!(out.starts_with("WHAT IS HAPPENING\n"), "{out}");
+        assert!(out.contains("WHICH MODELS CAN RUN SAFELY NOW"), "{out}");
+        assert!(out.contains("F-a3f29c"), "{out}");
+        assert!(out.contains("OBSERVED"), "{out}");
+        assert!(out.contains("INFERRED"), "{out}");
+        assert!(
+            out.contains("Not checked: baseline_regression (no fingerprint baseline yet)"),
+            "{out}"
+        );
+        // WHAT TO CHANGE is left out until `verify` exists, rather than
+        // printing commands that do not run.
+        assert!(!out.contains("WHAT TO CHANGE"), "{out}");
+        assert!(!out.contains("wicklee verify"), "{out}");
+    }
+
+    #[test]
+    fn a_clean_host_says_so_and_still_prints_readiness() {
+        let mut body = inspect_body();
+        body["findings"] = serde_json::json!([]);
+        let out = render_inspect(&body);
+        assert!(out.contains("No significant issues found."), "{out}");
+        assert!(out.contains("WHICH MODELS CAN RUN SAFELY NOW"), "{out}");
+        assert!(out.contains("coder:14b"), "readiness still prints: {out}");
+    }
+
+    #[test]
+    fn an_unstored_history_is_declared_so_a_short_log_is_not_read_as_a_quiet_host() {
+        let mut body = inspect_body();
+        body["history"] = serde_json::json!({
+            "transitions": 3, "persisted": false, "scope": "this process only",
+        });
+        let out = render_inspect(&body);
+        assert!(out.contains("this agent process only"), "{out}");
+        assert!(out.contains("3 transitions"), "{out}");
+
+        // Stored history says nothing, because there is nothing to warn about.
+        assert!(!render_inspect(&inspect_body()).contains("this agent process only"));
+    }
+
+    #[test]
+    fn findings_output_lists_the_open_ones() {
+        let mut body = inspect_body();
+        body["includes_resolved"] = serde_json::json!(false);
+        body["persisted"] = serde_json::json!(true);
+        let out = render_findings(&body);
+        assert!(out.starts_with("FINDINGS\n"), "{out}");
+        assert!(out.contains("F-a3f29c"), "{out}");
+        // Nothing resolved was served, so no empty section is printed.
+        assert!(!out.contains("RESOLVED"), "{out}");
+
+        body["findings"] = serde_json::json!([]);
+        let empty = render_findings(&body);
+        assert!(empty.contains("No open findings."), "{empty}");
+    }
+
+    #[test]
+    fn statement_text_wraps_inside_the_label_columns() {
+        let out = render_inspect(&inspect_body());
+        let indent = " ".repeat(2 + ID_WIDTH + LABEL_WIDTH);
+        let wrapped: Vec<&str> = out.lines().filter(|l| l.starts_with(&indent)).collect();
+        assert!(!wrapped.is_empty(), "the long statement must wrap: {out}");
+        for line in out.lines() {
+            assert!(line.len() <= 2 + ID_WIDTH + LABEL_WIDTH + WRAP_AT, "too wide: {line:?}");
+        }
+    }
+
+    #[test]
+    fn an_spa_response_is_not_mistaken_for_an_answer() {
+        // An older agent with no /v1/inspect falls through to the SPA handler,
+        // which answers 200 with HTML. serde gives us a string, not an object.
+        let html = serde_json::json!("<!doctype html>");
+        assert!(!is_inspect_answer(&html));
+        assert!(!is_findings_answer(&html));
+        assert!(is_inspect_answer(&inspect_body()));
+        assert!(is_findings_answer(&inspect_body()));
     }
 }

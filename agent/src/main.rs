@@ -1155,6 +1155,8 @@ async fn main() {
             // middleware as /api and /mcp, applied as the outermost layer.
             .route("/v1/state", get(handle_v1_state))
             .route("/v1/readiness", get(handle_v1_readiness))
+            .route("/v1/inspect",   get(handle_v1_inspect))
+            .route("/v1/findings",  get(handle_v1_findings))
             .route("/api/events/recent",  get(handle_events_recent))
             .route("/api/metrics",        get(handle_metrics))       // SSE fallback (1 Hz)
             .route("/api/metrics/snapshot", get(handle_metrics_snapshot)) // one-shot JSON of latest frame

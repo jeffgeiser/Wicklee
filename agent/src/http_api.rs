@@ -882,6 +882,367 @@ pub(crate) async fn handle_v1_readiness(
     }
 }
 
+/// GET /v1/inspect — findings, readiness, and what could not be checked.
+///
+/// The three sections answer the spec's three questions in one request, so the
+/// CLI makes one call and the text output cannot disagree with the JSON.
+///
+/// Rule evaluation is a pure function; this handler gathers its inputs and
+/// serialises the result, exactly as `/v1/readiness` does. The rules read the
+/// tracker's in-memory log, so this route works on a musl build too — with the
+/// history limited to the current process, which the response states rather
+/// than passing off as a quiet "nothing happened".
+pub(crate) async fn handle_v1_inspect(
+    axum::extract::Extension(OllamaPortRx(port_rx)): axum::extract::Extension<OllamaPortRx>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+    axum::extract::Extension(residency): axum::extract::Extension<
+        crate::residency::SharedTracker,
+    >,
+    axum::extract::Extension(caps): axum::extract::Extension<crate::caps::SharedCaps>,
+    axum::extract::Extension(apple): axum::extract::Extension<
+        Arc<Mutex<crate::metrics::AppleSiliconMetrics>>,
+    >,
+    axum::extract::Extension(nvidia): axum::extract::Extension<
+        Arc<Mutex<crate::metrics::NvidiaMetrics>>,
+    >,
+    axum::extract::Extension(node_id_ext): axum::extract::Extension<NodeId>,
+    store: MaybeStore,
+    observations: MaybeObservations,
+) -> axum::response::Response {
+    // An unparseable window is an error, not a silently ignored argument: a
+    // caller asking for the last hour and being given everything would read
+    // the answer as being about the last hour.
+    let since_ms = match params.get("since") {
+        Some(raw) => match crate::findings::parse_lookback_ms(raw) {
+            Some(ms) => Some(ms),
+            None => {
+                return (
+                    axum::http::StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": format!("could not read {raw:?} as a window"),
+                        "hint":  "a count and a unit, one of s m h d — for example 24h",
+                    })),
+                )
+                    .into_response();
+            }
+        },
+        None => None,
+    };
+
+    let port = *port_rx.borrow();
+    learn_installed(port, &caps, &residency).await;
+
+    let (states, all_transitions, persisted) = match residency.lock() {
+        Ok(t) => (
+            t.states().cloned().collect::<Vec<_>>(),
+            t.history().cloned().collect::<Vec<_>>(),
+            t.persisting(),
+        ),
+        Err(_) => (Vec::new(), Vec::new(), false),
+    };
+    let refs: Vec<&crate::residency::ModelState> = states.iter().collect();
+    let now_ms = crate::residency::now_ms();
+
+    // The rules carry their own windows; `since` narrows what they are allowed
+    // to see on top of that, so a shorter window can only reduce findings.
+    let transitions: Vec<crate::residency::Transition> = match since_ms {
+        Some(ms) => all_transitions
+            .into_iter()
+            .filter(|t| t.ts_ms >= now_ms - ms)
+            .collect(),
+        None => all_transitions,
+    };
+
+    let (ps_context_length, ps_expires_at) = caps
+        .lock()
+        .map(|c| (c.ps_context_length, c.ps_expires_at))
+        .unwrap_or((false, false));
+
+    let mut inspection = crate::findings::evaluate(&crate::findings::RuleInputs {
+        states: &refs,
+        transitions: &transitions,
+        ps_context_length,
+        ps_expires_at,
+        now_ms,
+    });
+
+    // Phase 1 writes no new hardware rules; the ones that exist reach this
+    // report through the adapter, so one `inspect` covers the whole host.
+    match adapted_observations(observations) {
+        Some(adapted) => inspection.findings.extend(adapted),
+        None => inspection.not_checked.push(crate::findings::NotChecked {
+            rule: "hardware_patterns",
+            reason: "the pattern engine reads the local metrics store, which this \
+                     build or this process does not have"
+                .into(),
+        }),
+    }
+
+    // Reconcile here too. `inspect` is the command people actually run, so a
+    // finding that stopped firing should resolve on it rather than waiting for
+    // someone to call /v1/findings. The rows that come back are not used: this
+    // route reports what is true now, and the stored set is what
+    // /v1/findings?all=true is for.
+    let findings_persisted = match store {
+        Some(axum::extract::Extension(s)) => findings_from_store(
+            s,
+            node_id_ext.0.to_string(),
+            inspection.findings.clone(),
+            false,
+            now_ms,
+        )
+        .await
+        .is_some(),
+        None => false,
+    };
+
+    let apple_now = apple.lock().map(|g| g.clone()).unwrap_or_default();
+    let nvidia_now = nvidia.lock().map(|g| g.clone()).unwrap_or_default();
+    let headroom = crate::readiness::headroom(&apple_now, &nvidia_now, &refs);
+    let readiness = crate::readiness::assess(&crate::readiness::Inputs {
+        states: refs,
+        transitions: &transitions,
+        headroom,
+        activity_signal: ps_expires_at,
+        now_ms,
+    });
+
+    Json(serde_json::json!({
+        "node_id":        node_id_ext.0.as_str(),
+        "observed_at_ms": now_ms,
+        "since_ms":       since_ms,
+        // The renderer passes this to the readiness section, which says "not
+        // checked: whether any model is in use" without it.
+        "activity_signal": ps_expires_at,
+        "findings":       inspection.findings,
+        "not_checked":    inspection.not_checked,
+        "readiness":      readiness,
+        "headroom":       headroom,
+        // What the rules actually had to read. A caller that sees two
+        // transitions should know whether that is the whole history or the
+        // tail of it.
+        "history": {
+            "transitions":     transitions.len(),
+            // Two different things, deliberately separate: whether the
+            // transition log survives a restart, and whether findings do. A
+            // store that stopped accepting writes leaves the first true and
+            // the second false.
+            "persisted":       persisted,
+            "findings_persisted": findings_persisted,
+            "scope":           if persisted { "stored" } else { "this process only" },
+        },
+    }))
+    .into_response()
+}
+
+/// The store, where this build has one.
+///
+/// On musl there is no DuckDB and no `crate::store` at all, so the alias
+/// becomes the unit type and the findings routes serve the in-memory
+/// evaluation. One handler body either way, rather than two that could drift.
+#[cfg(not(target_env = "musl"))]
+pub(crate) type MaybeStore = Option<axum::extract::Extension<store::Store>>;
+/// See the non-musl alias above.
+#[cfg(target_env = "musl")]
+pub(crate) type MaybeStore = Option<axum::extract::Extension<()>>;
+
+/// The hardware pattern engine's cache, where this build has one.
+///
+/// Same shape as [`MaybeStore`] and for the same reason: the engine is
+/// store-backed, so on musl neither it nor this type's inner value exists.
+#[cfg(not(target_env = "musl"))]
+pub(crate) type MaybeObservations =
+    Option<axum::extract::Extension<crate::observations::ObservationCache>>;
+/// See the non-musl alias above.
+#[cfg(target_env = "musl")]
+pub(crate) type MaybeObservations = Option<axum::extract::Extension<()>>;
+
+/// The hardware patterns as findings, or `None` when the engine does not run.
+///
+/// `None` and `Some(vec![])` are different answers and the caller treats them
+/// differently: no engine is listed under "not checked", while an engine that
+/// found nothing is a quiet host.
+#[cfg(not(target_env = "musl"))]
+fn adapted_observations(cache: MaybeObservations) -> Option<Vec<crate::findings::Finding>> {
+    let axum::extract::Extension(cache) = cache?;
+    match cache.lock() {
+        Ok(obs) => Some(crate::findings::from_observations(&obs)),
+        // A poisoned cache is not an empty one.
+        Err(_) => None,
+    }
+}
+
+/// See the non-musl version. Without DuckDB the pattern engine does not run.
+#[cfg(target_env = "musl")]
+fn adapted_observations(_cache: MaybeObservations) -> Option<Vec<crate::findings::Finding>> {
+    None
+}
+
+/// Record this evaluation and read back the findings the store now holds.
+///
+/// `None` when there is no store, when the write failed, or when the read
+/// failed — every one of which means "serve what was just evaluated and say
+/// the history is not persisted", never a silently empty list.
+#[cfg(not(target_env = "musl"))]
+async fn findings_from_store(
+    store: store::Store,
+    node_id: String,
+    open: Vec<crate::findings::Finding>,
+    include_resolved: bool,
+    now_ms: i64,
+) -> Option<serde_json::Value> {
+    // store.rs's rule: blocking database calls run off the async thread.
+    tokio::task::spawn_blocking(move || {
+        if let Err(e) = store.reconcile_findings(&node_id, &open, now_ms) {
+            eprintln!("[findings] could not record this evaluation: {e}");
+            return None;
+        }
+        match store.query_findings(&node_id, include_resolved) {
+            Ok(rows) => serde_json::to_value(rows).ok(),
+            Err(e) => {
+                eprintln!("[findings] could not read findings back: {e}");
+                None
+            }
+        }
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+/// See the non-musl version. A musl build has nowhere to put a finding.
+#[cfg(target_env = "musl")]
+async fn findings_from_store(
+    _store: (),
+    _node_id: String,
+    _open: Vec<crate::findings::Finding>,
+    _include_resolved: bool,
+    _now_ms: i64,
+) -> Option<serde_json::Value> {
+    None
+}
+
+/// GET /v1/findings — the findings alone, without readiness.
+///
+/// `?id=` narrows to one, `?all=true` includes resolved findings.
+///
+/// Every request evaluates the rules and reconciles the result against the
+/// store, so a finding resolves because an evaluation ran and did not produce
+/// it. That makes resolution observed rather than scheduled, and it is why the
+/// stored `resolved_at_ms` is when Wicklee last looked and did not see it.
+///
+/// Where there is no store the route still answers, from the evaluation alone,
+/// and says the history is not persisted. The spec is explicit that this must
+/// not become a silent empty result that reads like "nothing ever happened".
+pub(crate) async fn handle_v1_findings(
+    axum::extract::Extension(OllamaPortRx(port_rx)): axum::extract::Extension<OllamaPortRx>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+    axum::extract::Extension(residency): axum::extract::Extension<
+        crate::residency::SharedTracker,
+    >,
+    axum::extract::Extension(caps): axum::extract::Extension<crate::caps::SharedCaps>,
+    axum::extract::Extension(node_id_ext): axum::extract::Extension<NodeId>,
+    store: MaybeStore,
+    observations: MaybeObservations,
+) -> axum::response::Response {
+    let port = *port_rx.borrow();
+    learn_installed(port, &caps, &residency).await;
+
+    let (states, transitions) = match residency.lock() {
+        Ok(t) => (
+            t.states().cloned().collect::<Vec<_>>(),
+            t.history().cloned().collect::<Vec<_>>(),
+        ),
+        Err(_) => (Vec::new(), Vec::new()),
+    };
+    let refs: Vec<&crate::residency::ModelState> = states.iter().collect();
+    let (ps_context_length, ps_expires_at) = caps
+        .lock()
+        .map(|c| (c.ps_context_length, c.ps_expires_at))
+        .unwrap_or((false, false));
+    let now_ms = crate::residency::now_ms();
+
+    let mut inspection = crate::findings::evaluate(&crate::findings::RuleInputs {
+        states: &refs,
+        transitions: &transitions,
+        ps_context_length,
+        ps_expires_at,
+        now_ms,
+    });
+    // Same set as /v1/inspect, so the two routes cannot disagree about what is
+    // open — and so reconciliation resolves a hardware finding on either.
+    match adapted_observations(observations) {
+        Some(adapted) => inspection.findings.extend(adapted),
+        None => inspection.not_checked.push(crate::findings::NotChecked {
+            rule: "hardware_patterns",
+            reason: "the pattern engine reads the local metrics store, which this \
+                     build or this process does not have"
+                .into(),
+        }),
+    }
+
+    let want_resolved = params.get("all").is_some_and(|v| v != "false" && v != "0");
+    let stored = match store {
+        Some(axum::extract::Extension(s)) => {
+            findings_from_store(
+                s,
+                node_id_ext.0.to_string(),
+                inspection.findings.clone(),
+                want_resolved,
+                now_ms,
+            )
+            .await
+        }
+        None => None,
+    };
+
+    // Whether `all` was actually honoured, which is only true when the rows
+    // came from the store. Asking for resolved findings and being given the
+    // open ones under a flag that said otherwise is the failure this guards.
+    let persisted = stored.is_some();
+    let includes_resolved = want_resolved && persisted;
+    let rows = stored.unwrap_or_else(|| {
+        serde_json::to_value(&inspection.findings).unwrap_or_else(|_| serde_json::json!([]))
+    });
+
+    if let Some(id) = params.get("id") {
+        let found = rows
+            .as_array()
+            .and_then(|a| a.iter().find(|f| f["id"].as_str() == Some(id.as_str())));
+        return match found {
+            Some(f) => Json(serde_json::json!({
+                "node_id": node_id_ext.0.as_str(),
+                "finding": f,
+            }))
+            .into_response(),
+            None => (
+                axum::http::StatusCode::NOT_FOUND,
+                Json(serde_json::json!({
+                    "error": format!("no finding with id {id}"),
+                    "hint":  if includes_resolved {
+                        "GET /v1/findings?all=true lists every finding this node has recorded"
+                    } else {
+                        "GET /v1/findings lists the open ones; add all=true for resolved findings"
+                    },
+                })),
+            )
+                .into_response(),
+        };
+    }
+
+    Json(serde_json::json!({
+        "node_id":           node_id_ext.0.as_str(),
+        "observed_at_ms":    now_ms,
+        "findings":          rows,
+        "not_checked":       inspection.not_checked,
+        "includes_resolved": includes_resolved,
+        // False means findings last only until this process restarts, which is
+        // the musl case and the store-disabled case.
+        "persisted":         persisted,
+    }))
+    .into_response()
+}
+
 /// Health snapshot — operator-facing diagnostic for "are the API routes I
 /// expect actually live?". Reports agent version, build target, DuckDB
 /// store state (healthy / disabled), and which feature surface that gates.
