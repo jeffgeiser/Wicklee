@@ -73,6 +73,77 @@ fn ps_lists_model(ps: &PsResponse, model: &str) -> bool {
     ps.find(model).is_some()
 }
 
+/// What a `/api/version` check against a candidate port actually observed.
+///
+/// Three outcomes, not two. The old code collapsed every failure into one
+/// message — "is a worker socket (API returned 404)" — which it printed even
+/// for a port with nothing listening on it at all. Those are different facts
+/// with different fixes, and saying the wrong one sends the reader looking for
+/// a process that does not exist.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ApiCheck {
+    /// Answered 2xx: this is the Ollama HTTP API.
+    Ok,
+    /// Something answered, but it is not the Ollama API — an internal worker
+    /// socket (`ollama_llama_server`), or an unrelated service.
+    NotOllama(u16),
+    /// Nothing answered. `timed_out` separates "the connection was refused"
+    /// from "it was accepted and then nothing came back".
+    NoAnswer { timed_out: bool },
+}
+
+impl ApiCheck {
+    /// Classify a `reqwest` outcome.
+    pub(crate) fn of<T>(outcome: &Result<T, reqwest::Error>, status: Option<u16>) -> Self {
+        match (outcome, status) {
+            (Ok(_), Some(code)) if (200..300).contains(&code) => ApiCheck::Ok,
+            (Ok(_), Some(code)) => ApiCheck::NotOllama(code),
+            (Ok(_), None) => ApiCheck::NoAnswer { timed_out: false },
+            (Err(e), _) => ApiCheck::NoAnswer { timed_out: e.is_timeout() },
+        }
+    }
+
+    pub(crate) fn is_ok(self) -> bool {
+        self == ApiCheck::Ok
+    }
+
+    /// What was observed, in words, for the log.
+    pub(crate) fn describe(self, port: u16) -> String {
+        match self {
+            ApiCheck::Ok => format!(":{port} serves the Ollama API"),
+            ApiCheck::NotOllama(code) => format!(
+                "something is listening on :{port} but it is not the Ollama API (HTTP {code})"
+            ),
+            ApiCheck::NoAnswer { timed_out: false } => {
+                format!("nothing is listening on :{port}")
+            }
+            ApiCheck::NoAnswer { timed_out: true } => format!(
+                ":{port} accepted the connection but did not answer /api/version in time"
+            ),
+        }
+    }
+}
+
+/// Hit `/api/version` on one port and say what was there.
+///
+/// Records the version string in the capability record on success. That is
+/// informational only — capabilities are never inferred from a version
+/// number, only from responses actually seen.
+async fn check_ollama_api(client: &reqwest::Client, port: u16, caps: &SharedCaps) -> ApiCheck {
+    let url = format!("http://127.0.0.1:{port}/api/version");
+    let sent = client.get(&url).send().await;
+    let status = sent.as_ref().ok().map(|r| r.status().as_u16());
+    let check = ApiCheck::of(&sent, status);
+    if check.is_ok()
+        && let Ok(r) = sent
+        && let Ok(v) = r.json::<crate::ollama_client::VersionResponse>().await
+        && let Ok(mut c) = caps.lock()
+    {
+        c.observe_version(v.version.as_deref());
+    }
+    check
+}
+
 /// What the probe is allowed to do for one model, decided from a fresh
 /// `/api/ps` read taken immediately before firing.
 #[derive(Debug, PartialEq, Eq)]
@@ -261,6 +332,11 @@ pub(crate) fn start_ollama_harvester(
     nvidia:    Arc<Mutex<NvidiaMetrics>>,
     proxy_arc: Option<Arc<ProxyState>>,
     port_rx: process_discovery::PortRx,
+    // True when the port was pinned by the operator — `[runtime_ports]` in
+    // config.toml, `WICKLEE_OLLAMA_PORT`, or the proxy's configured backend
+    // port — rather than found by the process scan. A pinned port is never
+    // second-guessed; see the validation block below.
+    port_pinned: bool,
     runtime_config_cache: crate::runtime_config::RuntimeConfigCache,
     probe_policy: ProbePolicy,
     residency: crate::residency::SharedTracker,
@@ -304,47 +380,55 @@ pub(crate) fn start_ollama_harvester(
             }
             let discovered_port = port_rx_main.borrow().unwrap();
 
-            // Validate the discovered port: the Tier 3 socket scan can pick up
-            // internal worker-process sockets (e.g. ollama_llama_server on :34111)
-            // that don't serve the Ollama HTTP API.  Hit /api/version as a quick
-            // health check; if it fails, fall back to the runtime's default port.
+            // Validate the port: the Tier 3 socket scan can pick up internal
+            // worker-process sockets (e.g. ollama_llama_server on :34111) that
+            // don't serve the Ollama HTTP API. Hit /api/version as a quick
+            // health check.
+            //
+            // The fallback below applies ONLY to a port the scan guessed. A
+            // pinned port is a statement of intent, and harvesting a different
+            // runtime than the operator named is worse than harvesting
+            // nothing: it is how an agent started by hand with
+            // WICKLEE_OLLAMA_PORT=11999 ended up polling — and firing
+            // synthetic probes at — the shared Ollama on :11434, whose
+            // expires_at resets the *installed* agent then attributed to a
+            // user request it never made.
             let port = {
-                let check_url = format!("http://127.0.0.1:{discovered_port}/api/version");
-                // Reuses the existing health check to record the version. It is
-                // informational only: capabilities are never inferred from it.
-                let api_ok = match client.get(&check_url).send().await {
-                    Ok(r) if r.status().is_success() => {
-                        if let Ok(v) = r.json::<crate::ollama_client::VersionResponse>().await
-                            && let Ok(mut c) = caps_main.lock() {
-                                c.observe_version(v.version.as_deref());
-                            }
-                        true
-                    }
-                    _ => false,
-                };
-                if api_ok {
+                let check = check_ollama_api(&client, discovered_port, &caps_main).await;
+                if check.is_ok() {
                     discovered_port
+                } else if port_pinned {
+                    eprintln!(
+                        "[ollama] {} — :{discovered_port} was set explicitly, so not \
+                         falling back to another port; will retry",
+                        check.describe(discovered_port),
+                    );
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    continue; // back to outer wait loop
                 } else {
                     // Use the RuntimeSpec default instead of hardcoding
                     let default_port: u16 = crate::process_discovery::default_port_for("ollama").unwrap_or(11434);
                     if discovered_port == default_port {
                         // Already tried default — nothing to fall back to.
-                        eprintln!("[ollama] API not responding on :{default_port} — will retry");
+                        eprintln!(
+                            "[ollama] {} — will retry",
+                            check.describe(default_port),
+                        );
                         tokio::time::sleep(Duration::from_secs(5)).await;
                         continue; // back to outer wait loop
                     }
-                    let fallback_url = format!("http://127.0.0.1:{default_port}/api/version");
-                    let fallback_ok = client.get(&fallback_url).send().await
-                        .map(|r| r.status().is_success()).unwrap_or(false);
-                    if fallback_ok {
+                    let fallback = check_ollama_api(&client, default_port, &caps_main).await;
+                    if fallback.is_ok() {
                         eprintln!(
-                            "[ollama] :{discovered_port} is a worker socket (API returned 404), \
-                             using default :{default_port}",
+                            "[ollama] {}, using default :{default_port}",
+                            check.describe(discovered_port),
                         );
                         default_port
                     } else {
                         eprintln!(
-                            "[ollama] API not responding on :{discovered_port} or :{default_port} — will retry"
+                            "[ollama] {}; {} — will retry",
+                            check.describe(discovered_port),
+                            fallback.describe(default_port),
                         );
                         tokio::time::sleep(Duration::from_secs(5)).await;
                         continue; // back to outer wait loop
@@ -1538,6 +1622,57 @@ pub(crate) fn start_llamacpp_harvester(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Port validation ──────────────────────────────────────────────────────
+
+    /// The three outcomes have to stay distinguishable, because the fallback
+    /// decision and the log line both read them.
+    #[test]
+    fn an_api_check_says_which_of_the_three_things_happened() {
+        let ok: Result<(), reqwest::Error> = Ok(());
+        assert_eq!(ApiCheck::of(&ok, Some(200)), ApiCheck::Ok);
+        assert_eq!(ApiCheck::of(&ok, Some(204)), ApiCheck::Ok);
+        // A 404 is the worker-socket case: something is there, it is not Ollama.
+        assert_eq!(ApiCheck::of(&ok, Some(404)), ApiCheck::NotOllama(404));
+        assert_eq!(ApiCheck::of(&ok, Some(503)), ApiCheck::NotOllama(503));
+        // A 3xx is not a success — Ollama answers /api/version directly.
+        assert_eq!(ApiCheck::of(&ok, Some(302)), ApiCheck::NotOllama(302));
+        assert!(ApiCheck::Ok.is_ok());
+        assert!(!ApiCheck::NotOllama(404).is_ok());
+        assert!(!ApiCheck::NoAnswer { timed_out: false }.is_ok());
+    }
+
+    /// The bug this replaces: every failure printed "is a worker socket (API
+    /// returned 404)", including a port with nothing on it, which sent the
+    /// reader looking for a process that did not exist.
+    #[test]
+    fn the_log_line_does_not_claim_a_worker_socket_when_the_port_is_empty() {
+        let empty = ApiCheck::NoAnswer { timed_out: false }.describe(11999);
+        assert_eq!(empty, "nothing is listening on :11999");
+        assert!(!empty.contains("404"), "got: {empty}");
+        assert!(!empty.to_lowercase().contains("worker"), "got: {empty}");
+
+        let worker = ApiCheck::NotOllama(404).describe(34111);
+        assert!(worker.contains(":34111"), "got: {worker}");
+        assert!(worker.contains("404"), "got: {worker}");
+        assert!(worker.contains("not the Ollama API"), "got: {worker}");
+
+        // Accepted-then-silent is its own case: the port is not empty.
+        let hung = ApiCheck::NoAnswer { timed_out: true }.describe(11434);
+        assert!(hung.contains("did not answer"), "got: {hung}");
+        assert!(!hung.contains("nothing is listening"), "got: {hung}");
+
+        // Every message names the port it is about, since the fallback path
+        // prints two of them in one line.
+        for (check, port) in [
+            (ApiCheck::Ok, 11434u16),
+            (ApiCheck::NotOllama(404), 34111),
+            (ApiCheck::NoAnswer { timed_out: false }, 11999),
+            (ApiCheck::NoAnswer { timed_out: true }, 8000),
+        ] {
+            assert!(check.describe(port).contains(&format!(":{port}")), "{check:?}");
+        }
+    }
 
     // ── Probe scheduling ─────────────────────────────────────────────────────
 

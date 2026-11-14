@@ -574,16 +574,33 @@ async fn main() {
     // the agent cannot read its process cmdline (cross-user /proc restriction).
     let initial = process_discovery::scan_runtimes();
     let rp = config.runtime_ports.as_ref();
-    // Port resolution: TOML config → env var → auto-discovery → default
-    let env_port = |var: &str| -> Option<u16> { std::env::var(var).ok().and_then(|v| v.parse().ok()) };
-    let ollama_cfg   = rp.and_then(|r| r.ollama).or_else(|| env_port("WICKLEE_OLLAMA_PORT"));
-    let vllm_cfg     = rp.and_then(|r| r.vllm).or_else(|| env_port("WICKLEE_VLLM_PORT"));
-    let llamacpp_cfg = rp.and_then(|r| r.llamacpp).or_else(|| env_port("WICKLEE_LLAMACPP_PORT"));
-    let sglang_cfg   = rp.and_then(|r| r.sglang).or_else(|| env_port("WICKLEE_SGLANG_PORT"));
-    let ollama_port   = ollama_cfg.or_else(|| initial.get("ollama").copied());
-    let vllm_port     = vllm_cfg.or_else(|| initial.get("vllm").copied());
-    let llamacpp_port = llamacpp_cfg.or_else(|| initial.get("llamacpp").copied().or_else(|| initial.get("llama-box").copied()));
-    let sglang_port   = sglang_cfg.or_else(|| initial.get("sglang").copied());
+    // Port resolution: TOML config → env var → auto-discovery. One resolver,
+    // shared with diagnostics, returning the source alongside the number —
+    // see process_discovery::resolve_port on why the source has to travel with
+    // it. llama.cpp and llama-box are one harvester, so their two discovery
+    // entries collapse before resolution.
+    let resolve = |runtime: &str, configured: Option<u16>, discovered: Option<u16>| {
+        process_discovery::resolve_port(
+            configured,
+            process_discovery::env_port(runtime),
+            discovered,
+        )
+    };
+    let ollama_res = resolve("ollama", rp.and_then(|r| r.ollama), initial.get("ollama").copied());
+    let vllm_res   = resolve("vllm",   rp.and_then(|r| r.vllm),   initial.get("vllm").copied());
+    let llamacpp_res = resolve(
+        "llamacpp",
+        rp.and_then(|r| r.llamacpp),
+        initial.get("llamacpp").copied().or_else(|| initial.get("llama-box").copied()),
+    );
+    let sglang_res = resolve("sglang", rp.and_then(|r| r.sglang), initial.get("sglang").copied());
+    let pinned = |res: Option<(u16, process_discovery::PortSource)>| {
+        res.is_some_and(|(_, src)| src.is_pinned())
+    };
+    let ollama_port   = ollama_res.map(|(p, _)| p);
+    let vllm_port     = vllm_res.map(|(p, _)| p);
+    let llamacpp_port = llamacpp_res.map(|(p, _)| p);
+    let sglang_port   = sglang_res.map(|(p, _)| p);
     // When the proxy is enabled, the harvester + probe must talk to Ollama
     // directly on its moved port (e.g. 11435), NOT through the proxy on 11434.
     // The proxy occupies the default port, so auto-discovery would incorrectly
@@ -618,14 +635,19 @@ async fn main() {
     // Runtimes with a TOML config override are excluded from the loop —
     // the override is authoritative and must never be overwritten by
     // auto-discovery (Priority of Truth: TOML > cmdline > socket scan).
+    //
+    // `ollama_port_pinned` is that same authority, named once and used twice:
+    // here, to keep discovery out of the channel, and at the harvester, which
+    // otherwise validates the port and falls back to :11434 on its own. Two
+    // separate copies of this condition is how the override came to be
+    // honoured in one place and silently discarded in the other.
+    let ollama_port_pinned = pinned(ollama_res) || proxy_arc.is_some();
     let mut discovery_txs: std::collections::HashMap<&str, _> = Default::default();
-    // When proxy is enabled, ollama port is fixed to proxy_cfg.ollama_port —
-    // do not let auto-discovery overwrite it (same logic as TOML override).
-    if ollama_cfg.is_none() && proxy_arc.is_none() { discovery_txs.insert("ollama", ollama_port_tx); }
-    if vllm_cfg.is_none()     { discovery_txs.insert("vllm",      vllm_port_tx);     }
-    if llamacpp_cfg.is_none() { discovery_txs.insert("llamacpp",  llamacpp_disc_tx);  }
-    if llamacpp_cfg.is_none() { discovery_txs.insert("llama-box", llamabox_disc_tx);  }
-    if sglang_cfg.is_none()   { discovery_txs.insert("sglang",   _sglang_port_tx);   }
+    if !ollama_port_pinned { discovery_txs.insert("ollama", ollama_port_tx); }
+    if !pinned(vllm_res)     { discovery_txs.insert("vllm",      vllm_port_tx);     }
+    if !pinned(llamacpp_res) { discovery_txs.insert("llamacpp",  llamacpp_disc_tx);  }
+    if !pinned(llamacpp_res) { discovery_txs.insert("llama-box", llamabox_disc_tx);  }
+    if !pinned(sglang_res)   { discovery_txs.insert("sglang",   _sglang_port_tx);   }
     process_discovery::start_discovery_loop(discovery_txs, 30);
 
     // Proxy ports and runtime overrides are immutable after startup — compute once.
@@ -663,6 +685,7 @@ async fn main() {
         Arc::clone(&nvidia_metrics),
         proxy_arc,
         ollama_port_rx,
+        ollama_port_pinned,
         Arc::clone(&runtime_config_cache),
         probe_policy,
         Arc::clone(&residency_tracker),

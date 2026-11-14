@@ -261,6 +261,71 @@ fn normalize_vllm_dtype(quantization: Option<&str>, dtype: Option<&str>) -> Opti
     }
 }
 
+// ── Port resolution ───────────────────────────────────────────────────────────
+
+/// How a runtime's port was decided.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PortSource {
+    /// `[runtime_ports]` in config.toml.
+    Config,
+    /// `WICKLEE_<RUNTIME>_PORT`.
+    Env,
+    /// The process scan.
+    Discovered,
+}
+
+impl PortSource {
+    /// Pinned by the operator, so nothing downstream may override it.
+    pub fn is_pinned(self) -> bool {
+        self != PortSource::Discovered
+    }
+
+    /// How the startup box names it.
+    pub fn label(self) -> &'static str {
+        match self {
+            PortSource::Config => "config.toml",
+            PortSource::Env => "env",
+            PortSource::Discovered => "auto",
+        }
+    }
+}
+
+/// The environment variable that overrides one runtime's port.
+pub fn env_port_var(runtime: &str) -> String {
+    format!("WICKLEE_{}_PORT", runtime.to_ascii_uppercase().replace('-', "_"))
+}
+
+/// `WICKLEE_OLLAMA_PORT`, `WICKLEE_VLLM_PORT`, and so on.
+pub fn env_port(runtime: &str) -> Option<u16> {
+    std::env::var(env_port_var(runtime)).ok().and_then(|v| v.parse().ok())
+}
+
+/// The one place a runtime's port is resolved: `[runtime_ports]`, then
+/// `WICKLEE_<RUNTIME>_PORT`, then the process scan.
+///
+/// Returned with its source, because where the number came from is what
+/// decides whether anything downstream may override it. Three separate copies
+/// of this precedence is how an explicitly set port came to be honoured by the
+/// discovery loop, silently discarded by the harvester, and ignored outright
+/// by the startup box.
+///
+/// Pure: the caller reads the environment with [`env_port`] and passes the
+/// result in, so the precedence can be tested without touching process-wide
+/// state from a parallel test runner.
+pub fn resolve_port(
+    configured: Option<u16>,
+    from_env: Option<u16>,
+    discovered: Option<u16>,
+) -> Option<(u16, PortSource)> {
+    if let Some(p) = configured {
+        return Some((p, PortSource::Config));
+    }
+    if let Some(p) = from_env {
+        return Some((p, PortSource::Env));
+    }
+    discovered.map(|p| (p, PortSource::Discovered))
+}
+
 // ── Watch channel types ───────────────────────────────────────────────────────
 
 /// Receives the current state of a runtime: `Some(port)` = running, `None` = not found.
@@ -581,6 +646,47 @@ pub fn start_discovery_loop(txs: HashMap<&'static str, PortTx>, interval_secs: u
             first_scan = false;
         }
     });
+}
+
+#[cfg(test)]
+mod port_resolution_tests {
+    use super::*;
+
+    #[test]
+    fn config_beats_env_beats_discovery() {
+        assert_eq!(
+            resolve_port(Some(1111), Some(2222), Some(3333)),
+            Some((1111, PortSource::Config))
+        );
+        assert_eq!(
+            resolve_port(None, Some(2222), Some(3333)),
+            Some((2222, PortSource::Env))
+        );
+        assert_eq!(resolve_port(None, None, Some(3333)), Some((3333, PortSource::Discovered)));
+        assert_eq!(resolve_port(None, Some(2222), None), Some((2222, PortSource::Env)));
+        assert_eq!(resolve_port(None, None, None), None);
+    }
+
+    /// The distinction the harvester's fallback and the discovery loop both
+    /// read. A guess may be overridden; a stated intention may not.
+    #[test]
+    fn only_a_discovered_port_is_unpinned() {
+        assert!(PortSource::Config.is_pinned());
+        assert!(PortSource::Env.is_pinned());
+        assert!(!PortSource::Discovered.is_pinned());
+    }
+
+    /// These names are already in use and in the docs, so the derivation has
+    /// to keep producing exactly them.
+    #[test]
+    fn the_env_var_names_are_the_ones_already_documented() {
+        assert_eq!(env_port_var("ollama"), "WICKLEE_OLLAMA_PORT");
+        assert_eq!(env_port_var("vllm"), "WICKLEE_VLLM_PORT");
+        assert_eq!(env_port_var("llamacpp"), "WICKLEE_LLAMACPP_PORT");
+        assert_eq!(env_port_var("sglang"), "WICKLEE_SGLANG_PORT");
+        // A hyphenated runtime name becomes an underscore.
+        assert_eq!(env_port_var("llama-box"), "WICKLEE_LLAMA_BOX_PORT");
+    }
 }
 
 #[cfg(test)]

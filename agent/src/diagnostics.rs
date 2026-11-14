@@ -200,30 +200,59 @@ pub(crate) async fn run_startup_diagnostics(node_id: &str, pairing_status: &str,
             .build()
             .unwrap_or_default();
 
-        // Ollama — check config override first, then process scan
-        let ollama_cfg_port  = cfg_ref.runtime_ports.as_ref().and_then(|r| r.ollama);
-        let ollama_auto_port = discovered.get("ollama").copied();
-        let ollama_port      = ollama_cfg_port.or(ollama_auto_port);
-        let ollama_source    = if ollama_cfg_port.is_some() { "config.toml" } else { "auto" };
+        // Ollama — resolved by the shared resolver, so this box reports the
+        // port the harvester will actually use. It used to read config.toml
+        // and the process scan only, which meant an agent started with
+        // WICKLEE_OLLAMA_PORT printed ":11434 (auto)" while being pointed
+        // somewhere else entirely.
+        let ollama_res = process_discovery::resolve_port(
+            cfg_ref.runtime_ports.as_ref().and_then(|r| r.ollama),
+            process_discovery::env_port("ollama"),
+            discovered.get("ollama").copied(),
+        );
+        let ollama_port   = ollama_res.map(|(p, _)| p);
+        let ollama_source = ollama_res.map(|(_, src)| src.label()).unwrap_or("auto");
+        let ollama_pinned = ollama_res.is_some_and(|(_, src)| src.is_pinned());
         if let Some(port) = ollama_port {
-            let model_hint = async {
+            // Two separate questions, because one `?` chain conflated them:
+            // did /api/ps answer, and did it list a model. An idle Ollama
+            // answers with an empty list, which used to read as "the API did
+            // not answer" and fired the Port Doctor warning at a perfectly
+            // healthy runtime — while a dead port printed "running (no model
+            // loaded)". A failed read is not an empty result.
+            let ps: Option<serde_json::Value> = async {
                 let resp = client
                     .get(format!("http://127.0.0.1:{port}/api/ps"))
                     .send().await.ok()?;
-                let json: serde_json::Value = resp.json().await.ok()?;
-                let name = json["models"].as_array()?.first()?["name"].as_str()?.to_string();
-                Some(format!("{} loaded", name))
+                resp.json().await.ok()
             }.await;
 
-            let api_ok = model_hint.is_some();
-            let hint = model_hint.unwrap_or_else(|| "running (no model loaded)".to_string());
+            let api_ok = ps.is_some();
+            let hint = match &ps {
+                None => "not responding".to_string(),
+                Some(json) => match json["models"]
+                    .as_array()
+                    .and_then(|a| a.first())
+                    .and_then(|m| m["name"].as_str())
+                {
+                    Some(name) => format!("{name} loaded"),
+                    None => "running (no model loaded)".to_string(),
+                },
+            };
             println!("{}", row("Ollama", &format!(":{port} ({ollama_source}) · {hint}")));
 
-            // Port Doctor: API returned 404 on a non-default port = worker socket
-            if !api_ok && ollama_cfg_port.is_none() && port != 11434 {
-                println!("  ⚠️  Ollama process found on :{port} but API returned 404.");
+            // Port Doctor: API did not answer on a non-default discovered
+            // port = probably a worker socket, and the harvester will fall
+            // back. A pinned port gets the opposite advice, because the
+            // harvester will not move off it.
+            if !api_ok && port != 11434 && !ollama_pinned {
+                println!("  ⚠️  Ollama process found on :{port} but the API did not answer.");
                 println!("     This is likely an internal worker socket, not the API.");
                 println!("     The agent will auto-fallback to :11434 at runtime.");
+            } else if !api_ok && ollama_pinned {
+                println!("  ⚠️  Ollama API did not answer on :{port}, which was set explicitly.");
+                println!("     The agent will keep retrying that port and will not fall back,");
+                println!("     so nothing is harvested until something answers there.");
             }
         } else {
             println!("{}", row("Ollama", "not running"));
@@ -232,10 +261,13 @@ pub(crate) async fn run_startup_diagnostics(node_id: &str, pairing_status: &str,
         // vLLM — check config override first, then process scan.
         // Port Doctor: when auto-discovered on the default port (:8000) and the API
         // doesn't respond, warn the user — they likely need a config override.
-        let vllm_cfg_port  = cfg_ref.runtime_ports.as_ref().and_then(|r| r.vllm);
-        let vllm_auto_port = discovered.get("vllm").copied();
-        let vllm_port      = vllm_cfg_port.or(vllm_auto_port);
-        let vllm_source    = if vllm_cfg_port.is_some() { "config.toml" } else { "auto" };
+        let vllm_res = process_discovery::resolve_port(
+            cfg_ref.runtime_ports.as_ref().and_then(|r| r.vllm),
+            process_discovery::env_port("vllm"),
+            discovered.get("vllm").copied(),
+        );
+        let vllm_port   = vllm_res.map(|(p, _)| p);
+        let vllm_source = vllm_res.map(|(_, src)| src.label()).unwrap_or("auto");
         if let Some(port) = vllm_port {
             let up = client
                 .get(format!("http://127.0.0.1:{port}/health"))
@@ -246,7 +278,7 @@ pub(crate) async fn run_startup_diagnostics(node_id: &str, pairing_status: &str,
             println!("{}", row("vLLM", &format!(":{port} ({vllm_source}) · {status_str}")));
 
             // Port Doctor: default port + API not responding = likely wrong port
-            if !up && vllm_cfg_port.is_none() && port == 8000 {
+            if !up && !vllm_res.is_some_and(|(_, src)| src.is_pinned()) && port == 8000 {
                 println!("  ⚠️  vLLM detected but API not responding on :8000.");
                 println!("     If vLLM uses a non-default port, add to config:");
                 let cfg_path = config_path_hint();
