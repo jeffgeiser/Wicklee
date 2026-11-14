@@ -4,9 +4,10 @@ version = "0.12.0"
 edition = "2024"
 license = "Apache-2.0"
 
-# `no_nvml` is a custom cfg set by the release workflow's musl/static build
-# (RUSTFLAGS='--cfg no_nvml') to strip the NVML wrapper. Register it so the
-# check-cfg lint doesn't warn on every normal build.
+# `no_nvml` is a custom cfg set by the release workflow's non-NVIDIA Linux
+# builds (RUSTFLAGS='--cfg no_nvml') to strip the NVML wrapper. musl needs no
+# flag — it excludes nvml-wrapper through the target table below. Register it
+# so the check-cfg lint doesn't warn on every normal build.
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(no_nvml)'] }
 
