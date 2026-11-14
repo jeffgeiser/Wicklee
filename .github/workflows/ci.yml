@@ -106,3 +106,65 @@ jobs:
       - name: Tests
         run: cargo test
         working-directory: cloud
+
+  # ── Agent · musl target (no DuckDB) ───────────────────────────────────────────
+  # 71 `#[cfg(target_env = "musl")]` sites across 9 modules carry the no-store
+  # configuration: no DuckDB, no history API, no observation buffer, residency
+  # kept in memory. Nothing compiled them. The release matrix ships glibc only
+  # (v0.8.2 switched the default Linux build after musl silently stripped 14
+  # store-backed routes), so the gates have had no builder since — and rustc
+  # rejects `--cfg target_env="musl"` outright ("only supposed to be controlled
+  # by --target"), so there is no cheap local substitute for a real musl target.
+  # The last break was exactly this shape: observation structs referencing
+  # store::ObsSample without a gate, caught only because a musl build still
+  # existed at the time.
+  #
+  # PHASE1_SPEC keeps musl a supported configuration (in-memory transition log,
+  # findings and receipts that last until restart, routes that must say history
+  # is limited rather than return a silent empty result), so these paths are
+  # being actively extended and need a compiler watching them.
+  #
+  # x86_64 musl binaries are statically linked, so the test binaries built here
+  # run as-is on the glibc runner: this exercises the configuration, not just
+  # its syntax.
+  agent-musl:
+    name: Agent · musl (no DuckDB)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: x86_64-unknown-linux-musl
+
+      # Separate cache key: this target shares no build artifacts with the
+      # host-target `agent` job, and would otherwise evict it on every run.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: agent
+          key: musl
+
+      # ring compiles C for the target, so it needs a musl-targeting cc.
+      # Both heavyweight C/C++ dependencies are already excluded for musl in
+      # Cargo.toml — duckdb (bundled C++) and nvml-wrapper — so musl-gcc is
+      # the only toolchain this job adds.
+      - name: Install musl toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends musl-tools
+
+      - name: Clippy (-D warnings)
+        run: cargo clippy --all-targets --target x86_64-unknown-linux-musl -- -D warnings
+        working-directory: agent
+        env:
+          CC_x86_64_unknown_linux_musl: musl-gcc
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+
+      - name: Tests
+        run: cargo test --target x86_64-unknown-linux-musl
+        working-directory: agent
+        env:
+          CC_x86_64_unknown_linux_musl: musl-gcc
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc

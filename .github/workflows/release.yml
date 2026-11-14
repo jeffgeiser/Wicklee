@@ -226,7 +226,8 @@ jobs:
           path: wicklee-agent-linux-aarch64-nvidia
 
   # ── Linux x64 (glibc — NVIDIA GPU metrics enabled) ───────────────────────────
-  # Parallel to the musl build. glibc allows dlopen of libnvidia-ml at runtime,
+  # Parallel to the non-NVIDIA Linux build above; no musl asset has shipped
+  # since v0.8.2. glibc allows dlopen of libnvidia-ml at runtime,
   # so VRAM / GPU util / GPU temp / power draw all work on NVIDIA nodes.
   # The install script detects nvidia-smi and pulls this asset automatically.
   build-linux-x64-nvidia:

@@ -514,6 +514,7 @@ async fn main() {
                                         .unwrap_or_default(),
                     in_flight:        std::sync::atomic::AtomicU32::new(0),
                     last_done_ts:     Mutex::new(None),
+                    #[cfg(not(target_env = "musl"))]
                     node_id:          config.node_id.clone(),
                     #[cfg(not(target_env = "musl"))]
                     trace_tx:         Some(trace_tx.clone()),
@@ -809,10 +810,11 @@ async fn main() {
 
     // Shared observation cache — written by the 10 s evaluator task, read by
     // cloud_push (embed in telemetry JSON) and handle_observations (GET /api/observations).
+    // All three readers are store-backed and already gated, so musl has none
+    // left: the `Vec<()>` placeholder that used to stand in here was orphaned
+    // when the last of them was gated, and nothing compiled the target to say so.
     #[cfg(not(target_env = "musl"))]
     let observation_cache: ObservationCache = Arc::new(Mutex::new(Vec::new()));
-    #[cfg(target_env = "musl")]
-    let observation_cache: Arc<Mutex<Vec<()>>> = Arc::new(Mutex::new(Vec::new()));
 
     // Deployment profile — governs observation sensitivity. Loaded from config,
     // switchable at runtime via PUT /api/deployment-profile; the 10 s evaluator

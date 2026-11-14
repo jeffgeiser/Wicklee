@@ -71,12 +71,16 @@ pub(crate) struct PcieSnapshot {
 }
 
 // ── Pattern-engine math helpers ──────────────────────────────────────────────
+// Every caller is a pattern evaluated against the DuckDB window, so these
+// compile out with the store rather than riding along unused in a musl binary.
 
+#[cfg(not(target_env = "musl"))]
 pub(crate) fn obs_mean(values: &[f64]) -> f64 {
     if values.is_empty() { return 0.0; }
     values.iter().sum::<f64>() / values.len() as f64
 }
 
+#[cfg(not(target_env = "musl"))]
 pub(crate) fn obs_stddev(values: &[f64]) -> f64 {
     if values.len() < 2 { return 0.0; }
     let m = obs_mean(values);
@@ -86,6 +90,7 @@ pub(crate) fn obs_stddev(values: &[f64]) -> f64 {
 
 /// Ordinary least-squares slope over an ordered series (index = x, value = y).
 /// Returns units-per-sample; caller multiplies by samples/min to get per-minute slope.
+#[cfg(not(target_env = "musl"))]
 pub(crate) fn obs_linear_slope(values: &[f64]) -> f64 {
     let n = values.len() as f64;
     if n < 2.0 { return 0.0; }
@@ -97,6 +102,7 @@ pub(crate) fn obs_linear_slope(values: &[f64]) -> f64 {
     if denom.abs() < f64::EPSILON { 0.0 } else { (n * sum_xy - sum_x * sum_y) / denom }
 }
 
+#[cfg(not(target_env = "musl"))]
 pub(crate) fn obs_confidence(ratio: f64) -> &'static str {
     if ratio >= 0.9 { "high" } else if ratio >= 0.5 { "moderate" } else { "building" }
 }
