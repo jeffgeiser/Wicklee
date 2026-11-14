@@ -234,10 +234,14 @@ fn eviction(row: &serde_json::Value) -> String {
             victims.first().copied().unwrap_or("the resident model"),
             if in_use.is_empty() { "" } else { ", which is in use" }
         ),
-        _ if victims.is_empty() => {
+        "unknown_victim" if victims.is_empty() => {
             "may clear one or more resident models, and the log does not say which".to_string()
         }
-        _ => "may clear one or more resident models".to_string(),
+        "unknown_victim" => "may clear one or more resident models".to_string(),
+        // No level at all: it does not fit, and nothing else is resident.
+        // There is no eviction that would help, which is a different answer
+        // from "something will be cleared and we cannot say what".
+        _ => "it does not fit in free memory, and nothing is resident to evict".to_string(),
     }
 }
 
@@ -247,6 +251,17 @@ fn undetermined(row: &serde_json::Value) -> String {
     }
     if row["headroom"].is_null() {
         return "free accelerator memory is unknown on this host".to_string();
+    }
+    // It appears to fit, on an estimate nothing has calibrated. Saying so is
+    // the whole point: the previous wording for this case claimed it "may
+    // require eviction", which asserted something about resident models that
+    // was not true — and said it on a host with nothing resident at all.
+    if row["footprint"]["basis"] == "estimated_weights_only"
+        && row["footprint"]["calibrated"] != serde_json::Value::Bool(true)
+    {
+        return "it may fit, but its footprint is estimated from the installed file \
+                size and nothing measured on this host has calibrated that estimate"
+            .to_string();
     }
     "a required input is missing".to_string()
 }
@@ -428,6 +443,63 @@ mod tests {
         // Both shapes the route really serves.
         assert!(is_readiness_answer(&serde_json::json!({ "models": [] })));
         assert!(is_readiness_answer(&serde_json::json!({ "readiness": { "model": "a" } })));
+    }
+
+    /// Built from the real classifier, like the spec-example test: a model
+    /// that clears headroom on an uncalibrated estimate, and one that misses
+    /// it with nothing resident. Neither may use eviction wording.
+    #[test]
+    fn nothing_claims_an_eviction_that_has_no_victim() {
+        use crate::readiness::{Headroom, Inputs, assess};
+        use crate::residency::{ModelState, Residency};
+        const T0: i64 = 1_700_000_000_000;
+        const GB: u64 = 1024 * 1024 * 1024;
+
+        let never_loaded = |model: &str, installed: u64| ModelState {
+            model: model.to_string(),
+            digest: Some(format!("sha256:{model}")),
+            residency: Residency::NotLoaded,
+            size_bytes: None,
+            size_vram_bytes: None,
+            context_length: None,
+            expires_at_ms: None,
+            last_activity_ms: None,
+            installed_size_bytes: Some(installed),
+            measured: None,
+            observed_at_ms: T0,
+        };
+
+        // Fits with room to spare, on a number nothing has calibrated.
+        let roomy = never_loaded("embed:small", 2 * GB);
+        // Does not fit, and nothing at all is resident to clear.
+        let huge = never_loaded("reasoner:70b", 40 * GB);
+        let states = vec![&roomy, &huge];
+        let models = assess(&Inputs {
+            states,
+            transitions: &[],
+            headroom: Some(Headroom { free_bytes: 8 * GB, source: "nvml" }),
+            activity_signal: true,
+            now_ms: T0 + 1_000,
+        });
+        let out = render_ready(&serde_json::json!({
+            "models": models,
+            "activity_signal": true,
+        }));
+        println!("{out}");
+
+        // Neither line may imply a resident model, because there are none.
+        assert!(!out.contains("clears"), "got:\n{out}");
+        assert!(!out.contains("may clear"), "got:\n{out}");
+
+        assert!(out.contains("embed:small"), "got:\n{out}");
+        assert!(
+            out.contains("it may fit, but its footprint is estimated"),
+            "the uncalibrated case says why it cannot answer; got:\n{out}"
+        );
+        assert!(
+            out.contains("nothing is resident to evict"),
+            "the too-large case says there is nothing to displace; got:\n{out}"
+        );
     }
 
     #[test]

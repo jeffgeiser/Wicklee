@@ -701,8 +701,63 @@ pub(crate) async fn handle_tags(
 ///
 /// When the runtime is unreachable the response still returns, saying so. A
 /// caller must be able to tell "nothing is loaded" from "I could not look".
+/// The Ollama port channel, as an extractor.
+///
+/// Both `/v1` routes need it, and a route closure capturing the receiver stops
+/// inferring once a handler takes more than a few extractors. One layer, read
+/// the same way by both, is also harder to wire up differently by accident.
+#[derive(Clone)]
+pub(crate) struct OllamaPortRx(pub tokio::sync::watch::Receiver<Option<u16>>);
+
+/// Read `/api/tags` once and teach the tracker what is installed. Returns
+/// whether the runtime answered.
+///
+/// Both `/v1` routes call this. `/api/ps` only ever reports models that are
+/// *loaded*, so without this read the tracker knows nothing about a host where
+/// nothing is running — and that is precisely when "what can I start?" is
+/// worth asking. `/v1/readiness` used to skip it and answer "nothing is known
+/// yet", which reads as "this host has no models" when the truth was that
+/// nobody had looked.
+async fn learn_installed(
+    port: Option<u16>,
+    caps: &crate::caps::SharedCaps,
+    residency: &crate::residency::SharedTracker,
+) -> bool {
+    let Some(port) = port else { return false };
+    let Some(tags) = async {
+        let resp = local_http_client()
+            .get(format!("http://127.0.0.1:{port}/api/tags"))
+            .timeout(Duration::from_secs(3))
+            .send()
+            .await
+            .ok()?;
+        resp.json::<crate::ollama_client::TagsResponse>().await.ok()
+    }
+    .await
+    else {
+        return false;
+    };
+
+    if let Ok(mut c) = caps.lock() {
+        c.observe_tags(&tags);
+    }
+    let installed: Vec<(String, u64)> = tags
+        .models
+        .iter()
+        .filter_map(|m| {
+            let name = m.name.clone().or_else(|| m.model.clone())?;
+            Some((name, m.size?))
+        })
+        .collect();
+    if !installed.is_empty()
+        && let Ok(mut t) = residency.lock() {
+            t.observe_installed_sizes(&installed, crate::residency::now_ms());
+        }
+    true
+}
+
 pub(crate) async fn handle_v1_state(
-    port_rx: tokio::sync::watch::Receiver<Option<u16>>,
+    axum::extract::Extension(OllamaPortRx(port_rx)): axum::extract::Extension<OllamaPortRx>,
     axum::extract::Extension(caps): axum::extract::Extension<crate::caps::SharedCaps>,
     axum::extract::Extension(residency): axum::extract::Extension<
         crate::residency::SharedTracker,
@@ -710,37 +765,7 @@ pub(crate) async fn handle_v1_state(
     axum::extract::Extension(node_id_ext): axum::extract::Extension<NodeId>,
 ) -> Json<serde_json::Value> {
     let port = *port_rx.borrow();
-    let mut runtime_reachable = false;
-
-    if let Some(port) = port
-        && let Some(tags) = async {
-            let resp = local_http_client()
-                .get(format!("http://127.0.0.1:{port}/api/tags"))
-                .timeout(Duration::from_secs(3))
-                .send()
-                .await
-                .ok()?;
-            resp.json::<crate::ollama_client::TagsResponse>().await.ok()
-        }
-        .await
-    {
-        runtime_reachable = true;
-        if let Ok(mut c) = caps.lock() {
-            c.observe_tags(&tags);
-        }
-        let installed: Vec<(String, u64)> = tags
-            .models
-            .iter()
-            .filter_map(|m| {
-                let name = m.name.clone().or_else(|| m.model.clone())?;
-                Some((name, m.size?))
-            })
-            .collect();
-        if !installed.is_empty()
-            && let Ok(mut t) = residency.lock() {
-                t.observe_installed_sizes(&installed, crate::residency::now_ms());
-            }
-    }
+    let runtime_reachable = learn_installed(port, &caps, &residency).await;
 
     let (models, tracker) = match residency.lock() {
         Ok(t) => (
@@ -772,6 +797,7 @@ pub(crate) async fn handle_v1_state(
 /// serialises the result, so every classification branch is reachable from a
 /// test without a runtime.
 pub(crate) async fn handle_v1_readiness(
+    axum::extract::Extension(OllamaPortRx(port_rx)): axum::extract::Extension<OllamaPortRx>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
     axum::extract::Extension(residency): axum::extract::Extension<
         crate::residency::SharedTracker,
@@ -785,6 +811,15 @@ pub(crate) async fn handle_v1_readiness(
     >,
     axum::extract::Extension(node_id_ext): axum::extract::Extension<NodeId>,
 ) -> axum::response::Response {
+    // Same on-demand read as /v1/state, so `wicklee ready` works on a host
+    // where nothing is loaded instead of reporting an empty world.
+    //
+    // The port is copied out on its own statement first: a `watch::Ref` taken
+    // inside the awaited expression lives to the end of the statement, and it
+    // is not Send, which makes the whole handler future not Send.
+    let port = *port_rx.borrow();
+    learn_installed(port, &caps, &residency).await;
+
     let (states, transitions) = match residency.lock() {
         Ok(t) => (
             t.states().cloned().collect::<Vec<_>>(),

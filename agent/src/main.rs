@@ -671,7 +671,7 @@ async fn main() {
     // Keep a receiver for /api/tags before the harvester takes ownership.
     let tags_port_rx = ollama_port_rx.clone();
     // /v1/state reads /api/tags on demand too, so it needs its own receiver.
-    let state_port_rx = ollama_port_rx.clone();
+    let v1_port_rx = OllamaPortRx(ollama_port_rx.clone());
     let probe_policy = ProbeConfig::policy(config.probe.as_ref());
     if probe_policy.enabled {
         eprintln!("[probe] idle probes every {} min (loaded models only)", probe_policy.interval.as_secs() / 60);
@@ -1151,9 +1151,7 @@ async fn main() {
             .route("/api/model-switches", get(handle_model_switches))
             // ── /v1: the Phase 1 surface. Covered by the same inbound auth
             // middleware as /api and /mcp, applied as the outermost layer.
-            .route("/v1/state", get(move |caps, residency, node_id| {
-                handle_v1_state(state_port_rx.clone(), caps, residency, node_id)
-            }))
+            .route("/v1/state", get(handle_v1_state))
             .route("/v1/readiness", get(handle_v1_readiness))
             .route("/api/events/recent",  get(handle_events_recent))
             .route("/api/metrics",        get(handle_metrics))       // SSE fallback (1 Hz)
@@ -1211,6 +1209,7 @@ async fn main() {
         r.fallback(static_handler)
          .layer(axum::extract::Extension(store_healthy))
         .layer(axum::extract::Extension(CloudDisabled(no_cloud)))
+        .layer(axum::extract::Extension(v1_port_rx))
          .layer(axum::extract::Extension(Arc::clone(&pairing_state)))
          .layer(axum::extract::Extension(Arc::clone(&deployment_profile)))
          .layer(axum::extract::Extension(apple_metrics))

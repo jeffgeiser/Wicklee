@@ -377,12 +377,31 @@ fn assess_state(
             (Some(f), Some(h)) => {
                 let fits = f.bytes.saturating_add(SAFETY_MARGIN_BYTES) <= h.free_bytes;
                 // An uncalibrated weights-only estimate must not be the sole
-                // basis for the optimistic answer. Its error is two-sided and
-                // its direction is not knowable, so it falls back to the
-                // conservative classification rather than claiming a fit.
+                // basis for the optimistic answer: its error is two-sided and
+                // its direction is not knowable (V7).
                 let trustworthy = f.basis == FitBasis::Measured || f.calibrated;
                 if fits && trustworthy {
                     Readiness::RequiresLoading
+                } else if fits {
+                    // It appears to fit, on a number nothing has calibrated.
+                    // The spec forbids the optimistic answer here — but the
+                    // conservative one is `MayRequireEviction`, whose every
+                    // condition begins "the footprint does not fit", and this
+                    // footprint has not been shown not to fit. Claiming
+                    // eviction would state something about resident models
+                    // that is not true, and on a host with nothing resident
+                    // there is nothing to evict at all. So: the footprint
+                    // cannot be established to a usable standard, which is
+                    // what `CannotDetermine` means.
+                    //
+                    // No statement is attached. There is no observed
+                    // transition under this — the model has never been loaded
+                    // here — so the evidence rules forbid an inferred one, and
+                    // they are right to: the reason is a property of the
+                    // footprint, not a finding about the host. `fit_basis` and
+                    // `footprint.calibrated` carry it, and the renderer reads
+                    // them.
+                    Readiness::CannotDetermine
                 } else {
                     let resident: Vec<&&ModelState> = inputs
                         .states
@@ -392,7 +411,7 @@ fn assess_state(
                         })
                         .collect();
                     let (level, victims) = displace(&resident, clearouts, inputs);
-                    displacement = Some(level);
+                    displacement = level;
                     would_displace = victims;
                     Readiness::MayRequireEviction
                 }
@@ -432,11 +451,19 @@ fn assess_state(
 }
 
 /// Pick the displacement level and the victims it justifies naming.
+///
+/// `None` when nothing else is resident. The spec says `MayRequireEviction`
+/// always carries one of the three levels, but every level's condition names
+/// resident models — `LikelyAll` all of them, `Likely` the one, `UnknownVictim`
+/// "several models are loaded" — so with nothing resident none of them is
+/// true. A model too large for an empty accelerator still does not fit, which
+/// is what the state means; there is simply nothing to displace, and saying
+/// `UnknownVictim` would imply victims that do not exist.
 fn displace(
     resident: &[&&ModelState],
     clearouts: &[&Transition],
     inputs: &Inputs,
-) -> (Displacement, Vec<Victim>) {
+) -> (Option<Displacement>, Vec<Victim>) {
     let occurrences = u32::try_from(clearouts.len()).unwrap_or(u32::MAX);
     let victim = |s: &ModelState, basis: VictimBasis| Victim {
         model: s.model.clone(),
@@ -447,19 +474,22 @@ fn displace(
     if occurrences >= CLEAROUT_OCCURRENCES_FOR_LIKELY_ALL && !resident.is_empty() {
         let basis = VictimBasis::AllResident { occurrences };
         return (
-            Displacement::LikelyAll,
+            Some(Displacement::LikelyAll),
             resident.iter().map(|s| victim(s, basis)).collect(),
         );
     }
     if resident.len() == 1 {
         return (
-            Displacement::Likely,
+            Some(Displacement::Likely),
             vec![victim(resident[0], VictimBasis::OnlyLoadedModel)],
         );
     }
-    // Several models, or none at all, with no pattern to go on. Nothing is
-    // named, and `would_displace` stays empty.
-    (Displacement::UnknownVictim, Vec::new())
+    if resident.is_empty() {
+        return (None, Vec::new());
+    }
+    // Several models and no pattern to go on. Nothing is named, and
+    // `would_displace` stays empty.
+    (Some(Displacement::UnknownVictim), Vec::new())
 }
 
 fn describe_displacement(
@@ -743,9 +773,15 @@ mod tests {
         let r = assess_one(&inputs(&[&s], &[], headroom), "extractor:8b").unwrap();
         assert_eq!(
             r.readiness,
-            Readiness::MayRequireEviction,
+            Readiness::CannotDetermine,
             "the error is two-sided and its direction is not knowable, so the optimistic answer is not available"
         );
+        // And not the eviction answer either: every condition for that state
+        // begins "the footprint does not fit", and this one has not been shown
+        // not to fit. Nothing is resident here, so there would be nothing to
+        // evict even if it were true.
+        assert_eq!(r.displacement, None, "nothing may be claimed about victims");
+        assert!(r.would_displace.is_empty());
         assert_eq!(r.fit_basis, Some(FitBasis::EstimatedWeightsOnly));
         assert!(!r.footprint.as_ref().unwrap().calibrated);
 
@@ -855,7 +891,10 @@ mod tests {
         assert_eq!(r.displacement, Some(Displacement::UnknownVictim));
         assert!(r.would_displace.is_empty(), "nothing may be named on a guess");
 
-        // Nothing resident at all: there is no victim to name either.
+        // Nothing resident at all. It still does not fit — 40 GB against 1 GB
+        // free, far outside anything the estimate's error could close — so the
+        // state stands, but there is no displacement level that is true: every
+        // one of the three names resident models, and there are none.
         let mut target = blank("reasoner:14b");
         target.installed_size_bytes = Some(40 * GB);
         let r = assess_one(
@@ -863,8 +902,35 @@ mod tests {
             "reasoner:14b",
         )
         .unwrap();
-        assert_eq!(r.displacement, Some(Displacement::UnknownVictim));
+        assert_eq!(r.readiness, Readiness::MayRequireEviction);
+        assert_eq!(
+            r.displacement, None,
+            "UnknownVictim would imply victims that do not exist"
+        );
         assert!(r.would_displace.is_empty());
+        // Nothing is asserted about resident models in the statements either.
+        let said = serde_json::to_string(&r.statements).unwrap();
+        assert!(!said.contains("resident."), "got: {said}");
+    }
+
+    /// The whole point of the change: an estimate that clears headroom by a
+    /// wide margin is not reported as eviction, and one that misses it by a
+    /// wide margin still is. The estimate may support the pessimistic
+    /// direction — the spec forbids only the optimistic one.
+    #[test]
+    fn an_uncalibrated_estimate_may_still_say_it_does_not_fit() {
+        let resident = loaded("coder:14b", 10 * GB, 10 * GB);
+        let mut target = blank("reasoner:70b");
+        target.installed_size_bytes = Some(40 * GB);
+        let states = [&resident, &target];
+        let r = assess_one(
+            &inputs(&states, &[], Some(Headroom { free_bytes: 2 * GB, source: "nvml" })),
+            "reasoner:70b",
+        )
+        .unwrap();
+        assert_eq!(r.readiness, Readiness::MayRequireEviction);
+        assert_eq!(r.displacement, Some(Displacement::Likely));
+        assert_eq!(r.would_displace.len(), 1);
     }
 
     #[test]
