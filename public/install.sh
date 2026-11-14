@@ -102,25 +102,25 @@ if [[ -x "$CANONICAL_BIN" ]]; then
 fi
 
 # ── NVIDIA detection (Linux) ─────────────────────────────────────────────────
-# Picks the -nvidia asset when an NVIDIA GPU is present, so a host runs the
-# build it is named for and self-updates from that same name. Both builds
-# dlopen libnvidia-ml.so at runtime (it ships with the NVIDIA drivers; no CUDA
-# toolkit required) because nvml-wrapper is target-gated rather than gated on
-# the --cfg no_nvml used by the plain build — so the two assets per arch are
-# the same build under different names, and this choice is naming correctness
-# rather than a capability gate. Falls back to the plain glibc 2.31 build
-# otherwise — v0.8.2 retired the musl asset, so there is no static variant
-# to fall back to. Supported arches: x86_64-nvidia, aarch64-nvidia.
-NVIDIA_SUFFIX=""
+# No longer picks an asset — there is one Linux binary per arch and it reads
+# NVML on hosts that have it. Releases up to v0.14.0 published a second asset
+# per arch under a `-nvidia` name, but the cfg that was meant to separate them
+# stripped nothing, so both were the same build. The detection stays because
+# it tells the operator what they are getting and feeds the install telemetry
+# below.
+#
+# glibc 2.31 floor either way — v0.8.2 retired the musl asset, so there is no
+# static variant to fall back to.
+NVIDIA_PRESENT="false"
 if [[ "$OS_TAG" == "linux" ]]; then
   if command -v nvidia-smi >/dev/null 2>&1 || [[ -c /dev/nvidia0 ]]; then
-    NVIDIA_SUFFIX="-nvidia"
-    echo "  NVIDIA GPU detected — downloading GPU-enabled build…"
+    NVIDIA_PRESENT="true"
+    echo "  NVIDIA GPU detected"
     dim "     (VRAM, GPU utilisation, GPU temp, and power draw read via NVML)"
   fi
 fi
 
-ASSET_NAME="wicklee-agent-${OS_TAG}-${ARCH_TAG}${NVIDIA_SUFFIX}"
+ASSET_NAME="wicklee-agent-${OS_TAG}-${ARCH_TAG}"
 DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${RELEASE_TAG}/${ASSET_NAME}"
 
 # ── Download ──────────────────────────────────────────────────────────────────
@@ -128,7 +128,7 @@ DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${RELEASE_TAG}/${ASSE
 need curl
 
 echo ""
-echo "  Downloading Wicklee (${DISPLAY_CHANNEL} · ${OS_TAG}-${ARCH_TAG}${NVIDIA_SUFFIX})…"
+echo "  Downloading Wicklee (${DISPLAY_CHANNEL} · ${OS_TAG}-${ARCH_TAG})…"
 
 TMP="$(mktemp)"
 trap 'rm -f "$TMP"' EXIT
@@ -162,8 +162,7 @@ INSTALLED_VERSION="$("${USER_INSTALL_PATH}" --version 2>/dev/null | grep -oE 'v[
 VERSION_LABEL="${INSTALLED_VERSION:-${RELEASE_TAG}}"
 
 # ── Anonymous install telemetry ───────────────────────────────────────────────
-NVIDIA_FLAG="false"
-[[ -n "$NVIDIA_SUFFIX" ]] && NVIDIA_FLAG="true"
+NVIDIA_FLAG="$NVIDIA_PRESENT"
 UPGRADE_FLAG="false"
 [[ "$EXISTING_BINARY" == "true" ]] && UPGRADE_FLAG="true"
 curl -sf -X POST "https://wicklee.dev/api/telemetry/install" \

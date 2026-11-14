@@ -21,8 +21,14 @@ pub(crate) fn update_asset_name(platform: &str) -> Option<&'static str> {
         "darwin-aarch64"      => Some("wicklee-agent-darwin-aarch64"),
         "linux-x86_64"        => Some("wicklee-agent-linux-x86_64"),
         "linux-aarch64"       => Some("wicklee-agent-linux-aarch64"),
-        "linux-x86_64-nvidia" => Some("wicklee-agent-linux-x86_64-nvidia"),
-        "linux-aarch64-nvidia" => Some("wicklee-agent-linux-aarch64-nvidia"),
+        // Legacy aliases. Releases up to v0.14.0 shipped a second Linux asset
+        // per arch under a `-nvidia` name; they were the same build, so both
+        // names resolve to the one asset that ships now. A binary from one of
+        // those releases still reports the old name, so without these it would
+        // ask for an asset that no longer exists and never update again. After
+        // one update it reports the plain name and these stop being used.
+        "linux-x86_64-nvidia"  => Some("wicklee-agent-linux-x86_64"),
+        "linux-aarch64-nvidia" => Some("wicklee-agent-linux-aarch64"),
         "windows-x86_64"      => Some("wicklee-agent-windows-x86_64.exe"),
         _ => None,
     }
@@ -68,32 +74,24 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
 #[allow(unreachable_code)]
 pub(crate) fn agent_platform() -> &'static str {
     #[cfg(all(target_os = "macos",   target_arch = "aarch64"))]              { return "darwin-aarch64";      }
-    // Each Linux arch ships TWO release binaries, both on glibc 2.31 since
-    // v0.8.2 retired the musl asset. What differs between them is ONLY this
-    // string, and therefore which asset the build self-updates from.
+    // One asset per Linux arch, on glibc 2.31 since v0.8.2 retired musl.
     //
-    // `no_nvml` does not strip NVML. `nvml-wrapper` is gated in Cargo.toml by
-    // target — linux/windows, non-musl — not by this cfg, so both Linux builds
-    // compile and link it, and both dlopen libnvidia-ml at runtime. Verified:
-    // `cargo tree --target x86_64-unknown-linux-gnu` lists the same three nvml
-    // crates with and without `RUSTFLAGS='--cfg no_nvml'`, and the release
-    // workflow's non-NVIDIA jobs compile them with no NVML headers installed.
+    // Releases up to v0.14.0 shipped two per arch, split by a `--cfg no_nvml`
+    // that stripped nothing: `nvml-wrapper` is gated in Cargo.toml by target —
+    // linux/windows, non-musl — so both builds compiled it, linked it, and
+    // dlopen-ed libnvidia-ml at runtime. `cargo tree` listed the same three
+    // nvml crates either way, and the non-NVIDIA release jobs built them with
+    // no NVML headers at all. The two assets differed only in the string
+    // returned here, which chose between them.
     //
-    // So the two assets per arch are the same build under different names, and
-    // an agent that pulls the other one loses nothing. Routing is still kept
-    // consistent — a build should fetch the asset it was published as, or the
-    // names stop meaning anything — but this is naming hygiene, not capability.
-    //
-    // This corrects the comment shipped in v0.13.1, which claimed an ARM64
-    // NVML build self-updating onto the plain asset "silently lost GPU
-    // metrics". It did not. The real defect was narrower: aarch64 had no
-    // NVIDIA branch here, so it reported a name that did not match its own
-    // asset, and the cloud's version endpoint had no arm for the one it should
-    // have reported. Both are fixed; keep the two arches symmetric.
-    #[cfg(all(target_os = "linux",   target_arch = "x86_64",  not(no_nvml)))] { return "linux-x86_64-nvidia";  }
-    #[cfg(all(target_os = "linux",   target_arch = "x86_64",  no_nvml))]      { return "linux-x86_64";         }
-    #[cfg(all(target_os = "linux",   target_arch = "aarch64", not(no_nvml)))] { return "linux-aarch64-nvidia"; }
-    #[cfg(all(target_os = "linux",   target_arch = "aarch64", no_nvml))]      { return "linux-aarch64";        }
+    // v0.13.1 fixed an asymmetry in that split — aarch64 had no NVIDIA branch,
+    // so it reported a name that did not match its own asset — and its commit
+    // message claimed those nodes "silently lost GPU metrics," which was
+    // wrong; the other binary had the same NVML code. The split was the
+    // defect, so it is gone rather than made symmetric. `update_asset_name`
+    // keeps the old names as aliases.
+    #[cfg(all(target_os = "linux",   target_arch = "x86_64"))]               { return "linux-x86_64";         }
+    #[cfg(all(target_os = "linux",   target_arch = "aarch64"))]              { return "linux-aarch64";        }
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]               { return "windows-x86_64";       }
     "unknown"
 }

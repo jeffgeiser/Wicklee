@@ -104,7 +104,7 @@ jobs:
           name: wicklee-agent-windows-x86_64.exe
           path: wicklee-agent-windows-x86_64.exe
 
-  # ── Linux x64 (glibc 2.31, no NVIDIA — default for non-NVIDIA hosts) ─────────
+  # ── Linux x64 (glibc 2.31) ────────────────────────────────────────────────────
   # v0.8.3: build inside Ubuntu 20.04 container to target glibc 2.31. The
   # v0.8.2 build ran on ubuntu-22.04 directly → glibc 2.35, which doesn't
   # run on Ubuntu 20.04 / Debian 11 / RHEL 8 (still very common on homelab
@@ -117,7 +117,7 @@ jobs:
   # container filesystems. DuckDB compiles fine — Ubuntu 20.04 has a
   # recent-enough cmake + gcc-9.
   build-linux-x64:
-    name: Build · Linux (x64, glibc 2.31, no NVIDIA)
+    name: Build · Linux (x64, glibc 2.31)
     runs-on: ubuntu-22.04
     container: ubuntu:20.04
     timeout-minutes: 30      # bounded to prevent runaway builds
@@ -140,20 +140,16 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      # No NVML headers installed here, and none are needed — but note that
-      # --cfg no_nvml does NOT strip nvml-wrapper, as this comment used to
-      # say. It is target-gated in Cargo.toml, so this job compiles and links
-      # it anyway; that it succeeds with no CUDA repo and no cuda-nvml-dev is
-      # the proof headers were never required. The cfg only changes the
-      # platform string in update.rs, i.e. which asset this build self-updates
-      # from. This binary and the -nvidia one are the same build under two
-      # names. install.sh still auto-detects and prefers -nvidia on NVIDIA
-      # hosts, which keeps the naming honest even though capability is equal.
-      - name: Build agent (glibc 2.31, no NVML)
+      # One Linux binary per arch serves NVIDIA and non-NVIDIA hosts alike.
+      # `nvml-wrapper` is target-gated in Cargo.toml (linux/windows, non-musl),
+      # so it is compiled in regardless, and it dlopen-s libnvidia-ml at
+      # runtime — present with the NVIDIA drivers, absent and gracefully
+      # skipped without them. No NVML headers are needed to build it, which
+      # this job demonstrated by compiling those crates without a CUDA repo
+      # while a parallel -nvidia job installed cuda-nvml-dev for no reason.
+      - name: Build agent (glibc 2.31)
         run: cargo build --release
         working-directory: agent
-        env:
-          RUSTFLAGS: '--cfg no_nvml'
 
       - name: Stage binary
         run: cp agent/target/release/wicklee-agent wicklee-agent-linux-x86_64
@@ -163,9 +159,9 @@ jobs:
           name: wicklee-agent-linux-x86_64
           path: wicklee-agent-linux-x86_64
 
-  # ── Linux arm64 (glibc 2.31, no NVIDIA — default for non-NVIDIA ARM hosts) ───
+  # ── Linux arm64 (glibc 2.31) ──────────────────────────────────────────────────
   build-linux-arm64:
-    name: Build · Linux (arm64, glibc 2.31, no NVIDIA)
+    name: Build · Linux (arm64, glibc 2.31)
     runs-on: ubuntu-24.04-arm
     container: ubuntu:20.04
     timeout-minutes: 30
@@ -187,11 +183,9 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Build agent (glibc 2.31, no NVML)
+      - name: Build agent (glibc 2.31)
         run: cargo build --release
         working-directory: agent
-        env:
-          RUSTFLAGS: '--cfg no_nvml'
 
       - name: Stage binary
         run: cp agent/target/release/wicklee-agent wicklee-agent-linux-aarch64
@@ -201,132 +195,13 @@ jobs:
           name: wicklee-agent-linux-aarch64
           path: wicklee-agent-linux-aarch64
 
-  # ── Linux arm64 (glibc 2.31 — NVIDIA GPU metrics enabled) ────────────────────
-  # Targets NVIDIA Grace Blackwell (DGX Spark) and other ARM64 Linux nodes with
-  # NVIDIA GPUs. Native ARM64 runner, so no cross-compilation.
-  #
-  # In the ubuntu:20.04 container for the same glibc 2.31 floor as the
-  # non-NVIDIA builds. Until then this job ran on the runner's own glibc
-  # (2.39 on ubuntu-24.04-arm), so install.sh handed every NVIDIA ARM host a
-  # binary that would not load on RHEL 8 or Debian 11 — the hosts v0.8.3 set
-  # the floor for.
-  #
-  # The repo also changes, and this is the one that matters: `arm64` in the
-  # CUDA repos is Jetson/L4T, and on 20.04 it stops at cuda-nvml-dev-12-2.
-  # `sbsa` is Server Base System Architecture — Grace, Ampere Altra — which is
-  # what this job actually targets, and it carries 12-4. Both ship an aarch64
-  # libnvidia-ml stub in an _arm64.deb; only the sbsa one exists for 20.04.
-  build-linux-arm64-nvidia:
-    name: Build · Linux (arm64, NVIDIA/glibc 2.31)
-    runs-on: ubuntu-24.04-arm   # Native ARM64 runner (GitHub large runner)
-    container: ubuntu:20.04
-    timeout-minutes: 30      # container build compiles DuckDB from source
-    steps:
-      - name: Install build prerequisites
-        run: |
-          export DEBIAN_FRONTEND=noninteractive
-          apt-get update -qq
-          apt-get install -y --no-install-recommends \
-            curl ca-certificates build-essential cmake pkg-config \
-            libssl-dev git
-          # Node 20 from NodeSource (ubuntu:20.04 ships Node 10)
-          curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-          apt-get install -y nodejs
-
-      - uses: actions/checkout@v4
-
-      - name: Build frontend
-        run: npm ci && npm run build:agent
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Install NVML dev headers (aarch64 sbsa)
-        run: |
-          curl -fsSL -o /tmp/cuda-keyring.deb \
-            https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/sbsa/cuda-keyring_1.1-1_all.deb
-          dpkg -i /tmp/cuda-keyring.deb
-          apt-get update -qq
-          apt-get install -y cuda-nvml-dev-12-4
-
-      - name: Build agent (glibc 2.31, NVML enabled)
-        run: cargo build --release
-        working-directory: agent
-
-      - name: Stage binary
-        run: cp agent/target/release/wicklee-agent wicklee-agent-linux-aarch64-nvidia
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: wicklee-agent-linux-aarch64-nvidia
-          path: wicklee-agent-linux-aarch64-nvidia
-
-  # ── Linux x64 (glibc 2.31 — NVIDIA GPU metrics enabled) ──────────────────────
-  # Parallel to the non-NVIDIA Linux build above; no musl asset has shipped
-  # since v0.8.2. glibc allows dlopen of libnvidia-ml at runtime,
-  # so VRAM / GPU util / GPU temp / power draw all work on NVIDIA nodes.
-  # The install script detects nvidia-smi and pulls this asset automatically —
-  # which is why the floor matters here as much as on the plain build: this is
-  # the asset every NVIDIA host gets, and it ran on the runner's own glibc
-  # (2.35) until it moved into the container.
-  build-linux-x64-nvidia:
-    name: Build · Linux (x64, NVIDIA/glibc 2.31)
-    runs-on: ubuntu-22.04
-    container: ubuntu:20.04
-    timeout-minutes: 30      # container build compiles DuckDB from source
-    steps:
-      - name: Install build prerequisites
-        run: |
-          export DEBIAN_FRONTEND=noninteractive
-          apt-get update -qq
-          apt-get install -y --no-install-recommends \
-            curl ca-certificates build-essential cmake pkg-config \
-            libssl-dev git
-          # Node 20 from NodeSource (ubuntu:20.04 ships Node 10)
-          curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-          apt-get install -y nodejs
-
-      - uses: actions/checkout@v4
-
-      - name: Build frontend
-        run: npm ci && npm run build:agent
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      # nvml-wrapper bundles NVML C headers and uses bindgen; we need the
-      # libnvidia-ml.so link stub so the linker resolves the symbol at compile
-      # time. At runtime the real driver library is dlopen-ed by the OS.
-      #
-      # Installed from the CUDA keyring rather than the Jimver action, which
-      # generates "cuda-nvml_dev-12-4" (underscore) against an actual package
-      # name of "cuda-nvml-dev-12-4" (hyphen). The repo is the 20.04 one now,
-      # which carries 12-4 for x86_64.
-      - name: Install NVML dev headers
-        run: |
-          curl -fsSL -o /tmp/cuda-keyring.deb \
-            https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/cuda-keyring_1.1-1_all.deb
-          dpkg -i /tmp/cuda-keyring.deb
-          apt-get update -qq
-          apt-get install -y cuda-nvml-dev-12-4
-
-      - name: Build agent (glibc 2.31, NVML enabled)
-        run: cargo build --release
-        working-directory: agent
-
-      - name: Stage binary
-        run: cp agent/target/release/wicklee-agent wicklee-agent-linux-x86_64-nvidia
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: wicklee-agent-linux-x86_64-nvidia
-          path: wicklee-agent-linux-x86_64-nvidia
-
   # ── Publish versioned release (v* tags only) ──────────────────────────────────
-  # Creates a named GitHub release (e.g. v0.4.8), attaches all six binaries,
+  # Creates a named GitHub release (e.g. v0.4.8), attaches all five binaries,
   # and marks it as the latest release. Never runs on branch pushes.
   release-versioned:
     name: Publish Release · ${{ github.ref_name }}
     runs-on: ubuntu-latest
-    needs: [build-macos, build-windows, build-linux-x64, build-linux-arm64, build-linux-x64-nvidia, build-linux-arm64-nvidia]
+    needs: [build-macos, build-windows, build-linux-x64, build-linux-arm64]
     if: startsWith(github.ref, 'refs/tags/v')
     timeout-minutes: 10      # same hardening as release-nightly — see comment there
     steps:
@@ -360,8 +235,6 @@ jobs:
             wicklee-agent-windows-x86_64.exe
             wicklee-agent-linux-x86_64
             wicklee-agent-linux-aarch64
-            wicklee-agent-linux-x86_64-nvidia
-            wicklee-agent-linux-aarch64-nvidia
             SHA256SUMS
 
   # ── Publish nightly release (main branch + tags + manual dispatch) ────────────
@@ -371,7 +244,7 @@ jobs:
   release-nightly:
     name: Publish Nightly Release
     runs-on: ubuntu-latest
-    needs: [build-macos, build-windows, build-linux-x64, build-linux-arm64, build-linux-x64-nvidia, build-linux-arm64-nvidia]
+    needs: [build-macos, build-windows, build-linux-x64, build-linux-arm64]
     if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
     # Normal duration is ~9 seconds (download artifacts + upload to a release).
     # When GitHub's Releases API or cache service flakes, action-gh-release@v2
@@ -413,6 +286,4 @@ jobs:
             wicklee-agent-windows-x86_64.exe
             wicklee-agent-linux-x86_64
             wicklee-agent-linux-aarch64
-            wicklee-agent-linux-x86_64-nvidia
-            wicklee-agent-linux-aarch64-nvidia
             SHA256SUMS

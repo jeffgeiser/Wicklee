@@ -4,16 +4,6 @@ version = "0.14.0"
 edition = "2024"
 license = "Apache-2.0"
 
-# `no_nvml` is a custom cfg set by the release workflow's non-NVIDIA Linux
-# builds (RUSTFLAGS='--cfg no_nvml'). It does NOT strip the NVML wrapper, which
-# an earlier version of this comment claimed: nvml-wrapper is gated by the
-# target table below, so every non-musl Linux build links it either way. The
-# cfg's only effect is the platform string in `update.rs::agent_platform`, i.e.
-# which release asset the build self-updates from. musl excludes nvml-wrapper
-# for real, through that same target table. Registered here so the check-cfg
-# lint doesn't warn on every normal build.
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(no_nvml)'] }
 
 [dependencies]
 axum          = { version = "0.7", features = ["ws"] }

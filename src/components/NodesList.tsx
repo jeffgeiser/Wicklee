@@ -529,13 +529,16 @@ const MgmtRow: React.FC<{
             </>
           ) : isOnline && os !== 'Unknown' ? (
             // Node is online and sending metrics, but chip/GPU name wasn't reported.
-            // Common on ARM Linux (e.g. NVIDIA Grace) where the linux-aarch64 build
-            // lacks NVML — re-run the install script to pick up the correct binary.
+            // This used to advise re-running the installer, on the theory that the
+            // plain linux-aarch64 build lacked NVML. It did not — both Linux assets
+            // were the same build, and since v0.14.0 there is only one. So a
+            // reinstall changes nothing here; the cause is libnvidia-ml not being
+            // loadable (driver absent or too old), which is a host fix.
             <>
               <p className="text-xs font-telin text-gray-500 truncate">{os} Node</p>
               <p
                 className="text-[10px] text-amber-500/70 truncate"
-                title="GPU data unavailable — re-run the install script to enable full metrics"
+                title="GPU data unavailable — the NVIDIA driver library (libnvidia-ml) could not be loaded on this host"
               >
                 GPU data unavailable
               </p>
