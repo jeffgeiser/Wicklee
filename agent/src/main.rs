@@ -514,6 +514,7 @@ async fn main() {
                                         .unwrap_or_default(),
                     in_flight:        std::sync::atomic::AtomicU32::new(0),
                     last_done_ts:     Mutex::new(None),
+                    #[cfg(not(target_env = "musl"))]
                     node_id:          config.node_id.clone(),
                     #[cfg(not(target_env = "musl"))]
                     trace_tx:         Some(trace_tx.clone()),
