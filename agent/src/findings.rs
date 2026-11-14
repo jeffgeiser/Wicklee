@@ -55,6 +55,12 @@ pub(crate) enum EvidenceRef {
     ///
     /// The fraction is a whole percent rather than the engine's f64, because
     /// this enum is `Eq` and a float is not.
+    ///
+    /// Gated with its constructor and the adapter: the pattern engine is
+    /// store-backed, so on musl nothing can produce one of these, and a
+    /// variant nothing can construct invites a reader to assume a capability
+    /// exists — the same reason `Verified` is not here yet.
+    #[cfg(not(target_env = "musl"))]
     Pattern {
         pattern: &'static str,
         first_fired_ms: i64,
@@ -165,6 +171,9 @@ impl Statement {
     /// a model in their prose, but none carries it in a structured field, and
     /// the fifth evidence rule means a statement may not name a model its
     /// evidence does not.
+    ///
+    /// Gated with [`EvidenceRef::Pattern`], which it is the only producer of.
+    #[cfg(not(target_env = "musl"))]
     pub(crate) fn observed_pattern(
         text: impl Into<String>,
         pattern: &'static str,
@@ -1495,6 +1504,7 @@ mod tests {
         assert_ne!(a[0].id, c[0].id);
     }
 
+    #[cfg(not(target_env = "musl"))]
     #[test]
     fn a_pattern_statement_must_name_the_pattern_it_came_from() {
         assert_eq!(
