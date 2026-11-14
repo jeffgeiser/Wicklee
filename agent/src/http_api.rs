@@ -907,6 +907,7 @@ pub(crate) async fn handle_v1_inspect(
     >,
     axum::extract::Extension(node_id_ext): axum::extract::Extension<NodeId>,
     store: MaybeStore,
+    observations: MaybeObservations,
 ) -> axum::response::Response {
     // An unparseable window is an error, not a silently ignored argument: a
     // caller asking for the last hour and being given everything would read
@@ -957,13 +958,25 @@ pub(crate) async fn handle_v1_inspect(
         .map(|c| (c.ps_context_length, c.ps_expires_at))
         .unwrap_or((false, false));
 
-    let inspection = crate::findings::evaluate(&crate::findings::RuleInputs {
+    let mut inspection = crate::findings::evaluate(&crate::findings::RuleInputs {
         states: &refs,
         transitions: &transitions,
         ps_context_length,
         ps_expires_at,
         now_ms,
     });
+
+    // Phase 1 writes no new hardware rules; the ones that exist reach this
+    // report through the adapter, so one `inspect` covers the whole host.
+    match adapted_observations(observations) {
+        Some(adapted) => inspection.findings.extend(adapted),
+        None => inspection.not_checked.push(crate::findings::NotChecked {
+            rule: "hardware_patterns",
+            reason: "the pattern engine reads the local metrics store, which this \
+                     build or this process does not have"
+                .into(),
+        }),
+    }
 
     // Reconcile here too. `inspect` is the command people actually run, so a
     // finding that stopped firing should resolve on it rather than waiting for
@@ -1033,6 +1046,38 @@ pub(crate) type MaybeStore = Option<axum::extract::Extension<store::Store>>;
 #[cfg(target_env = "musl")]
 pub(crate) type MaybeStore = Option<axum::extract::Extension<()>>;
 
+/// The hardware pattern engine's cache, where this build has one.
+///
+/// Same shape as [`MaybeStore`] and for the same reason: the engine is
+/// store-backed, so on musl neither it nor this type's inner value exists.
+#[cfg(not(target_env = "musl"))]
+pub(crate) type MaybeObservations =
+    Option<axum::extract::Extension<crate::observations::ObservationCache>>;
+/// See the non-musl alias above.
+#[cfg(target_env = "musl")]
+pub(crate) type MaybeObservations = Option<axum::extract::Extension<()>>;
+
+/// The hardware patterns as findings, or `None` when the engine does not run.
+///
+/// `None` and `Some(vec![])` are different answers and the caller treats them
+/// differently: no engine is listed under "not checked", while an engine that
+/// found nothing is a quiet host.
+#[cfg(not(target_env = "musl"))]
+fn adapted_observations(cache: MaybeObservations) -> Option<Vec<crate::findings::Finding>> {
+    let axum::extract::Extension(cache) = cache?;
+    match cache.lock() {
+        Ok(obs) => Some(crate::findings::from_observations(&obs)),
+        // A poisoned cache is not an empty one.
+        Err(_) => None,
+    }
+}
+
+/// See the non-musl version. Without DuckDB the pattern engine does not run.
+#[cfg(target_env = "musl")]
+fn adapted_observations(_cache: MaybeObservations) -> Option<Vec<crate::findings::Finding>> {
+    None
+}
+
 /// Record this evaluation and read back the findings the store now holds.
 ///
 /// `None` when there is no store, when the write failed, or when the read
@@ -1098,6 +1143,7 @@ pub(crate) async fn handle_v1_findings(
     axum::extract::Extension(caps): axum::extract::Extension<crate::caps::SharedCaps>,
     axum::extract::Extension(node_id_ext): axum::extract::Extension<NodeId>,
     store: MaybeStore,
+    observations: MaybeObservations,
 ) -> axum::response::Response {
     let port = *port_rx.borrow();
     learn_installed(port, &caps, &residency).await;
@@ -1116,13 +1162,24 @@ pub(crate) async fn handle_v1_findings(
         .unwrap_or((false, false));
     let now_ms = crate::residency::now_ms();
 
-    let inspection = crate::findings::evaluate(&crate::findings::RuleInputs {
+    let mut inspection = crate::findings::evaluate(&crate::findings::RuleInputs {
         states: &refs,
         transitions: &transitions,
         ps_context_length,
         ps_expires_at,
         now_ms,
     });
+    // Same set as /v1/inspect, so the two routes cannot disagree about what is
+    // open — and so reconciliation resolves a hardware finding on either.
+    match adapted_observations(observations) {
+        Some(adapted) => inspection.findings.extend(adapted),
+        None => inspection.not_checked.push(crate::findings::NotChecked {
+            rule: "hardware_patterns",
+            reason: "the pattern engine reads the local metrics store, which this \
+                     build or this process does not have"
+                .into(),
+        }),
+    }
 
     let want_resolved = params.get("all").is_some_and(|v| v != "false" && v != "0");
     let stored = match store {

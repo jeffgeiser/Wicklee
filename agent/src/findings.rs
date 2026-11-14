@@ -42,9 +42,24 @@ pub(crate) enum EvidenceRef {
     ///
     /// The id is unique within one agent process and restarts at 1, so it is a
     /// pointer for a reader rather than a durable key. The durable identity of
-    /// a transition is (node_id, ts_ms, model, kind); step 4 should cite that
-    /// when a finding has to survive a restart.
+    /// a transition is (node_id, ts_ms, model, kind); the findings table cites
+    /// the content-derived finding id instead, which does survive a restart.
     Transition { id: u64, ts_ms: i64 },
+    /// A hardware pattern that fired over a window of stored samples.
+    ///
+    /// The pattern engine in `observations.rs` does not expose the samples it
+    /// read or how many there were, so this reference carries what it does:
+    /// which pattern, when it first fired, and the sustained fraction it
+    /// measured. A reader who wants the underlying samples goes to
+    /// `/api/observations`.
+    ///
+    /// The fraction is a whole percent rather than the engine's f64, because
+    /// this enum is `Eq` and a float is not.
+    Pattern {
+        pattern: &'static str,
+        first_fired_ms: i64,
+        confidence_pct: u8,
+    },
 }
 
 /// Why a statement could not be built.
@@ -138,6 +153,34 @@ impl Statement {
             }
         }
         Ok(s)
+    }
+
+    /// Something the hardware pattern engine measured.
+    ///
+    /// The second kind of observed evidence. A pattern that fired *is* the
+    /// observation, so the requirement is only that it names itself — an empty
+    /// pattern id would make the basis unresolvable.
+    ///
+    /// No subjects: these patterns are about the host, not a model. Some name
+    /// a model in their prose, but none carries it in a structured field, and
+    /// the fifth evidence rule means a statement may not name a model its
+    /// evidence does not.
+    pub(crate) fn observed_pattern(
+        text: impl Into<String>,
+        pattern: &'static str,
+        first_fired_ms: i64,
+        confidence_ratio: f64,
+    ) -> Result<Self, EvidenceError> {
+        if pattern.is_empty() {
+            return Err(EvidenceError::NoBasis);
+        }
+        let confidence_pct = (confidence_ratio.clamp(0.0, 1.0) * 100.0).round() as u8;
+        Ok(Self {
+            label: Evidence::Observed,
+            text: text.into(),
+            basis: vec![EvidenceRef::Pattern { pattern, first_fired_ms, confidence_pct }],
+            subjects: Vec::new(),
+        })
     }
 
     /// A likely cause or effect.
@@ -774,6 +817,63 @@ fn expiry_reload(inputs: &RuleInputs, real: &[&Transition]) -> Vec<Finding> {
     out
 }
 
+/// The hardware patterns from `observations.rs`, as findings.
+///
+/// Phase 1 writes no new hardware rules; the nineteen that exist appear in
+/// `inspect` through this adapter so one report covers the whole host.
+///
+/// **What does not survive the mapping, and why.** Those patterns were written
+/// for a card with a `hook`, a `body` and a `recommendation`, not for the
+/// evidence rules. Their `hook` is purely measured — "5.2 MB/s swap · 12.3
+/// tok/s" — so it becomes the observed statement. Their `body` mixes the
+/// measurement with a general mechanism ("swap pressure forces the OS to page
+/// model weights to disk"), which is a cause, and the third evidence rule says
+/// a cause is never labelled observed. So the body is offered as an inferred
+/// statement and kept only if it hedges, which most of this copy does not.
+///
+/// The alternative was rewording nineteen shipped patterns' prose to separate
+/// measurement from mechanism. That is worth doing and it is not step 4: the
+/// cloud consumes these same fields. Until then the full card stays available
+/// at `/api/observations`, and `inspect` carries the title and the measurement
+/// rather than a sentence it cannot label honestly.
+#[cfg(not(target_env = "musl"))]
+pub(crate) fn from_observations(
+    obs: &[crate::observations::LocalObservation],
+) -> Vec<Finding> {
+    let mut out = Vec::new();
+    for o in obs {
+        let mut statements = Vec::new();
+        push_statement(
+            &mut statements,
+            o.pattern_id,
+            Statement::observed_pattern(
+                o.hook.clone(),
+                o.pattern_id,
+                o.first_fired_ms,
+                o.confidence_ratio,
+            ),
+        );
+        // Kept only if it hedges. A dropped one is logged by push_statement,
+        // which is how the prose that needs rewording makes itself known.
+        if let Some(observed) = statements.first().cloned() {
+            push_statement(
+                &mut statements,
+                o.pattern_id,
+                Statement::inferred(o.body.clone(), &[&observed]),
+            );
+        }
+        out.extend(Finding::new(
+            o.pattern_id,
+            o.severity,
+            o.title.clone(),
+            statements,
+            o.first_fired_ms,
+            o.first_fired_ms,
+        ));
+    }
+    out
+}
+
 /// An elapsed time, for a sentence a person reads.
 ///
 /// Relative rather than wall-clock: the agent has no date library and the spec
@@ -1306,5 +1406,111 @@ mod tests {
         assert_eq!(duration_human(7_200_000), "2.0 hours");
         assert_eq!(bytes_human(4 * GIB), "4.0 GiB");
         assert_eq!(bytes_human(512 * 1024 * 1024), "512 MiB");
+    }
+
+    // ── The observations adapter ─────────────────────────────────────────────
+
+    #[cfg(not(target_env = "musl"))]
+    fn observation(
+        pattern_id: &'static str,
+        hook: &str,
+        body: &str,
+    ) -> crate::observations::LocalObservation {
+        crate::observations::LocalObservation {
+            pattern_id,
+            severity: "warning",
+            title: "Swap I/O Pressure".into(),
+            hook: hook.into(),
+            body: body.into(),
+            recommendation: "Reduce memory pressure.".into(),
+            resolution_steps: vec!["Run: ollama ps".into()],
+            action_id: "evict_idle_models",
+            confidence: "high",
+            confidence_ratio: 0.85,
+            first_fired_ms: T0,
+            node_id: "WK-TEST".into(),
+            hostname: "host".into(),
+        }
+    }
+
+    #[cfg(not(target_env = "musl"))]
+    #[test]
+    fn a_pattern_becomes_a_finding_with_its_measurement_observed() {
+        let obs = [observation(
+            "swap_io_pressure",
+            "5.2 MB/s swap · 12.3 tok/s",
+            "Sustained swap write rate of 5.2 MB/s over 85% of the last 5 minutes. \
+             Swap pressure forces the OS to page model weights to disk.",
+        )];
+        let got = from_observations(&obs);
+        assert_eq!(got.len(), 1);
+        let f = &got[0];
+        assert_eq!(f.rule, "swap_io_pressure");
+        assert_eq!(f.severity, "warning");
+        assert_eq!(f.statements[0].label, Evidence::Observed);
+        assert_eq!(f.statements[0].text, "5.2 MB/s swap · 12.3 tok/s");
+        assert_eq!(
+            f.statements[0].basis,
+            vec![EvidenceRef::Pattern {
+                pattern: "swap_io_pressure",
+                first_fired_ms: T0,
+                confidence_pct: 85,
+            }],
+        );
+        // Host-level: the statement names no model, because its evidence does
+        // not carry one.
+        assert!(f.models.is_empty(), "{:?}", f.models);
+
+        // That body states a mechanism without hedging, so it is dropped
+        // rather than labelled as something Wicklee saw.
+        assert_eq!(f.statements.len(), 1, "{:?}", f.statements);
+    }
+
+    #[cfg(not(target_env = "musl"))]
+    #[test]
+    fn a_hedged_body_is_kept_as_the_inference() {
+        let obs = [observation(
+            "thermal_drain",
+            "Fair thermal · 18 tok/s",
+            "Throughput may be suffering: the node has been above Normal for most \
+             of the last five minutes.",
+        )];
+        let got = from_observations(&obs);
+        let f = &got[0];
+        assert_eq!(f.statements.len(), 2, "{:?}", f.statements);
+        assert_eq!(f.statements[1].label, Evidence::Inferred);
+        // The inference inherits the pattern reference it was built on.
+        assert_eq!(f.statements[1].basis, f.statements[0].basis);
+    }
+
+    #[cfg(not(target_env = "musl"))]
+    #[test]
+    fn an_adapted_finding_keeps_its_id_across_evaluations() {
+        let a = from_observations(&[observation("swap_io_pressure", "5.2 MB/s", "x")]);
+        // Different measurement, same pattern: the same finding, so the store
+        // updates one row instead of accumulating one per reading.
+        let b = from_observations(&[observation("swap_io_pressure", "9.9 MB/s", "y")]);
+        assert_eq!(a[0].id, b[0].id);
+        let c = from_observations(&[observation("thermal_drain", "5.2 MB/s", "x")]);
+        assert_ne!(a[0].id, c[0].id);
+    }
+
+    #[test]
+    fn a_pattern_statement_must_name_the_pattern_it_came_from() {
+        assert_eq!(
+            Statement::observed_pattern("x", "", T0, 0.9),
+            Err(EvidenceError::NoBasis),
+        );
+        // A ratio outside 0..=1 is clamped rather than wrapping a u8.
+        let hot = Statement::observed_pattern("x", "p", T0, 4.2).unwrap();
+        assert_eq!(
+            hot.basis,
+            vec![EvidenceRef::Pattern { pattern: "p", first_fired_ms: T0, confidence_pct: 100 }],
+        );
+        let cold = Statement::observed_pattern("x", "p", T0, -1.0).unwrap();
+        assert_eq!(
+            cold.basis,
+            vec![EvidenceRef::Pattern { pattern: "p", first_fired_ms: T0, confidence_pct: 0 }],
+        );
     }
 }
