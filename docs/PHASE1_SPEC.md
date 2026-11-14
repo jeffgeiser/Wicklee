@@ -56,7 +56,13 @@ Also out of scope, and not merely deferred: **silent context truncation detectio
 
 ## What exists today
 
-The agent is at version 0.12.0, about 15,250 lines of Rust in `agent/src`. Most of what Phase 1 needs to observe is already collected.
+The table below is the **pristine 0.12.0 baseline**, about 15,250 lines of Rust
+in `agent/src`, recorded before any Phase 1 work. It is kept as written so the
+"Phase 1" column still reads as a plan rather than a history. Most of what Phase
+1 needs to observe was already collected.
+
+As of v0.13.1 the agent is at 21,666 lines across 29 modules, with steps 0
+through 3 shipped. See *Measured* below for where that lands against the budget.
 
 | Module | Lines | Does today | Phase 1 |
 | --- | --- | --- | --- |
@@ -934,9 +940,9 @@ Steps are in dependency order. Each step ends with its tests passing and a short
 | Step | Build | Depends on | Done when |
 | --- | --- | --- | --- |
 | 0 | **Done.** Verification and audit. `scripts/bench/ollama-capabilities.mjs` records real Ollama responses and answers V1 to V9. Produced `docs/ollama-capabilities.md` and `docs/CLEANUP_AUDIT.md`, and the deviations folded into this revision. Baseline line count recorded; binary size deferred to step 1 | Nothing | Every V item has an answer or is marked unanswerable, with the affected rule adjusted |
-| 1 | `ollama_client.rs` and `caps.rs`. Typed responses with every field optional, with `model_info` keys resolved from `details.family` rather than hardcoded to `llama.*`, accepting both scalar and array values. **Fix the probe to pass the running `num_ctx`.** Build inbound auth: `ConnectInfo<SocketAddr>` on the router, the peer-address helper, the token check and the startup rule, covering `/api` and `/mcp`. Move the startup banner off stdout. Record the 0.12.0 release binary size | 0 | Existing harvester tests pass. Capability record is correct against the mock with fields removed. `model_info` parses for a non-llama family. The probe no longer changes a model's context. A non-loopback bind with no token refuses to start |
-| 2 | `residency.rs` and the `model_transitions` table. The harvester forwards each poll. Per-model expiry and activity. Probe and test requests tagged by cause. In-memory log for musl | 1 | Scripted poll sequences produce the expected transitions. `query_model_switches` reads the new table |
-| 3 | `readiness.rs`, `GET /v1/state`, `GET /v1/readiness`, `cli.rs` with `wicklee ready` | 2 | Unit tests cover every classification branch and displacement level |
+| 1 | **Done.** `ollama_client.rs` and `caps.rs`. Typed responses with every field optional, with `model_info` keys resolved from `details.family` rather than hardcoded to `llama.*`, accepting both scalar and array values. **Fix the probe to pass the running `num_ctx`.** Build inbound auth: `ConnectInfo<SocketAddr>` on the router, the peer-address helper, the token check and the startup rule, covering `/api` and `/mcp`. Move the startup banner off stdout. Record the 0.12.0 release binary size | 0 | Existing harvester tests pass. Capability record is correct against the mock with fields removed. `model_info` parses for a non-llama family. The probe no longer changes a model's context. A non-loopback bind with no token refuses to start |
+| 2 | **Done.** `residency.rs` and the `model_transitions` table. The harvester forwards each poll. Per-model expiry and activity. Probe and test requests tagged by cause. In-memory log for musl | 1 | Scripted poll sequences produce the expected transitions. `query_model_switches` reads the new table |
+| 3 | **Done.** `readiness.rs`, `GET /v1/state`, `GET /v1/readiness`, `cli.rs` with `wicklee ready` | 2 | Unit tests cover every classification branch and displacement level |
 | 4 | `findings.rs`: types, evidence constructors, IDs, the `findings` table. Rules `cpu_split`, `context_reset`, `eviction_churn`, `expiry_reload`. The observations adapter. `GET /v1/inspect`, `wicklee inspect`, `wicklee findings` | 2, 3 | Each rule passes positive and negative synthetic cases. A healthy log yields no findings. `context_reset` fires on a scripted context drop and ignores probe-caused transitions |
 | 5 | `receipts.rs` and the `receipts` table. `POST /v1/receipts` for callbacks, rejecting payloads carrying content. Widen the proxy trace and emit proxy receipts. `fingerprint.rs` with warm and cold tests, consent, restore. `wicklee fingerprint` | 1, 2 | Receipts match the mock's timings. A posted callback receipt is stored and counts as activity. A payload with a `prompt` field is rejected. Refuses without consent. Tracker shows test requests tagged |
 | 6 | Verify runs and comparison. `wicklee verify`. Rule `baseline_regression`. Verified statements | 4, 5 | Two runs with a changed mock configuration report "improved." Unchanged runs report "no measurable change" |
@@ -947,17 +953,43 @@ Steps are in dependency order. Each step ends with its tests passing and a short
 
 The remote-access rule moved from step 3 to step 1, because V8 showed the existing routes are already exposed.
 
-### Measured: steps 0 and 1
+### Measured: steps 0 to 3
 
 | Measure | Value |
 | --- | --- |
 | Agent lines, pristine 0.12.0 | 15,250 |
 | Agent lines, after step 1 | 17,219, of which about 1,163 are production code against the ~3,500 budget |
+| Agent lines, after step 3 | 21,666, of which about 2,798 are production code |
 | Release binary, pristine 0.12.0 | 24,411,328 bytes (23.28 MB) |
 | Release binary, after step 1 | 24,477,808 bytes, +0.27% |
-| Tests | 124 passing, clippy clean at every commit |
+| Release binary, after step 3 | Not measured. Measure it at step 4 on the same toolchain, or the +0.27% figure loses its comparison |
+| Tests, after step 1 | 124 passing, clippy clean at every commit |
+| Tests, after step 3 | 183 passing, clippy clean at every commit |
+| Steps 0 to 3 shipped in | v0.13.0, all on 2026-11-13 |
 
 Both binary figures were measured on the same toolchain, which is the only way the comparison means anything.
+
+**The production-code budget needs re-cutting before step 4.** The ~3,500-line
+budget covers Phase 1 as a whole. The seven new modules are at roughly 2,798
+production lines after step 3:
+
+| Module | Production lines |
+| --- | --- |
+| `residency.rs` | 821 |
+| `readiness.rs` | 596 |
+| `ollama_client.rs` | 419 |
+| `auth.rs` | 318 |
+| `cli.rs` | 299 |
+| `findings.rs` | 202 |
+| `caps.rs` | 143 |
+
+That leaves about 700 lines for steps 4 through 8. Step 4 alone — four rules
+with positive and negative cases, a table, ID generation, the observations
+adapter, a route and two CLI verbs — will plausibly spend all of it, and steps
+5 and 6 add `receipts.rs` and `fingerprint.rs` on top. Either the budget moves
+or the scope does; discovering it blown at step 6 is the outcome to avoid. Note
+that `auth.rs` was not in the original budget at all — it was added to step 1
+after V8 found no inbound authentication existed.
 
 **The probe fix is verified against a real runtime, not only unit tests.** The old request body took a model loaded at `num_ctx` 8192 down to 4096 with a 2,626 ms reload. The new body holds 8192 and returns in 3 ms. That is the V3 bug reproduced and then closed, with a measurement on each side.
 
