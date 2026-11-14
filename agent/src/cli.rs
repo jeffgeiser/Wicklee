@@ -23,12 +23,8 @@ pub(crate) enum Command {
     Ready { model: Option<String>, json: bool },
     /// `wicklee inspect [--since 24h] [--json]`
     Inspect { since: Option<String>, json: bool },
-    /// `wicklee findings [--json]`
-    ///
-    /// No `--all` yet. The spec's `--all` lists resolved findings, which needs
-    /// the findings table; a flag that silently returned only the open ones
-    /// would be worse than not having it.
-    Findings { json: bool },
+    /// `wicklee findings [--all] [--json]`
+    Findings { all: bool, json: bool },
 }
 
 /// Column the description starts in, and the width text wraps at.
@@ -69,24 +65,15 @@ pub(crate) fn parse(args: &[String]) -> Invocation {
                 });
             Invocation::Run(Command::Inspect { since, json })
         }
-        "findings" => {
-            let json = args.iter().any(|a| a == "--json");
-            if args.iter().any(|a| a == "--all") {
-                return Invocation::Unknown(
-                    "wicklee: findings --all is not available yet.\n\n\
-                     It lists resolved findings, which needs the findings \
-                     table, and that is not built yet.\n\
-                     `wicklee findings` lists the open ones."
-                        .to_string(),
-                );
-            }
-            Invocation::Run(Command::Findings { json })
-        }
+        "findings" => Invocation::Run(Command::Findings {
+            all: args.iter().any(|a| a == "--all"),
+            json: args.iter().any(|a| a == "--json"),
+        }),
         other => Invocation::Unknown(format!(
             "wicklee: unknown subcommand {other:?}\n\nAvailable:\n  \
              wicklee inspect [--since 24h] [--json]   what is happening\n  \
              wicklee ready [MODEL] [--json]           which models can run now\n  \
-             wicklee findings [--json]                open findings\n\n\
+             wicklee findings [--all] [--json]        findings, open or resolved\n\n\
              Run `wicklee` with no arguments to start the agent in the foreground."
         )),
     }
@@ -155,8 +142,11 @@ pub(crate) async fn run(cmd: Command, port: u16) -> i32 {
             }
             fetch_and_render(&url, port, json, is_inspect_answer, render_inspect).await
         }
-        Command::Findings { json } => {
-            let url = format!("http://127.0.0.1:{port}/v1/findings");
+        Command::Findings { all, json } => {
+            let mut url = format!("http://127.0.0.1:{port}/v1/findings");
+            if all {
+                url.push_str("?all=true");
+            }
             fetch_and_render(&url, port, json, is_findings_answer, render_findings).await
         }
     }
@@ -294,19 +284,39 @@ pub(crate) fn render_findings(body: &serde_json::Value) -> String {
         (_, f) if f.is_object() => vec![f],
         _ => Vec::new(),
     };
+    let (open, resolved): (Vec<&serde_json::Value>, Vec<&serde_json::Value>) =
+        rows.into_iter().partition(|f| f["resolved_at_ms"].is_null());
+
     let mut out = String::from("FINDINGS\n");
-    if rows.is_empty() {
+    if open.is_empty() {
         out.push_str("  No open findings.\n");
     } else {
-        for f in rows {
+        for f in &open {
             out.push_str(&render_finding(f));
         }
     }
+
+    if !resolved.is_empty() {
+        out.push_str("\nRESOLVED\n");
+        for f in &resolved {
+            out.push_str(&render_finding(f));
+        }
+    }
+
     out.push_str(&render_not_checked(body));
-    if body["includes_resolved"] == serde_json::Value::Bool(false) {
+
+    // Three different states, and conflating them is the whole hazard: asked
+    // and got them, asked and the store could not answer, did not ask.
+    let asked = body["includes_resolved"] == serde_json::Value::Bool(true);
+    if !asked && body["persisted"] == serde_json::Value::Bool(false) {
         out.push_str(
-            "\nResolved findings are not listed: they are not stored yet.\n",
+            "\nFindings are not being stored, so they last only until this agent\n  \
+             restarts and there is no resolved history to list.\n",
         );
+    } else if !asked {
+        out.push_str("\nResolved findings are not listed. Add --all to include them.\n");
+    } else if resolved.is_empty() {
+        out.push_str("\nNo resolved findings on record.\n");
     }
     out
 }
@@ -814,17 +824,63 @@ mod tests {
     }
 
     #[test]
-    fn findings_rejects_all_rather_than_quietly_ignoring_it() {
-        let Invocation::Run(Command::Findings { json }) = parse(&args(&["findings", "--json"]))
+    fn findings_takes_all_and_json() {
+        let Invocation::Run(Command::Findings { all, json }) =
+            parse(&args(&["findings", "--json"]))
         else {
             panic!("expected findings");
         };
-        assert!(json);
+        assert_eq!((all, json), (false, true));
 
-        let Invocation::Unknown(msg) = parse(&args(&["findings", "--all"])) else {
-            panic!("--all must not be accepted while resolved findings are not stored");
+        let Invocation::Run(Command::Findings { all, json }) =
+            parse(&args(&["findings", "--all"]))
+        else {
+            panic!("expected findings");
         };
-        assert!(msg.contains("not available yet"), "{msg}");
+        assert_eq!((all, json), (true, false));
+    }
+
+    #[test]
+    fn findings_separates_open_from_resolved() {
+        let mut body = inspect_body();
+        let mut was = body["findings"][0].clone();
+        was["id"] = serde_json::json!("F-b11111");
+        was["resolved_at_ms"] = serde_json::json!(1_700_000_500_000_i64);
+        body["findings"] = serde_json::json!([body["findings"][0].clone(), was]);
+        body["includes_resolved"] = serde_json::json!(true);
+        body["persisted"] = serde_json::json!(true);
+
+        let out = render_findings(&body);
+        let (open_at, resolved_at) = (
+            out.find("F-a3f29c").expect("open finding"),
+            out.find("F-b11111").expect("resolved finding"),
+        );
+        let heading = out.find("RESOLVED").expect("a RESOLVED heading");
+        assert!(open_at < heading, "open findings come first: {out}");
+        assert!(heading < resolved_at, "the resolved one sits under it: {out}");
+    }
+
+    #[test]
+    fn findings_distinguishes_not_asked_from_cannot_answer() {
+        // Did not ask, and the store is there: say how to ask.
+        let mut body = inspect_body();
+        body["includes_resolved"] = serde_json::json!(false);
+        body["persisted"] = serde_json::json!(true);
+        let out = render_findings(&body);
+        assert!(out.contains("Add --all"), "{out}");
+
+        // Did not ask, and nothing is stored: say that instead, because --all
+        // would not help.
+        body["persisted"] = serde_json::json!(false);
+        let out = render_findings(&body);
+        assert!(out.contains("not being stored"), "{out}");
+        assert!(!out.contains("Add --all"), "{out}");
+
+        // Asked, got an answer, and there is nothing in it.
+        body["includes_resolved"] = serde_json::json!(true);
+        body["persisted"] = serde_json::json!(true);
+        let out = render_findings(&body);
+        assert!(out.contains("No resolved findings on record."), "{out}");
     }
 
     #[test]
@@ -880,13 +936,15 @@ mod tests {
     }
 
     #[test]
-    fn findings_output_says_resolved_ones_are_not_listed() {
+    fn findings_output_lists_the_open_ones() {
         let mut body = inspect_body();
         body["includes_resolved"] = serde_json::json!(false);
+        body["persisted"] = serde_json::json!(true);
         let out = render_findings(&body);
         assert!(out.starts_with("FINDINGS\n"), "{out}");
         assert!(out.contains("F-a3f29c"), "{out}");
-        assert!(out.contains("not stored yet"), "{out}");
+        // Nothing resolved was served, so no empty section is printed.
+        assert!(!out.contains("RESOLVED"), "{out}");
 
         body["findings"] = serde_json::json!([]);
         let empty = render_findings(&body);

@@ -906,6 +906,7 @@ pub(crate) async fn handle_v1_inspect(
         Arc<Mutex<crate::metrics::NvidiaMetrics>>,
     >,
     axum::extract::Extension(node_id_ext): axum::extract::Extension<NodeId>,
+    store: MaybeStore,
 ) -> axum::response::Response {
     // An unparseable window is an error, not a silently ignored argument: a
     // caller asking for the last hour and being given everything would read
@@ -964,6 +965,24 @@ pub(crate) async fn handle_v1_inspect(
         now_ms,
     });
 
+    // Reconcile here too. `inspect` is the command people actually run, so a
+    // finding that stopped firing should resolve on it rather than waiting for
+    // someone to call /v1/findings. The rows that come back are not used: this
+    // route reports what is true now, and the stored set is what
+    // /v1/findings?all=true is for.
+    let findings_persisted = match store {
+        Some(axum::extract::Extension(s)) => findings_from_store(
+            s,
+            node_id_ext.0.to_string(),
+            inspection.findings.clone(),
+            false,
+            now_ms,
+        )
+        .await
+        .is_some(),
+        None => false,
+    };
+
     let apple_now = apple.lock().map(|g| g.clone()).unwrap_or_default();
     let nvidia_now = nvidia.lock().map(|g| g.clone()).unwrap_or_default();
     let headroom = crate::readiness::headroom(&apple_now, &nvidia_now, &refs);
@@ -991,18 +1010,85 @@ pub(crate) async fn handle_v1_inspect(
         // tail of it.
         "history": {
             "transitions":     transitions.len(),
+            // Two different things, deliberately separate: whether the
+            // transition log survives a restart, and whether findings do. A
+            // store that stopped accepting writes leaves the first true and
+            // the second false.
             "persisted":       persisted,
+            "findings_persisted": findings_persisted,
             "scope":           if persisted { "stored" } else { "this process only" },
         },
     }))
     .into_response()
 }
 
+/// The store, where this build has one.
+///
+/// On musl there is no DuckDB and no `crate::store` at all, so the alias
+/// becomes the unit type and the findings routes serve the in-memory
+/// evaluation. One handler body either way, rather than two that could drift.
+#[cfg(not(target_env = "musl"))]
+pub(crate) type MaybeStore = Option<axum::extract::Extension<store::Store>>;
+/// See the non-musl alias above.
+#[cfg(target_env = "musl")]
+pub(crate) type MaybeStore = Option<axum::extract::Extension<()>>;
+
+/// Record this evaluation and read back the findings the store now holds.
+///
+/// `None` when there is no store, when the write failed, or when the read
+/// failed — every one of which means "serve what was just evaluated and say
+/// the history is not persisted", never a silently empty list.
+#[cfg(not(target_env = "musl"))]
+async fn findings_from_store(
+    store: store::Store,
+    node_id: String,
+    open: Vec<crate::findings::Finding>,
+    include_resolved: bool,
+    now_ms: i64,
+) -> Option<serde_json::Value> {
+    // store.rs's rule: blocking database calls run off the async thread.
+    tokio::task::spawn_blocking(move || {
+        if let Err(e) = store.reconcile_findings(&node_id, &open, now_ms) {
+            eprintln!("[findings] could not record this evaluation: {e}");
+            return None;
+        }
+        match store.query_findings(&node_id, include_resolved) {
+            Ok(rows) => serde_json::to_value(rows).ok(),
+            Err(e) => {
+                eprintln!("[findings] could not read findings back: {e}");
+                None
+            }
+        }
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+/// See the non-musl version. A musl build has nowhere to put a finding.
+#[cfg(target_env = "musl")]
+async fn findings_from_store(
+    _store: (),
+    _node_id: String,
+    _open: Vec<crate::findings::Finding>,
+    _include_resolved: bool,
+    _now_ms: i64,
+) -> Option<serde_json::Value> {
+    None
+}
+
 /// GET /v1/findings — the findings alone, without readiness.
 ///
-/// `?id=` narrows to one. Resolved findings are not served yet: that needs the
-/// findings table, so the response says so rather than implying the list is
-/// everything there has ever been.
+/// `?id=` narrows to one, `?all=true` includes resolved findings.
+///
+/// Every request evaluates the rules and reconciles the result against the
+/// store, so a finding resolves because an evaluation ran and did not produce
+/// it. That makes resolution observed rather than scheduled, and it is why the
+/// stored `resolved_at_ms` is when Wicklee last looked and did not see it.
+///
+/// Where there is no store the route still answers, from the evaluation alone,
+/// and says the history is not persisted. The spec is explicit that this must
+/// not become a silent empty result that reads like "nothing ever happened".
 pub(crate) async fn handle_v1_findings(
     axum::extract::Extension(OllamaPortRx(port_rx)): axum::extract::Extension<OllamaPortRx>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
@@ -1011,6 +1097,7 @@ pub(crate) async fn handle_v1_findings(
     >,
     axum::extract::Extension(caps): axum::extract::Extension<crate::caps::SharedCaps>,
     axum::extract::Extension(node_id_ext): axum::extract::Extension<NodeId>,
+    store: MaybeStore,
 ) -> axum::response::Response {
     let port = *port_rx.borrow();
     learn_installed(port, &caps, &residency).await;
@@ -1027,17 +1114,45 @@ pub(crate) async fn handle_v1_findings(
         .lock()
         .map(|c| (c.ps_context_length, c.ps_expires_at))
         .unwrap_or((false, false));
+    let now_ms = crate::residency::now_ms();
 
     let inspection = crate::findings::evaluate(&crate::findings::RuleInputs {
         states: &refs,
         transitions: &transitions,
         ps_context_length,
         ps_expires_at,
-        now_ms: crate::residency::now_ms(),
+        now_ms,
+    });
+
+    let want_resolved = params.get("all").is_some_and(|v| v != "false" && v != "0");
+    let stored = match store {
+        Some(axum::extract::Extension(s)) => {
+            findings_from_store(
+                s,
+                node_id_ext.0.to_string(),
+                inspection.findings.clone(),
+                want_resolved,
+                now_ms,
+            )
+            .await
+        }
+        None => None,
+    };
+
+    // Whether `all` was actually honoured, which is only true when the rows
+    // came from the store. Asking for resolved findings and being given the
+    // open ones under a flag that said otherwise is the failure this guards.
+    let persisted = stored.is_some();
+    let includes_resolved = want_resolved && persisted;
+    let rows = stored.unwrap_or_else(|| {
+        serde_json::to_value(&inspection.findings).unwrap_or_else(|_| serde_json::json!([]))
     });
 
     if let Some(id) = params.get("id") {
-        return match inspection.findings.iter().find(|f| &f.id == id) {
+        let found = rows
+            .as_array()
+            .and_then(|a| a.iter().find(|f| f["id"].as_str() == Some(id.as_str())));
+        return match found {
             Some(f) => Json(serde_json::json!({
                 "node_id": node_id_ext.0.as_str(),
                 "finding": f,
@@ -1046,8 +1161,12 @@ pub(crate) async fn handle_v1_findings(
             None => (
                 axum::http::StatusCode::NOT_FOUND,
                 Json(serde_json::json!({
-                    "error": format!("no open finding with id {id}"),
-                    "hint":  "GET /v1/findings lists the open ones; resolved findings are not stored yet",
+                    "error": format!("no finding with id {id}"),
+                    "hint":  if includes_resolved {
+                        "GET /v1/findings?all=true lists every finding this node has recorded"
+                    } else {
+                        "GET /v1/findings lists the open ones; add all=true for resolved findings"
+                    },
                 })),
             )
                 .into_response(),
@@ -1055,12 +1174,14 @@ pub(crate) async fn handle_v1_findings(
     }
 
     Json(serde_json::json!({
-        "node_id":     node_id_ext.0.as_str(),
-        "findings":    inspection.findings,
-        "not_checked": inspection.not_checked,
-        // Named so a caller does not read an empty list as "nothing has ever
-        // been wrong on this host".
-        "includes_resolved": false,
+        "node_id":           node_id_ext.0.as_str(),
+        "observed_at_ms":    now_ms,
+        "findings":          rows,
+        "not_checked":       inspection.not_checked,
+        "includes_resolved": includes_resolved,
+        // False means findings last only until this process restarts, which is
+        // the musl case and the store-disabled case.
+        "persisted":         persisted,
     }))
     .into_response()
 }
