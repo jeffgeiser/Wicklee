@@ -169,6 +169,9 @@ pub(crate) enum Cause {
     Unknown,
 }
 
+/// The store is the only consumer of these names — JSON goes through the
+/// Serialize derive, which musl keeps — so they compile out with it.
+#[cfg(not(target_env = "musl"))]
 impl TransitionKind {
     /// The name the store writes and reads. Kept identical to the Serialize
     /// name by a test, so a column value and a JSON value never diverge.
@@ -197,6 +200,7 @@ impl TransitionKind {
     }
 }
 
+#[cfg(not(target_env = "musl"))]
 impl Cause {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
@@ -1112,6 +1116,8 @@ mod tests {
         }
     }
 
+    // Guards a column against its JSON name; there are no columns on musl.
+    #[cfg(not(target_env = "musl"))]
     #[test]
     fn column_names_and_json_names_cannot_diverge() {
         for k in [

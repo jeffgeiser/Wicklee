@@ -30,7 +30,8 @@ pub(crate) struct ProxyState {
     pub(crate) in_flight: std::sync::atomic::AtomicU32,
     /// Timestamp of last completed request (done packet received).
     pub(crate) last_done_ts:   Mutex<Option<std::time::Instant>>,
-    /// Node ID for trace attribution.
+    /// Node ID for trace attribution — read only when building a TraceRow.
+    #[cfg(not(target_env = "musl"))]
     pub(crate) node_id: String,
     /// Channel sender for inference traces — writes to DuckDB via a consumer task.
     #[cfg(not(target_env = "musl"))]
@@ -113,10 +114,14 @@ pub(crate) async fn proxy_ollama_streaming(
     state.in_flight.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
     // Trace timing: capture request start and generate a unique trace ID.
+    // Both feed the TraceRow and nothing else, so a musl build neither
+    // timestamps nor mints a UUID per proxied request.
+    #[cfg(not(target_env = "musl"))]
     let req_ts_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as i64;
+    #[cfg(not(target_env = "musl"))]
     let trace_id = uuid::Uuid::new_v4().to_string();
 
     // Forward to backend Ollama
@@ -160,9 +165,11 @@ pub(crate) async fn proxy_ollama_streaming(
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(64);
     let proxy_state = Arc::clone(&state);
     let trace_model = model.clone();
+    #[cfg(not(target_env = "musl"))]
     let trace_id_clone = trace_id.clone();
 
     tokio::spawn(async move {
+        #[cfg(not(target_env = "musl"))]
         let trace_id = trace_id_clone;
         let model = trace_model;
         // Release the in-flight slot when the relay ends, on EVERY exit path
@@ -208,9 +215,14 @@ pub(crate) async fn proxy_ollama_streaming(
                                                 entry.last_done = now;
                                             }
 
-                                            // Per-request inference trace → DuckDB
+                                            // Per-request inference trace → DuckDB.
+                                            // Derived for the row alone, so musl
+                                            // skips the arithmetic as well.
+                                            #[cfg(not(target_env = "musl"))]
                                             let latency_ms   = (total_dur / 1_000_000) as i64;
+                                            #[cfg(not(target_env = "musl"))]
                                             let ttft_ms      = (prompt_dur / 1_000_000) as i64;
+                                            #[cfg(not(target_env = "musl"))]
                                             let tpot_ms      = if eval_cnt > 0 {
                                                 (eval_dur as f64 / eval_cnt as f64) / 1_000_000.0
                                             } else { 0.0 };
@@ -350,6 +362,7 @@ mod tests {
             client:         reqwest::Client::new(),
             in_flight:      std::sync::atomic::AtomicU32::new(0),
             last_done_ts:   Mutex::new(None),
+            #[cfg(not(target_env = "musl"))]
             node_id:        "test".into(),
             #[cfg(not(target_env = "musl"))]
             trace_tx:       None,

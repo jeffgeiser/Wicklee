@@ -208,7 +208,9 @@ pub(crate) fn legacy_config_path() -> Option<PathBuf> {
 }
 
 /// Parent directory of config_path() — the Wicklee system config dir.
-/// Used for the metrics DB and any future agent-local state files.
+/// Used for the metrics DB and any future agent-local state files. The DB is
+/// its only caller today, so it compiles out with the store.
+#[cfg(not(target_env = "musl"))]
 pub(crate) fn wicklee_dir() -> PathBuf {
     config_path()
         .parent()
