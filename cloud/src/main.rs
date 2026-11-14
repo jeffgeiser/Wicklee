@@ -859,6 +859,10 @@ async fn handle_agent_version(
         "linux-x86_64"        => "wicklee-agent-linux-x86_64",
         "linux-aarch64"       => "wicklee-agent-linux-aarch64",
         "linux-x86_64-nvidia" => "wicklee-agent-linux-x86_64-nvidia",
+        // Mirrors agent/src/update.rs `update_asset_name`. Both Linux arches
+        // ship an NVML and a plain asset; this arm was missing, so an ARM64
+        // NVIDIA agent asking for its own build got 400 and never updated.
+        "linux-aarch64-nvidia" => "wicklee-agent-linux-aarch64-nvidia",
         "windows-x86_64"      => "wicklee-agent-windows-x86_64.exe",
         _ => return (StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": "unrecognised platform" }))).into_response(),
