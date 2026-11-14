@@ -196,36 +196,54 @@ jobs:
           name: wicklee-agent-linux-aarch64
           path: wicklee-agent-linux-aarch64
 
-  # ── Linux arm64 (glibc — NVIDIA GPU metrics enabled) ─────────────────────────
+  # ── Linux arm64 (glibc 2.31 — NVIDIA GPU metrics enabled) ────────────────────
   # Targets NVIDIA Grace Blackwell (DGX Spark) and other ARM64 Linux nodes with
-  # NVIDIA GPUs.  Uses a native GitHub ARM64 runner so no cross-compilation is
-  # needed; the CUDA aarch64 repo provides nvml-dev headers for the linker.
+  # NVIDIA GPUs. Native ARM64 runner, so no cross-compilation.
+  #
+  # In the ubuntu:20.04 container for the same glibc 2.31 floor as the
+  # non-NVIDIA builds. Until then this job ran on the runner's own glibc
+  # (2.39 on ubuntu-24.04-arm), so install.sh handed every NVIDIA ARM host a
+  # binary that would not load on RHEL 8 or Debian 11 — the hosts v0.8.3 set
+  # the floor for.
+  #
+  # The repo also changes, and this is the one that matters: `arm64` in the
+  # CUDA repos is Jetson/L4T, and on 20.04 it stops at cuda-nvml-dev-12-2.
+  # `sbsa` is Server Base System Architecture — Grace, Ampere Altra — which is
+  # what this job actually targets, and it carries 12-4. Both ship an aarch64
+  # libnvidia-ml stub in an _arm64.deb; only the sbsa one exists for 20.04.
   build-linux-arm64-nvidia:
-    name: Build · Linux (arm64, NVIDIA/glibc)
+    name: Build · Linux (arm64, NVIDIA/glibc 2.31)
     runs-on: ubuntu-24.04-arm   # Native ARM64 runner (GitHub large runner)
-    timeout-minutes: 25      # bounded to prevent runaway builds
+    container: ubuntu:20.04
+    timeout-minutes: 30      # container build compiles DuckDB from source
     steps:
-      - uses: actions/checkout@v4
+      - name: Install build prerequisites
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -qq
+          apt-get install -y --no-install-recommends \
+            curl ca-certificates build-essential cmake pkg-config \
+            libssl-dev git
+          # Node 20 from NodeSource (ubuntu:20.04 ships Node 10)
+          curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+          apt-get install -y nodejs
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: npm
+      - uses: actions/checkout@v4
 
       - name: Build frontend
         run: npm ci && npm run build:agent
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Install NVML dev headers (aarch64)
+      - name: Install NVML dev headers (aarch64 sbsa)
         run: |
-          wget -qO /tmp/cuda-keyring.deb \
-            https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/arm64/cuda-keyring_1.1-1_all.deb
-          sudo dpkg -i /tmp/cuda-keyring.deb
-          sudo apt-get update -qq
-          sudo apt-get install -y cuda-nvml-dev-12-4
+          curl -fsSL -o /tmp/cuda-keyring.deb \
+            https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/sbsa/cuda-keyring_1.1-1_all.deb
+          dpkg -i /tmp/cuda-keyring.deb
+          apt-get update -qq
+          apt-get install -y cuda-nvml-dev-12-4
 
-      - name: Build agent (glibc, NVML enabled)
+      - name: Build agent (glibc 2.31, NVML enabled)
         run: cargo build --release
         working-directory: agent
 
@@ -237,22 +255,32 @@ jobs:
           name: wicklee-agent-linux-aarch64-nvidia
           path: wicklee-agent-linux-aarch64-nvidia
 
-  # ── Linux x64 (glibc — NVIDIA GPU metrics enabled) ───────────────────────────
+  # ── Linux x64 (glibc 2.31 — NVIDIA GPU metrics enabled) ──────────────────────
   # Parallel to the non-NVIDIA Linux build above; no musl asset has shipped
   # since v0.8.2. glibc allows dlopen of libnvidia-ml at runtime,
   # so VRAM / GPU util / GPU temp / power draw all work on NVIDIA nodes.
-  # The install script detects nvidia-smi and pulls this asset automatically.
+  # The install script detects nvidia-smi and pulls this asset automatically —
+  # which is why the floor matters here as much as on the plain build: this is
+  # the asset every NVIDIA host gets, and it ran on the runner's own glibc
+  # (2.35) until it moved into the container.
   build-linux-x64-nvidia:
-    name: Build · Linux (x64, NVIDIA/glibc)
+    name: Build · Linux (x64, NVIDIA/glibc 2.31)
     runs-on: ubuntu-22.04
-    timeout-minutes: 25      # bounded to prevent runaway builds
+    container: ubuntu:20.04
+    timeout-minutes: 30      # container build compiles DuckDB from source
     steps:
-      - uses: actions/checkout@v4
+      - name: Install build prerequisites
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -qq
+          apt-get install -y --no-install-recommends \
+            curl ca-certificates build-essential cmake pkg-config \
+            libssl-dev git
+          # Node 20 from NodeSource (ubuntu:20.04 ships Node 10)
+          curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+          apt-get install -y nodejs
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: npm
+      - uses: actions/checkout@v4
 
       - name: Build frontend
         run: npm ci && npm run build:agent
@@ -263,19 +291,19 @@ jobs:
       # libnvidia-ml.so link stub so the linker resolves the symbol at compile
       # time. At runtime the real driver library is dlopen-ed by the OS.
       #
-      # We install directly via the CUDA keyring rather than the Jimver action
-      # because the action generates "cuda-nvml_dev-12-4" (underscore) while the
-      # actual apt package is "cuda-nvml-dev-12-4" (hyphen) — causing E: Unable
-      # to locate package on ubuntu-22.04 runners.
+      # Installed from the CUDA keyring rather than the Jimver action, which
+      # generates "cuda-nvml_dev-12-4" (underscore) against an actual package
+      # name of "cuda-nvml-dev-12-4" (hyphen). The repo is the 20.04 one now,
+      # which carries 12-4 for x86_64.
       - name: Install NVML dev headers
         run: |
-          wget -qO /tmp/cuda-keyring.deb \
-            https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
-          sudo dpkg -i /tmp/cuda-keyring.deb
-          sudo apt-get update -qq
-          sudo apt-get install -y cuda-nvml-dev-12-4
+          curl -fsSL -o /tmp/cuda-keyring.deb \
+            https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/cuda-keyring_1.1-1_all.deb
+          dpkg -i /tmp/cuda-keyring.deb
+          apt-get update -qq
+          apt-get install -y cuda-nvml-dev-12-4
 
-      - name: Build agent (glibc, NVML enabled)
+      - name: Build agent (glibc 2.31, NVML enabled)
         run: cargo build --release
         working-directory: agent
 
