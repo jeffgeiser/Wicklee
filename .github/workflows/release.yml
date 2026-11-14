@@ -18,7 +18,19 @@ jobs:
   # ── macOS Apple Silicon ───────────────────────────────────────────────────────
   build-macos:
     name: Build · macOS (arm64)
-    runs-on: macos-14        # macos-14 = Apple Silicon runner
+    # Pinned, like windows-2022 below. macos-14 was the original Apple Silicon
+    # label; its arm64 image has since been withdrawn, leaving only a
+    # deprecated x64 one — which is why the job failed on the *configuration*
+    # rather than the label:
+    #
+    #   The configuration 'macos-14-arm64-us-default' is not supported
+    #
+    # It cancelled in one second with no steps, and because both publish jobs
+    # have it in `needs:` they skipped rather than failed. So every release run
+    # since 2026-10-11 built five assets, published none, and reported nothing.
+    # macos-15 is the oldest label with a current arm64 image; macos-latest is
+    # macos-26, which is where this pin goes next.
+    runs-on: macos-15
     timeout-minutes: 30      # max observed ~10 min; cap stops runaway DuckDB compile
     steps:
       - uses: actions/checkout@v4
