@@ -22,6 +22,7 @@ pub(crate) fn update_asset_name(platform: &str) -> Option<&'static str> {
         "linux-x86_64"        => Some("wicklee-agent-linux-x86_64"),
         "linux-aarch64"       => Some("wicklee-agent-linux-aarch64"),
         "linux-x86_64-nvidia" => Some("wicklee-agent-linux-x86_64-nvidia"),
+        "linux-aarch64-nvidia" => Some("wicklee-agent-linux-aarch64-nvidia"),
         "windows-x86_64"      => Some("wicklee-agent-windows-x86_64.exe"),
         _ => None,
     }
@@ -67,13 +68,20 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
 #[allow(unreachable_code)]
 pub(crate) fn agent_platform() -> &'static str {
     #[cfg(all(target_os = "macos",   target_arch = "aarch64"))]              { return "darwin-aarch64";      }
-    // Linux x86_64 has two release binaries: the glibc/NVML build (no `no_nvml`
-    // cfg) and the musl/static build (compiled with `RUSTFLAGS='--cfg no_nvml'`).
-    // They must pull their own binary on auto-update — swapping them loses GPU metrics.
-    #[cfg(all(target_os = "linux",   target_arch = "x86_64", not(no_nvml)))] { return "linux-x86_64-nvidia"; }
-    #[cfg(all(target_os = "linux",   target_arch = "x86_64", no_nvml))]      { return "linux-x86_64";        }
-    #[cfg(all(target_os = "linux",   target_arch = "aarch64"))]              { return "linux-aarch64";       }
-    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]              { return "windows-x86_64";      }
+    // Each Linux arch ships TWO release binaries: the NVML build (no `no_nvml`
+    // cfg) and the plain one (`RUSTFLAGS='--cfg no_nvml'`), both on glibc 2.31
+    // since v0.8.2 retired the musl asset. A build must pull its own binary on
+    // auto-update — swapping them loses GPU metrics.
+    //
+    // aarch64 carried no NVIDIA branch until this commit, so every ARM64 NVML
+    // build reported "linux-aarch64" and self-updated onto the no-NVML binary:
+    // a DGX Spark installed with GPU metrics and silently lost them on the
+    // first update. Keep the two arches symmetric.
+    #[cfg(all(target_os = "linux",   target_arch = "x86_64",  not(no_nvml)))] { return "linux-x86_64-nvidia";  }
+    #[cfg(all(target_os = "linux",   target_arch = "x86_64",  no_nvml))]      { return "linux-x86_64";         }
+    #[cfg(all(target_os = "linux",   target_arch = "aarch64", not(no_nvml)))] { return "linux-aarch64-nvidia"; }
+    #[cfg(all(target_os = "linux",   target_arch = "aarch64", no_nvml))]      { return "linux-aarch64";        }
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]               { return "windows-x86_64";       }
     "unknown"
 }
 
@@ -306,7 +314,8 @@ mod update_integrity_tests {
 
     #[test]
     fn every_platform_has_an_asset() {
-        for p in ["darwin-aarch64", "linux-x86_64", "linux-aarch64", "linux-x86_64-nvidia", "windows-x86_64"] {
+        for p in ["darwin-aarch64", "linux-x86_64", "linux-aarch64",
+                  "linux-x86_64-nvidia", "linux-aarch64-nvidia", "windows-x86_64"] {
             assert!(update_asset_name(p).is_some(), "{p}");
         }
         assert!(update_asset_name("unknown").is_none());
