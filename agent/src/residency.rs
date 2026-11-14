@@ -537,6 +537,16 @@ impl Tracker {
         self.history.iter()
     }
 
+    /// Whether a persister is draining transitions to the store.
+    ///
+    /// `/v1/inspect` reports it, so a caller reading a short log can tell the
+    /// whole history from this process's tail of it. On a musl build there is
+    /// no store and this is always false, which is the honest answer rather
+    /// than a silently truncated one.
+    pub(crate) fn persisting(&self) -> bool {
+        self.persisting
+    }
+
     /// How many transitions have been recorded since start, including any the
     /// in-memory log has already dropped.
     pub(crate) fn recorded(&self) -> u64 {

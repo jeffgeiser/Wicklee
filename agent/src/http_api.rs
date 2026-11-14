@@ -882,6 +882,153 @@ pub(crate) async fn handle_v1_readiness(
     }
 }
 
+/// GET /v1/inspect — findings, readiness, and what could not be checked.
+///
+/// The three sections answer the spec's three questions in one request, so the
+/// CLI makes one call and the text output cannot disagree with the JSON.
+///
+/// Rule evaluation is a pure function; this handler gathers its inputs and
+/// serialises the result, exactly as `/v1/readiness` does. The rules read the
+/// tracker's in-memory log, so this route works on a musl build too — with the
+/// history limited to the current process, which the response states rather
+/// than passing off as a quiet "nothing happened".
+pub(crate) async fn handle_v1_inspect(
+    axum::extract::Extension(OllamaPortRx(port_rx)): axum::extract::Extension<OllamaPortRx>,
+    axum::extract::Extension(residency): axum::extract::Extension<
+        crate::residency::SharedTracker,
+    >,
+    axum::extract::Extension(caps): axum::extract::Extension<crate::caps::SharedCaps>,
+    axum::extract::Extension(apple): axum::extract::Extension<
+        Arc<Mutex<crate::metrics::AppleSiliconMetrics>>,
+    >,
+    axum::extract::Extension(nvidia): axum::extract::Extension<
+        Arc<Mutex<crate::metrics::NvidiaMetrics>>,
+    >,
+    axum::extract::Extension(node_id_ext): axum::extract::Extension<NodeId>,
+) -> Json<serde_json::Value> {
+    let port = *port_rx.borrow();
+    learn_installed(port, &caps, &residency).await;
+
+    let (states, transitions, persisted) = match residency.lock() {
+        Ok(t) => (
+            t.states().cloned().collect::<Vec<_>>(),
+            t.history().cloned().collect::<Vec<_>>(),
+            t.persisting(),
+        ),
+        Err(_) => (Vec::new(), Vec::new(), false),
+    };
+    let refs: Vec<&crate::residency::ModelState> = states.iter().collect();
+    let now_ms = crate::residency::now_ms();
+
+    let (ps_context_length, ps_expires_at) = caps
+        .lock()
+        .map(|c| (c.ps_context_length, c.ps_expires_at))
+        .unwrap_or((false, false));
+
+    let inspection = crate::findings::evaluate(&crate::findings::RuleInputs {
+        states: &refs,
+        transitions: &transitions,
+        ps_context_length,
+        ps_expires_at,
+        now_ms,
+    });
+
+    let apple_now = apple.lock().map(|g| g.clone()).unwrap_or_default();
+    let nvidia_now = nvidia.lock().map(|g| g.clone()).unwrap_or_default();
+    let headroom = crate::readiness::headroom(&apple_now, &nvidia_now, &refs);
+    let readiness = crate::readiness::assess(&crate::readiness::Inputs {
+        states: refs,
+        transitions: &transitions,
+        headroom,
+        activity_signal: ps_expires_at,
+        now_ms,
+    });
+
+    Json(serde_json::json!({
+        "node_id":        node_id_ext.0.as_str(),
+        "observed_at_ms": now_ms,
+        "findings":       inspection.findings,
+        "not_checked":    inspection.not_checked,
+        "readiness":      readiness,
+        "headroom":       headroom,
+        // What the rules actually had to read. A caller that sees two
+        // transitions should know whether that is the whole history or the
+        // tail of it.
+        "history": {
+            "transitions":     transitions.len(),
+            "persisted":       persisted,
+            "scope":           if persisted { "stored" } else { "this process only" },
+        },
+    }))
+}
+
+/// GET /v1/findings — the findings alone, without readiness.
+///
+/// `?id=` narrows to one. Resolved findings are not served yet: that needs the
+/// findings table, so the response says so rather than implying the list is
+/// everything there has ever been.
+pub(crate) async fn handle_v1_findings(
+    axum::extract::Extension(OllamaPortRx(port_rx)): axum::extract::Extension<OllamaPortRx>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+    axum::extract::Extension(residency): axum::extract::Extension<
+        crate::residency::SharedTracker,
+    >,
+    axum::extract::Extension(caps): axum::extract::Extension<crate::caps::SharedCaps>,
+    axum::extract::Extension(node_id_ext): axum::extract::Extension<NodeId>,
+) -> axum::response::Response {
+    let port = *port_rx.borrow();
+    learn_installed(port, &caps, &residency).await;
+
+    let (states, transitions) = match residency.lock() {
+        Ok(t) => (
+            t.states().cloned().collect::<Vec<_>>(),
+            t.history().cloned().collect::<Vec<_>>(),
+        ),
+        Err(_) => (Vec::new(), Vec::new()),
+    };
+    let refs: Vec<&crate::residency::ModelState> = states.iter().collect();
+    let (ps_context_length, ps_expires_at) = caps
+        .lock()
+        .map(|c| (c.ps_context_length, c.ps_expires_at))
+        .unwrap_or((false, false));
+
+    let inspection = crate::findings::evaluate(&crate::findings::RuleInputs {
+        states: &refs,
+        transitions: &transitions,
+        ps_context_length,
+        ps_expires_at,
+        now_ms: crate::residency::now_ms(),
+    });
+
+    if let Some(id) = params.get("id") {
+        return match inspection.findings.iter().find(|f| &f.id == id) {
+            Some(f) => Json(serde_json::json!({
+                "node_id": node_id_ext.0.as_str(),
+                "finding": f,
+            }))
+            .into_response(),
+            None => (
+                axum::http::StatusCode::NOT_FOUND,
+                Json(serde_json::json!({
+                    "error": format!("no open finding with id {id}"),
+                    "hint":  "GET /v1/findings lists the open ones; resolved findings are not stored yet",
+                })),
+            )
+                .into_response(),
+        };
+    }
+
+    Json(serde_json::json!({
+        "node_id":     node_id_ext.0.as_str(),
+        "findings":    inspection.findings,
+        "not_checked": inspection.not_checked,
+        // Named so a caller does not read an empty list as "nothing has ever
+        // been wrong on this host".
+        "includes_resolved": false,
+    }))
+    .into_response()
+}
+
 /// Health snapshot — operator-facing diagnostic for "are the API routes I
 /// expect actually live?". Reports agent version, build target, DuckDB
 /// store state (healthy / disabled), and which feature surface that gates.
