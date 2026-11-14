@@ -307,6 +307,28 @@ fn finding_id(rule: &str, models: &[String]) -> String {
     format!("F-{:06x}", h & 0xff_ffff)
 }
 
+/// A lookback window like `24h`, `90m` or `7d`, in milliseconds.
+///
+/// Parsed once, here, rather than in both the route and the CLI: the CLI passes
+/// the string through and the route answers 400 on a bad one, so there is no
+/// second implementation to disagree with this.
+pub(crate) fn parse_lookback_ms(s: &str) -> Option<i64> {
+    let s = s.trim();
+    let (digits, unit) = s.split_at(s.find(|c: char| !c.is_ascii_digit())?);
+    let n: i64 = digits.parse().ok()?;
+    if n <= 0 {
+        return None;
+    }
+    let mult = match unit {
+        "s" => 1_000,
+        "m" => 60_000,
+        "h" => 3_600_000,
+        "d" => 86_400_000,
+        _ => return None,
+    };
+    n.checked_mul(mult)
+}
+
 /// A rule that did not run, and why.
 ///
 /// The spec's sixth evidence rule applied to whole rules: when evidence is
@@ -1259,6 +1281,21 @@ mod tests {
             finding_id("r", &["ab".to_string(), "c".to_string()]),
             finding_id("r", &["a".to_string(), "bc".to_string()]),
         );
+    }
+
+    #[test]
+    fn a_lookback_window_is_read_or_refused_never_guessed() {
+        assert_eq!(parse_lookback_ms("45s"), Some(45_000));
+        assert_eq!(parse_lookback_ms("90m"), Some(5_400_000));
+        assert_eq!(parse_lookback_ms("24h"), Some(86_400_000));
+        assert_eq!(parse_lookback_ms(" 7d "), Some(604_800_000));
+        // A bare number has no unit, and defaulting one would answer a
+        // different question than the caller asked.
+        for bad in ["", "24", "h", "24w", "-1h", "0h", "1.5h", "24 h", "abc"] {
+            assert_eq!(parse_lookback_ms(bad), None, "{bad:?} must be refused");
+        }
+        // No silent wrap on an absurd window.
+        assert_eq!(parse_lookback_ms("9999999999999999999d"), None);
     }
 
     #[test]

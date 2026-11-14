@@ -894,6 +894,7 @@ pub(crate) async fn handle_v1_readiness(
 /// than passing off as a quiet "nothing happened".
 pub(crate) async fn handle_v1_inspect(
     axum::extract::Extension(OllamaPortRx(port_rx)): axum::extract::Extension<OllamaPortRx>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
     axum::extract::Extension(residency): axum::extract::Extension<
         crate::residency::SharedTracker,
     >,
@@ -905,11 +906,31 @@ pub(crate) async fn handle_v1_inspect(
         Arc<Mutex<crate::metrics::NvidiaMetrics>>,
     >,
     axum::extract::Extension(node_id_ext): axum::extract::Extension<NodeId>,
-) -> Json<serde_json::Value> {
+) -> axum::response::Response {
+    // An unparseable window is an error, not a silently ignored argument: a
+    // caller asking for the last hour and being given everything would read
+    // the answer as being about the last hour.
+    let since_ms = match params.get("since") {
+        Some(raw) => match crate::findings::parse_lookback_ms(raw) {
+            Some(ms) => Some(ms),
+            None => {
+                return (
+                    axum::http::StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": format!("could not read {raw:?} as a window"),
+                        "hint":  "a count and a unit, one of s m h d — for example 24h",
+                    })),
+                )
+                    .into_response();
+            }
+        },
+        None => None,
+    };
+
     let port = *port_rx.borrow();
     learn_installed(port, &caps, &residency).await;
 
-    let (states, transitions, persisted) = match residency.lock() {
+    let (states, all_transitions, persisted) = match residency.lock() {
         Ok(t) => (
             t.states().cloned().collect::<Vec<_>>(),
             t.history().cloned().collect::<Vec<_>>(),
@@ -919,6 +940,16 @@ pub(crate) async fn handle_v1_inspect(
     };
     let refs: Vec<&crate::residency::ModelState> = states.iter().collect();
     let now_ms = crate::residency::now_ms();
+
+    // The rules carry their own windows; `since` narrows what they are allowed
+    // to see on top of that, so a shorter window can only reduce findings.
+    let transitions: Vec<crate::residency::Transition> = match since_ms {
+        Some(ms) => all_transitions
+            .into_iter()
+            .filter(|t| t.ts_ms >= now_ms - ms)
+            .collect(),
+        None => all_transitions,
+    };
 
     let (ps_context_length, ps_expires_at) = caps
         .lock()
@@ -947,6 +978,10 @@ pub(crate) async fn handle_v1_inspect(
     Json(serde_json::json!({
         "node_id":        node_id_ext.0.as_str(),
         "observed_at_ms": now_ms,
+        "since_ms":       since_ms,
+        // The renderer passes this to the readiness section, which says "not
+        // checked: whether any model is in use" without it.
+        "activity_signal": ps_expires_at,
         "findings":       inspection.findings,
         "not_checked":    inspection.not_checked,
         "readiness":      readiness,
@@ -960,6 +995,7 @@ pub(crate) async fn handle_v1_inspect(
             "scope":           if persisted { "stored" } else { "this process only" },
         },
     }))
+    .into_response()
 }
 
 /// GET /v1/findings — the findings alone, without readiness.
