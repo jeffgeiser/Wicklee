@@ -8,6 +8,32 @@ For detailed documentation, visit [wicklee.dev/docs](https://wicklee.dev/docs).
 
 ## Shipped
 
+### Release history
+
+Agent versions are tagged by hand; `install.sh` serves the nightly build of
+`main`, and self-update follows the newest tag. The Shipped entries below are
+grouped by feature, not by version, so this table is the index.
+
+| Version | Date | Content |
+| --- | --- | --- |
+| v0.13.1 | 2026-11-14 | ARM64 NVIDIA self-update fix — `agent_platform()` had no aarch64 NVML branch, so those nodes self-updated onto the no-NVML binary and lost GPU metrics silently; the cloud version endpoint was missing the matching arm |
+| v0.13.0 | 2026-11-14 | Phase 1 steps 0 to 3 (see Planned). Release pipeline repairs: macOS runner pin, both NVIDIA Linux assets moved to the glibc 2.31 floor, musl build added to CI |
+| v0.12.0 | 2026-10-03 | `main.rs` split into modules on both agent and cloud; Apache 2.0 for the agent and local dashboard, FSL retained on the control plane; legal pages and Paddle merchant-of-record; the report energy/token integration fix (weight rows by real duration) |
+| v0.11.1 | 2026-07-16 | Self-hosted control plane, Helm chart, idle-waste report with weekly digest, capacity planner and migration advisor, demo fleet mode |
+| v0.11.0 | 2026-07-04 | RBAC, audit export and SIEM drain, org-wide API keys, SLOs with error budgets, tag scoping, alert silences, fleet config management, chargeback |
+| v0.10.0 | 2026-06-17 | Security and calculation review passes, SEO prerendering, harvester supervision, React error boundary |
+
+**No release published between 2026-10-11 and 2026-11-14.** GitHub withdrew the
+arm64 image behind the `macos-14` runner label, so `build-macos` cancelled in
+about a second with no steps run. Both publish jobs carry it in `needs:`, and a
+*cancelled* dependency makes a dependent job **skip** rather than fail — so
+every release run built five assets, published none, and reported success.
+`curl | bash` served the 2026-10-11 binary for five weeks while `Cargo.toml` sat
+at 0.12.0, and nothing anywhere said so. Fixed by pinning `macos-15`
+(`macos-latest` is `macos-26`, which is where the pin goes next). The failure
+mode is invisible by construction: if a build job is ever added to `needs:`,
+check that its cancellation would fail the publish rather than skip it.
+
 ### Standalone Agent
 Single Rust binary, embedded React dashboard, Apple Silicon deep metal telemetry, sudoless GPU metrics, global CLI installer.
 
@@ -169,6 +195,71 @@ The SPA served every route from one index.html shell with identical landing-page
 ---
 
 ## Planned
+
+### ★ Phase 1 — `wicklee inspect` (November 2026 strategy revision) — ACTIVE
+
+`docs/STRATEGY.md` (November 2026) is the strategic source of truth. It
+supersedes the v3.2 brief and the earlier GTM and next-steps documents, and
+`docs/PHASE1_SPEC.md` is its implementation spec. **This is the work in
+flight.** Everything below this entry predates that revision and has not been
+re-prioritised against it — read the Readiness Program and GTM ordering as the
+July–September view until it is.
+
+Phase 1 answers three questions on one Ollama host, from the CLI, HTTP and MCP:
+what is happening with my local inference, which models can run safely right
+now, and what could I change and how do I verify the improvement. The stage-1
+command surface is `inspect`, `ready`, `findings`, `fingerprint`, `verify`.
+
+**Shipped in v0.13.0 — steps 0 to 3:**
+
+- **Step 0 — verification.** Measured against a real Ollama 0.40.16 host rather
+  than assumed from documentation. `docs/ollama-capabilities.md` answers V1–V9;
+  `docs/CLEANUP_AUDIT.md` maps every removal candidate to its callers. Three
+  rules changed as a result, and `context_limit` was **dropped outright** — no
+  truncation signal exists on this runtime, and `prompt_eval_count` is not
+  clamped to the context, so the proposed trigger would not have fired.
+  `Displacement::Confirmed` was removed for the same reason: eviction is
+  memory-gated and not reproducible.
+- **Step 1 — `ollama_client.rs`, `caps.rs`, `auth.rs`.** Typed Ollama responses
+  with `model_info` keys resolved from `general.architecture` (the hardcoded
+  `llama.*` prefix nulled context and KV-cache for every non-llama model).
+  Three fixes to shipping behaviour: the throughput probe now sends the running
+  `num_ctx` — it was silently reloading a 65536-context model at 4096 on every
+  interval, measured at 2,626 ms against 3 ms after; the `model_info` prefix;
+  and inbound authentication, which **did not exist at all**, leaving
+  `/api/pair/claim` and `/mcp` reachable by anything on the network under a
+  non-loopback bind. **Breaking:** a non-loopback bind with no `session_token`
+  now refuses to start.
+- **Step 2 — `residency.rs` and the `model_transitions` table.** Per-model
+  residency state and a real transition log, with probe- and test-caused
+  changes tagged by cause. `query_model_switches` reads the table instead of
+  inferring switches from the metrics table's primary-model column.
+- **Step 3 — `readiness.rs`, `GET /v1/state`, `GET /v1/readiness`,
+  `wicklee ready`.** The first subcommand, and the first two routes on the
+  `/v1` surface.
+
+**Next — step 4.** `findings.rs`: the four rules (`cpu_split`, `context_reset`,
+`eviction_churn`, `expiry_reload`), the findings table and IDs, the
+observations adapter, `GET /v1/inspect`, `wicklee inspect`, `wicklee findings`.
+The evidence machinery — `Evidence`, `Statement`, the `observed` and `inferred`
+constructors — landed with step 3; none of the four rules exist yet. The spec
+names step 4 as the point where Phase 1 is shippable without any test requests:
+*"If time runs short, ship after step 4 and continue."*
+
+**Decide before starting step 4:** the ~3,500-line production-code budget is
+about 2,798 spent, leaving ~700 for steps 4 through 8 — and steps 5 and 6 still
+need `receipts.rs` and `fingerprint.rs`. Either the budget moves or the scope
+does. See *Measured* in `docs/PHASE1_SPEC.md`.
+
+**Then:** step 5 receipts and fingerprint, 6 verify, 7 MCP tools, 8 fault
+injection and the reference controller, 9 acceptance runs, 10 README and this
+file.
+
+*This entry is a status index, not the rewrite.* Commit `49e332d` left the
+ROADMAP alone on purpose — repositioning the whole document around
+`docs/STRATEGY.md` is step 10, after the acceptance runs, when there are
+results to write up. Until then this section says where Phase 1 stands and
+flags that the ordering below it is pre-revision.
 
 ### ★ Business & Enterprise Readiness Program (July 2026 strategic review)
 The July 2026 Teams/Enterprise review found the Team tier strong and differentiated, but the Business/Enterprise story thin where enterprise buyers screen. This program is the ship-order plan. Each item carries implementation pointers + acceptance criteria so any session can pick one up cold. Work items sequentially within a phase; phases 1→5 are priority order.
