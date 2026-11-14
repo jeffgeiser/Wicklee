@@ -238,18 +238,30 @@ command surface is `inspect`, `ready`, `findings`, `fingerprint`, `verify`.
   `wicklee ready`.** The first subcommand, and the first two routes on the
   `/v1` surface.
 
-**Next — step 4.** `findings.rs`: the four rules (`cpu_split`, `context_reset`,
-`eviction_churn`, `expiry_reload`), the findings table and IDs, the
-observations adapter, `GET /v1/inspect`, `wicklee inspect`, `wicklee findings`.
-The evidence machinery — `Evidence`, `Statement`, the `observed` and `inferred`
-constructors — landed with step 3; none of the four rules exist yet. The spec
-names step 4 as the point where Phase 1 is shippable without any test requests:
-*"If time runs short, ship after step 4 and continue."*
+**Merged to main, not yet tagged — step 4.** `findings.rs`: the four rules
+(`cpu_split`, `context_reset`, `eviction_churn`, `expiry_reload`), the
+`findings` table with resolution, content-derived IDs, the observations
+adapter, `GET /v1/inspect`, `GET /v1/findings`, `wicklee inspect`,
+`wicklee findings`. 218 tests. This is the point the spec names as shippable
+without any test requests: *"If time runs short, ship after step 4 and
+continue."* Two things to know about what it does and does not do:
 
-**Decide before starting step 4:** the ~3,500-line production-code budget is
-about 2,798 spent, leaving ~700 for steps 4 through 8 — and steps 5 and 6 still
-need `receipts.rs` and `fingerprint.rs`. Either the budget moves or the scope
-does. See *Measured* in `docs/PHASE1_SPEC.md`.
+- **Resolution is observed, not scheduled.** A finding's `resolved_at_ms` is
+  when Wicklee last looked and did not see it, so a finding that stops firing
+  because the agent stopped looking is not resolved.
+- **Most adapted hardware findings carry only a title and a measurement.** The
+  nineteen patterns' prose mixes measurement with mechanism, and a mechanism is
+  a cause, which cannot be labelled observed. Separating the two is real work
+  the cloud also consumes, and it is not step 4. Each dropped sentence is
+  logged, so that work has a worklist.
+
+**Still undecided: the production-code budget.** The ~3,500-line budget is
+3,762 spent in the seven new modules after step 4, plus 401 lines in
+`http_api.rs` and `store.rs` that the budget never counted — and steps 5 and 6
+still need `receipts.rs` and `fingerprint.rs`. The recommendation is to re-cut
+to ~4,500 excluding `auth.rs`, which was never in the original budget; the
+alternative is to cut receipts or the fingerprint to fit an estimate made
+before anyone had read the code. See *Measured* in `docs/PHASE1_SPEC.md`.
 
 **Then:** step 5 receipts and fingerprint, 6 verify, 7 MCP tools, 8 fault
 injection and the reference controller, 9 acceptance runs, 10 README and this

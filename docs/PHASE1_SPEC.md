@@ -943,7 +943,7 @@ Steps are in dependency order. Each step ends with its tests passing and a short
 | 1 | **Done.** `ollama_client.rs` and `caps.rs`. Typed responses with every field optional, with `model_info` keys resolved from `details.family` rather than hardcoded to `llama.*`, accepting both scalar and array values. **Fix the probe to pass the running `num_ctx`.** Build inbound auth: `ConnectInfo<SocketAddr>` on the router, the peer-address helper, the token check and the startup rule, covering `/api` and `/mcp`. Move the startup banner off stdout. Record the 0.12.0 release binary size | 0 | Existing harvester tests pass. Capability record is correct against the mock with fields removed. `model_info` parses for a non-llama family. The probe no longer changes a model's context. A non-loopback bind with no token refuses to start |
 | 2 | **Done.** `residency.rs` and the `model_transitions` table. The harvester forwards each poll. Per-model expiry and activity. Probe and test requests tagged by cause. In-memory log for musl | 1 | Scripted poll sequences produce the expected transitions. `query_model_switches` reads the new table |
 | 3 | **Done.** `readiness.rs`, `GET /v1/state`, `GET /v1/readiness`, `cli.rs` with `wicklee ready` | 2 | Unit tests cover every classification branch and displacement level |
-| 4 | `findings.rs`: types, evidence constructors, IDs, the `findings` table. Rules `cpu_split`, `context_reset`, `eviction_churn`, `expiry_reload`. The observations adapter. `GET /v1/inspect`, `wicklee inspect`, `wicklee findings` | 2, 3 | Each rule passes positive and negative synthetic cases. A healthy log yields no findings. `context_reset` fires on a scripted context drop and ignores probe-caused transitions |
+| 4 | **Done.** `findings.rs`: types, evidence constructors, content-derived IDs, the `findings` table with resolution and reopen. Rules `cpu_split`, `context_reset`, `eviction_churn`, `expiry_reload`. The observations adapter. `GET /v1/inspect`, `GET /v1/findings`, `wicklee inspect`, `wicklee findings`. Three deviations, all recorded below | 2, 3 | Each rule passes positive and negative synthetic cases. A healthy log yields no findings. `context_reset` fires on a scripted context drop and ignores probe-caused transitions |
 | 5 | `receipts.rs` and the `receipts` table. `POST /v1/receipts` for callbacks, rejecting payloads carrying content. Widen the proxy trace and emit proxy receipts. `fingerprint.rs` with warm and cold tests, consent, restore. `wicklee fingerprint` | 1, 2 | Receipts match the mock's timings. A posted callback receipt is stored and counts as activity. A payload with a `prompt` field is rejected. Refuses without consent. Tracker shows test requests tagged |
 | 6 | Verify runs and comparison. `wicklee verify`. Rule `baseline_regression`. Verified statements | 4, 5 | Two runs with a changed mock configuration report "improved." Unchanged runs report "no measurable change" |
 | 7 | MCP: add three tools, retire two | 3, 4 | Tool output equals the HTTP JSON |
@@ -953,43 +953,56 @@ Steps are in dependency order. Each step ends with its tests passing and a short
 
 The remote-access rule moved from step 3 to step 1, because V8 showed the existing routes are already exposed.
 
-### Measured: steps 0 to 3
+### Measured: steps 0 to 4
 
 | Measure | Value |
 | --- | --- |
 | Agent lines, pristine 0.12.0 | 15,250 |
 | Agent lines, after step 1 | 17,219, of which about 1,163 are production code against the ~3,500 budget |
 | Agent lines, after step 3 | 21,666, of which about 2,798 are production code |
+| Agent lines, after step 4 | 24,031, of which 3,762 are production code in the seven new modules, plus 401 added to `http_api.rs` and `store.rs` |
 | Release binary, pristine 0.12.0 | 24,411,328 bytes (23.28 MB) |
 | Release binary, after step 1 | 24,477,808 bytes, +0.27% |
-| Release binary, after step 3 | Not measured. Measure it at step 4 on the same toolchain, or the +0.27% figure loses its comparison |
+| Release binary, after step 3 | Not measured, and now unmeasurable — step 3's tree is no longer checked out on this toolchain |
+| Release binary, after step 4 | 24,677,312 bytes, +1.09% on pristine and +0.81% on step 1. Same machine, rustc 1.94.1. The step 1 figure was taken a day earlier and its toolchain was not recorded, so treat the delta as close rather than exact |
 | Tests, after step 1 | 124 passing, clippy clean at every commit |
 | Tests, after step 3 | 183 passing, clippy clean at every commit |
+| Tests, after step 4 | 218 passing, clippy clean at every commit |
 | Steps 0 to 3 shipped in | v0.13.0, all on 2026-11-13 |
+| Step 4 shipped in | PR #104, merged 2026-11-14, not yet tagged |
 
-Both binary figures were measured on the same toolchain, which is the only way the comparison means anything.
+The pristine and step 1 figures were measured on the same toolchain, which is the only way that comparison means anything. The step 4 figure is on rustc 1.94.1 and its toolchain match to step 1 is unverified, so the +0.81% is indicative.
 
-**The production-code budget needs re-cutting before step 4.** The ~3,500-line
-budget covers Phase 1 as a whole. The seven new modules are at roughly 2,798
-production lines after step 3:
+**The production-code budget is blown, and the decision is still open.** The
+~3,500-line budget covers Phase 1 as a whole. The seven new modules are at
+3,762 production lines after step 4:
 
-| Module | Production lines |
-| --- | --- |
-| `residency.rs` | 821 |
-| `readiness.rs` | 596 |
-| `ollama_client.rs` | 419 |
-| `auth.rs` | 318 |
-| `cli.rs` | 299 |
-| `findings.rs` | 202 |
-| `caps.rs` | 143 |
+| Module | Production lines | After step 3 |
+| --- | --- | --- |
+| `findings.rs` | 912 | 202 |
+| `residency.rs` | 830 | 821 |
+| `readiness.rs` | 595 | 596 |
+| `cli.rs` | 548 | 299 |
+| `ollama_client.rs` | 418 | 419 |
+| `auth.rs` | 317 | 318 |
+| `caps.rs` | 142 | 143 |
 
-That leaves about 700 lines for steps 4 through 8. Step 4 alone — four rules
-with positive and negative cases, a table, ID generation, the observations
-adapter, a route and two CLI verbs — will plausibly spend all of it, and steps
-5 and 6 add `receipts.rs` and `fingerprint.rs` on top. Either the budget moves
-or the scope does; discovering it blown at step 6 is the outcome to avoid. Note
-that `auth.rs` was not in the original budget at all — it was added to step 1
-after V8 found no inbound authentication existed.
+Step 4 also spent 401 production lines in files the budget never counted: 361
+in `http_api.rs` for the two routes, 40 in `store.rs` for the table. Steps 5
+and 6 still add `receipts.rs` and `fingerprint.rs` on top of that.
+
+Two things the overrun is not. It is not scope creep: step 4 built its build
+list and nothing else. And it is not a surprise at step 6, which was the
+outcome worth avoiding — it is a number on the table with four steps of
+implementation left to spend against it.
+
+The recommendation, which is the maintainer's to accept or refuse: re-cut to
+~4,500 production lines excluding `auth.rs`, on the grounds that `auth.rs` was
+never in the original budget at all — it was added to step 1 after V8 found no
+inbound authentication existed — and that the ~3,500 estimate was made before
+anyone had read the code it was estimating. The alternative is to cut receipts
+or the fingerprint to fit an estimate that predates the evidence, which trades
+a real capability for a number.
 
 **The probe fix is verified against a real runtime, not only unit tests.** The old request body took a model loaded at `num_ctx` 8192 down to 4096 with a 2,626 ms reload. The new body holds 8192 and returns in 3 ms. That is the V3 bug reproduced and then closed, with a measurement on each side.
 
@@ -999,6 +1012,30 @@ Two deviations from a literal reading of step 1, both accepted:
 
 - `RuntimeCaps` was given a real consumer on `/api/health` rather than leaving `missing()` dead. Correct — an unused capability record cannot be verified, and the spec requires `inspect` to report what it could not check.
 - The running `context_length` from `/api/ps` was **not** published as a `MetricsPayload` field, because that needs an agent, cloud and frontend three-way sync and `cloud/` is out of scope. The probe consumes it directly instead. Correct, and publishing belongs with the residency tracker in step 2, where the transition log needs it anyway.
+
+Three deviations from a literal reading of step 4, all accepted:
+
+- **`context_reset` accepts an expiry reset as well as a load.** A literal
+  reading — fire on a context drop "with a load in the same transition" — would
+  have built a rule that almost never fires. A reload takes about 2.6 s and
+  `/api/ps` is polled every 5 s, so the tracker usually never observes the
+  model absent. The rule accepts a `Loaded` **or** an `ExpiryReset` at the same
+  timestamp. Correct: the spec's intent is to catch a caller that silently
+  reloads a model at a smaller context, and that is the signal that is actually
+  observable.
+- **The observations adapter keeps only the measured half of each pattern's
+  prose.** The nineteen hardware patterns' `hook` is purely measured
+  ("5.2 MB/s swap · 12.3 tok/s") and becomes the observed statement. Their
+  `body` mixes measurement with mechanism ("swap pressure forces the OS to page
+  model weights to disk"), and a mechanism is a cause, which evidence rule 3
+  forbids labelling observed. The `body` is offered as an inferred statement and
+  kept only if it hedges, which most do not, so most adapted findings read as
+  title plus measurement. Every dropped sentence is logged. Rewording nineteen
+  shipped patterns to separate measurement from mechanism is real work that the
+  cloud also consumes, and it is not step 4.
+- **Finding IDs are content-derived, not sequential.** FNV-1a over the rule name
+  and the sorted model list, rendered `F-xxxxxx`. A counter would renumber on
+  every restart, and step 6's `verify` compares two runs by id.
 
 ### Notes for the implementer
 
