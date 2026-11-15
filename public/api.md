@@ -52,10 +52,10 @@ response lists it under `not_checked` rather than returning an empty result.
 | GET | /v1/readiness?model=X | `ready_now`, `requires_loading`, `would_displace` or `cannot_determine`, with memory headroom and the evidence. `valid_for_s` says how long it holds. A `requires_loading` answer carries `coexistence: "unverified"` while another model is resident: it fits by accounting, and on the one host measured the runtime still evicted a resident model in 5 of 6 such cases |
 | GET | /v1/inspect?since=24h | Findings, readiness and what was not checked, in one answer |
 | GET | /v1/findings?all=true | The findings alone. Resolution is observed, not scheduled: a finding resolves because an evaluation ran and did not produce it |
-| GET | /v1/receipts?model=X&limit=N | Stored per-request measurements with a median and range |
+| GET | /v1/receipts?model=X&limit=N | Stored per-request measurements with a median and range. `persisted` says whether they survive a restart: a build with no local store keeps them in memory only |
 | POST | /v1/receipts | Your runtime's final-response metadata, stored as a receipt. Durations are nanoseconds in the runtime's own field names. **Refuses any payload containing `prompt`, `response`, `messages` or `context` with a 400 naming the field** |
 | POST | /v1/fingerprint | A consented test run: `decode_rate`, `cold_load` or `workflow_replay`. Without `"consent": true` it answers 400 with the plan and the sentence you would agree to |
-| POST | /v1/verify | Re-runs a finding's test and compares it with the first run. `improved`, `worse` or `no measurable change`. Same consent gate |
+| POST | /v1/verify | Re-runs a finding's test and compares it with the first run. `improved`, `worse` or `no measurable change`. Same consent gate. **501 on a build with no local store** (the statically linked Linux build), which has no stored finding to look up and no durable baseline to compare against |
 
 ### POST /v1/receipts
 

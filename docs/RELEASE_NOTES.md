@@ -137,6 +137,12 @@ Method, raw transcripts and reproduction steps: [`docs/PHASE1_RESULTS.md`](PHASE
 
 Also known:
 
+- **The statically linked Linux build has no local store**, so it keeps
+  receipts and findings in memory until the agent restarts rather than in
+  DuckDB. `GET /v1/receipts` and `POST /v1/fingerprint` work and report
+  `persisted: false`; `baseline_regression` is listed as not checked, with the
+  reason; and `POST /v1/verify` answers 501 naming it, because a verdict needs
+  a durable baseline to be a verdict about.
 - **`cpu_split` cannot fire on unified memory.** The runtime reports the whole
   footprint as accelerator-resident, so there is no boundary to fall outside of.
   `inspect` says so in its not-checked list rather than staying silent.

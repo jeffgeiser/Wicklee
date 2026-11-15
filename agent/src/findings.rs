@@ -629,7 +629,10 @@ pub(crate) fn evaluate(inputs: &RuleInputs) -> Inspection {
     #[cfg(target_env = "musl")]
     not_checked.push(NotChecked {
         rule: "baseline_regression",
-        reason: "this build has no local store, so it keeps no receipts to compare".into(),
+        reason: "this build keeps receipts in memory rather than in a store, and the rules are \
+                 not evaluated against them — POST /v1/fingerprint and GET /v1/receipts still \
+                 work and report persisted: false"
+            .into(),
     });
 
     // After the rules, because a verified change is about a finding rather
