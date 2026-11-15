@@ -1,5 +1,5 @@
 import React from 'react';
-import { ArrowLeft, Terminal, Zap, Settings, Cpu, Globe, Info, Lightbulb, Shield, Activity, Clock, BarChart2, Users, Bell } from 'lucide-react';
+import { ArrowLeft, Terminal, Zap, Settings, Cpu, Globe, Info, Lightbulb, Shield, Activity, Clock, BarChart2, Users, Bell, Stethoscope } from 'lucide-react';
 import Logo from '../components/Logo';
 import { CopyButton } from '../components/shared/CopyButton';
 
@@ -80,6 +80,7 @@ const Td: React.FC<{ children: React.ReactNode; mono?: boolean; className?: stri
 const NAV = [
   { id: 'quickstart',  label: 'Quick Start' },
   { id: 'cli',         label: 'CLI Reference' },
+  { id: 'diagnostics', label: 'Diagnostics (/v1)' },
   { id: 'wes',         label: 'WES Score' },
   { id: 'states',      label: 'Node States' },
   { id: 'latency',     label: 'Latency & TTFT' },
@@ -293,7 +294,41 @@ sudo ~/.wicklee/bin/wicklee --install-service   # re-install as daemon`}</Code>
             accent="border-gray-500/20"
             title="CLI Reference"
           >
-            <p>All flags are parsed at startup. The agent exits immediately for one-shot commands (<code className="font-mono text-xs text-gray-300">--version</code>, <code className="font-mono text-xs text-gray-300">--install-service</code>, etc.) and runs the full server for everything else.</p>
+            <p>Two kinds of command. The <strong className="text-white">subcommands</strong> ask a running agent a question and print the answer — they are clients of <code className="font-mono text-xs text-gray-300">localhost:7700</code>, like <code className="font-mono text-xs text-gray-300">--status</code>, and they never start a server. The <strong className="text-white">flags</strong> are parsed at startup: the agent exits immediately for one-shot flags and runs the full server for everything else.</p>
+
+            {/* Subcommands */}
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm border-collapse">
+                <thead>
+                  <tr className="border-b border-gray-700">
+                    <th className="text-left py-2 pr-6 text-xs font-semibold text-gray-500 uppercase tracking-wider w-64">Subcommand</th>
+                    <th className="text-left py-2 pr-6 text-xs font-semibold text-gray-500 uppercase tracking-wider">What it does</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-800/60">
+                  <tr>
+                    <td className="py-3 pr-6 font-mono text-xs text-indigo-300 align-top whitespace-nowrap">wicklee inspect</td>
+                    <td className="py-3 text-gray-400 align-top">What is happening, which models can run now, and what to change. <code className="font-mono text-xs text-gray-300">--since 24h</code> sets the window, <code className="font-mono text-xs text-gray-300">--json</code> prints the route body verbatim. See <a href="#diagnostics" className="text-blue-400 hover:text-blue-300">Diagnostics</a>.</td>
+                  </tr>
+                  <tr>
+                    <td className="py-3 pr-6 font-mono text-xs text-indigo-300 align-top whitespace-nowrap">wicklee ready [MODEL]</td>
+                    <td className="py-3 text-gray-400 align-top">Readiness only: ready now, requires loading, may require eviction, or cannot determine — with the headroom and the evidence behind it. No model named means every model it knows about.</td>
+                  </tr>
+                  <tr>
+                    <td className="py-3 pr-6 font-mono text-xs text-indigo-300 align-top whitespace-nowrap">wicklee findings [--all]</td>
+                    <td className="py-3 text-gray-400 align-top">Findings alone. <code className="font-mono text-xs text-gray-300">--all</code> includes resolved ones. A finding resolves because an evaluation ran and did not produce it, never because a timer expired.</td>
+                  </tr>
+                  <tr>
+                    <td className="py-3 pr-6 font-mono text-xs text-indigo-300 align-top whitespace-nowrap">wicklee fingerprint MODEL</td>
+                    <td className="py-3 text-gray-400 align-top">Measure a model and store a baseline. <strong className="text-gray-300">Asks first</strong> — it sends real inference requests, and <code className="font-mono text-xs text-gray-300">--cold</code> unloads the model to time a cold load. Every request it sends is tagged so the diagnostic rules ignore it.</td>
+                  </tr>
+                  <tr>
+                    <td className="py-3 pr-6 font-mono text-xs text-indigo-300 align-top whitespace-nowrap">wicklee verify F-xxxxxx</td>
+                    <td className="py-3 text-gray-400 align-top">Re-run a finding's own test and compare against the last run: medians, ranges, what changed in the configuration, and a verdict. Also asks first.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
 
             {/* Command table */}
             <div className="overflow-x-auto">
@@ -330,6 +365,10 @@ sudo ~/.wicklee/bin/wicklee --install-service   # re-install as daemon`}</Code>
                     <td className="py-3 text-gray-400 align-top">Stop and remove the background service. The binary is not deleted — you can re-register with <code className="font-mono text-xs text-gray-300">--install-service</code> at any time.</td>
                   </tr>
                   <tr>
+                    <td className="py-3 pr-6 font-mono text-xs text-indigo-300 align-top">wicklee --no-cloud</td>
+                    <td className="py-3 text-gray-400 align-top">Run this process with every outbound fleet request off: no telemetry push, no self-update, and the pairing routes answer 409. For an agent started by hand on a host that is already paired, which would otherwise be a second writer pushing under the installed node's identity. <code className="font-mono text-xs text-gray-300">PORT</code> isolates the listener, not the identity.</td>
+                  </tr>
+                  <tr>
                     <td className="py-3 pr-6 font-mono text-xs text-indigo-300 align-top">sudo wicklee</td>
                     <td className="py-3 text-gray-400 align-top"><strong className="text-gray-300">Linux only.</strong> Run the agent with elevated access for full hardware metrics: CPU power draw (RAPL) and deeper thermal sensor access. Not required on macOS — hardware data is read via IOKit without root.</td>
                   </tr>
@@ -360,6 +399,16 @@ sudo ~/.wicklee/bin/wicklee --install-service   # re-install as daemon`}</Code>
                       <td className="py-3 pr-6 font-mono text-xs text-gray-500 align-top">hosted wicklee.dev</td>
                       <td className="py-3 text-gray-400 align-top">Override the fleet cloud endpoint the agent pairs with and pushes telemetry to. Set it before pairing for self-hosted or dev fleet deployments.</td>
                     </tr>
+                    <tr>
+                      <td className="py-3 pr-6 font-mono text-xs text-amber-300 align-top">WICKLEE_OLLAMA_PORT</td>
+                      <td className="py-3 pr-6 font-mono text-xs text-gray-500 align-top">11434</td>
+                      <td className="py-3 text-gray-400 align-top">Which Ollama the harvester watches. Point a second agent at a private <code className="font-mono text-xs text-gray-300">ollama serve</code> to test against it without disturbing the one your service is already watching.</td>
+                    </tr>
+                    <tr>
+                      <td className="py-3 pr-6 font-mono text-xs text-amber-300 align-top">WICKLEE_DATA_DIR</td>
+                      <td className="py-3 pr-6 font-mono text-xs text-gray-500 align-top">beside config.toml</td>
+                      <td className="py-3 text-gray-400 align-top">Where the DuckDB store lives. The default sits in a root-owned directory, so an agent started as yourself cannot create it — and an agent with no store has no history, which makes every rule that spans time read an empty window. Moves state only; node identity stays shared.</td>
+                    </tr>
                   </tbody>
                 </table>
               </div>
@@ -373,6 +422,109 @@ sudo ~/.wicklee/bin/wicklee --install-service   # re-install as daemon`}</Code>
                 and the 6-digit code prints directly to your terminal. You have 5 minutes to enter it at wicklee.dev.
               </span>
             </NoteBox>
+          </Section>
+
+
+          {/* ── Diagnostics ── */}
+          <Section
+            id="diagnostics"
+            icon={<Stethoscope className="w-5 h-5" />}
+            accent="border-blue-500/20"
+            title="Diagnostics — wicklee inspect and the /v1 surface"
+          >
+            <p>Three questions about local inference, answered from the CLI, HTTP and MCP by the same functions: <strong className="text-white">what is happening</strong>, <strong className="text-white">which models can run safely right now</strong>, and <strong className="text-white">what could I change and how do I verify it</strong>. Available on all tiers, no fleet connection required.</p>
+
+            <Code>{`wicklee inspect`}</Code>
+
+            <pre className="bg-gray-800 rounded-lg p-3 text-xs font-mono overflow-x-auto text-gray-300">
+{`WHAT IS HAPPENING
+  F-7fff93  OBSERVED  qwen3.5:4b was reloaded at the default 4096-token context 2
+                      times in the last 35 seconds, dropping from as high as 8192
+                      tokens. The load cost of each reload is not measured.
+            INFERRED  A caller is likely omitting num_ctx, so each such request
+                      silently reloads qwen3.5:4b at the default instead of reusing
+                      the resident copy.
+
+WHICH MODELS CAN RUN SAFELY NOW
+  llama3.1:8b     Requires loading, and fits on a calibrated estimate
+  qwen3.5:4b      Ready now, in use 10 s ago
+  qwen3.5:9b      Requires loading, and fits on a calibrated estimate
+
+WHAT TO CHANGE
+  F-7fff93  Re-measure qwen3.5:4b and compare: wicklee verify F-7fff93
+
+Not checked: cpu_split (this host has unified memory, so there is no accelerator
+  boundary for part of a model to fall outside of)`}
+            </pre>
+
+            <div>
+              <p className="font-semibold text-white mb-2">Every line carries its evidence label</p>
+              <p className="mb-2">The labels are enforced where statements are built, not by review. A finding whose statements are all inference is not shown at all.</p>
+              <table className="w-full text-xs">
+                <thead><tr className="border-b border-gray-700"><Th>Label</Th><Th>What it guarantees</Th></tr></thead>
+                <tbody>
+                  <tr className="border-b border-gray-700"><Td mono>OBSERVED</Td><Td>A transition, a sample or a receipt that was recorded. Never states a cause</Td></tr>
+                  <tr className="border-b border-gray-700"><Td mono>INFERRED</Td><Td>A reading of observed evidence. Must hedge, must build on something observed or verified, never stands alone</Td></tr>
+                  <tr className="border-b border-gray-700"><Td mono>VERIFIED</Td><Td>Exact per-request receipts: a number and its range, from runs you consented to</Td></tr>
+                </tbody>
+              </table>
+              <p className="text-xs text-gray-500 mt-2">So "a caller is likely omitting <code className="text-gray-400 font-mono text-[10px]">num_ctx</code>" sits under a count of reloads that actually happened, and the word "likely" is there because the cause was not measured.</p>
+            </div>
+
+            <div>
+              <p className="font-semibold text-white mb-2">Rules</p>
+              <table className="w-full text-xs">
+                <thead><tr className="border-b border-gray-700"><Th>Rule</Th><Th>Fires when</Th></tr></thead>
+                <tbody>
+                  <tr className="border-b border-gray-700"><Td mono>context_reset</Td><Td>A model is reloaded at the runtime's 4096 default after running at a larger context — the signature of a caller omitting <code className="text-gray-400 font-mono text-[10px]">num_ctx</code></Td></tr>
+                  <tr className="border-b border-gray-700"><Td mono>eviction_churn</Td><Td>Models are cleared within seconds of another model loading, each before its own keep-alive expired</Td></tr>
+                  <tr className="border-b border-gray-700"><Td mono>expiry_reload</Td><Td>A model expires and is loaded again shortly after, repeatedly — a keep-alive shorter than the gap between the steps using it</Td></tr>
+                  <tr className="border-b border-gray-700"><Td mono>cpu_split</Td><Td>Part of a model's runtime footprint sits outside accelerator memory. Not evaluated on unified memory, where there is no boundary</Td></tr>
+                  <tr className="border-b border-gray-700"><Td mono>baseline_regression</Td><Td>A fingerprinted model's generation rate falls more than 20% below its own baseline at the same digest and context</Td></tr>
+                </tbody>
+              </table>
+              <p className="text-xs text-gray-500 mt-2">The nineteen hardware patterns feed in through the same structure, keeping the measured half of each one. A rule that cannot run prints <code className="text-gray-400 font-mono text-[10px]">Not checked:</code> with the reason, because a diagnostic that goes quiet when it cannot see is worse than one that says it cannot see.</p>
+            </div>
+
+            <div>
+              <p className="font-semibold text-white mb-2">Routes</p>
+              <table className="w-full text-xs">
+                <thead><tr className="border-b border-gray-700"><Th>Endpoint</Th><Th>Returns</Th></tr></thead>
+                <tbody>
+                  <tr className="border-b border-gray-700"><Td mono>GET /v1/state</Td><Td>Every installed model with residency, running context, measured footprint, placement, last real caller, plus the runtime capability record</Td></tr>
+                  <tr className="border-b border-gray-700"><Td mono>GET /v1/readiness?model=</Td><Td>ready_now / requires_loading / would_displace / cannot_determine, with headroom and the evidence</Td></tr>
+                  <tr className="border-b border-gray-700"><Td mono>GET /v1/inspect?since=24h</Td><Td>Findings, readiness and the not-checked list — what <code className="text-gray-400 font-mono text-[10px]">wicklee inspect</code> renders</Td></tr>
+                  <tr className="border-b border-gray-700"><Td mono>GET /v1/findings?all=true</Td><Td>Findings alone, open or resolved</Td></tr>
+                  <tr className="border-b border-gray-700"><Td mono>GET /v1/receipts?model=</Td><Td>Exact per-request measurements</Td></tr>
+                  <tr className="border-b border-gray-700"><Td mono>POST /v1/receipts</Td><Td>Hand Wicklee the completion metadata your runtime already gave you</Td></tr>
+                  <tr className="border-b border-gray-700"><Td mono>POST /v1/fingerprint</Td><Td>Consented measurement run. Local-only, needs <code className="text-gray-400 font-mono text-[10px]">"consent": true</code></Td></tr>
+                  <tr className="border-b border-gray-700"><Td mono>POST /v1/verify</Td><Td>Re-run a finding's test and compare. Local-only, needs <code className="text-gray-400 font-mono text-[10px]">"consent": true</code></Td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div>
+              <p className="font-semibold text-white mb-2">Receipt callbacks</p>
+              <p className="mb-2">The most accurate measurements come from your own caller. Post the final-response metadata your runtime already returned — nanosecond durations under the runtime's own field names, so the integration is a copy rather than a transformation:</p>
+              <Code lang="bash">{`curl -X POST http://localhost:7700/v1/receipts \\
+  -H "Content-Type: application/json" \\
+  -d '{"model":"coder:14b","total_duration":8113331500,
+       "load_duration":6396458,"prompt_eval_count":26,
+       "eval_count":298,"eval_duration":4868000000,"num_ctx":32768}'`}</Code>
+              <p className="text-xs text-gray-500">Every field but <code className="text-gray-400 font-mono text-[10px]">model</code> is optional. The route <strong className="text-gray-300">refuses</strong> any payload carrying <code className="text-gray-400 font-mono text-[10px]">prompt</code>, <code className="text-gray-400 font-mono text-[10px]">response</code>, <code className="text-gray-400 font-mono text-[10px]">messages</code> or <code className="text-gray-400 font-mono text-[10px]">context</code> with a 400 naming the field, rather than storing the body minus them — a careless integration fails loudly instead of sending content Wicklee promises never to store.</p>
+            </div>
+
+            <NoteBox>
+              <span>
+                <strong className="text-white">Readiness can be wrong about displacement.</strong> On a 16 GB M4, Ollama evicted an in-use model in five of six ordered pairs where readiness said the load would fit — and the same two models coexist in one load order while evicting in the other, so no safety margin fixes it. Measured and published rather than papered over: see <code className="font-mono text-xs text-gray-300">docs/PHASE1_RESULTS.md</code> in the repository, with the raw transcripts beside it.
+              </span>
+            </NoteBox>
+
+            <TipBox>
+              <span>
+                <strong className="text-white">Consent is real.</strong> <code className="font-mono text-xs text-gray-300">fingerprint</code> and <code className="font-mono text-xs text-gray-300">verify</code> are the only operations that send inference requests or load models. They print what they will do and wait for a yes, they are local-only over HTTP, and they are deliberately absent from MCP — that decision belongs to a person, not an agent. Every request they send is tagged, so a measurement never shows up as the churn it was taken to look for.
+              </span>
+            </TipBox>
           </Section>
 
           {/* ── WES Score ── */}
@@ -1215,7 +1367,7 @@ WES Version:     2
             </div>
 
             <NoteBox>
-              Model Fit Analysis requires a model to be loaded. The MCP tool <code className="text-gray-400 font-mono text-xs">get_model_fit</code> returns all four dimensions plus a plain-English <code className="text-gray-400 font-mono text-xs">summary</code> field, making it easy to answer "can I run this model safely?" from an AI agent.
+              Model Fit Analysis requires a model to be loaded, and scores the one that is. To ask "can I run this model safely right now?" from an AI agent, use <code className="text-gray-400 font-mono text-xs">wicklee_readiness</code> or <code className="text-gray-400 font-mono text-xs">GET /v1/readiness</code> — it answers per model, from measured footprints, and names what a load would displace. See <a href="#diagnostics" className="text-blue-400 hover:text-blue-300">Diagnostics</a>. The older <code className="text-gray-400 font-mono text-xs">get_model_fit</code> MCP tool is retired.
             </NoteBox>
           </Section>
 
@@ -1692,7 +1844,7 @@ WES Version:     2
             </p>
 
             <NoteBox>
-              <strong className="text-white">MCP integration:</strong> All 5 local MCP tools return live data. <code className="text-gray-300 font-mono text-[10px]">get_active_models</code> includes <code className="text-gray-300 font-mono text-[10px]">context_length</code> and <code className="text-gray-300 font-mono text-[10px]">parameter_count</code> from Ollama's <code className="text-gray-300 font-mono text-[10px]">/api/show</code> (refreshed on model change). Inference Profiler and Slowdown Explainer are also available as Cloud MCP tools for Team+ tier.
+              <strong className="text-white">MCP integration:</strong> Every local MCP tool returns live data. <code className="text-gray-300 font-mono text-[10px]">get_active_models</code> includes <code className="text-gray-300 font-mono text-[10px]">context_length</code> and <code className="text-gray-300 font-mono text-[10px]">parameter_count</code> from Ollama's <code className="text-gray-300 font-mono text-[10px]">/api/show</code> (refreshed on model change). Inference Profiler and Slowdown Explainer are also available as Cloud MCP tools for Team+ tier.
             </NoteBox>
           </Section>
 
@@ -1703,7 +1855,13 @@ WES Version:     2
             accent="border-emerald-500/20"
             title="Localhost API"
           >
-            <p>Every Wicklee agent exposes a local API at <code className="font-mono text-xs text-gray-300">localhost:7700</code>. No authentication required. No internet connection needed. All endpoints return JSON.</p>
+            <p>Every Wicklee agent exposes a local API at <code className="font-mono text-xs text-gray-300">localhost:7700</code>. No authentication required on the default loopback bind. No internet connection needed. All endpoints return JSON.</p>
+
+            <NoteBox>
+              <span>
+                <strong className="text-white">Binding to other interfaces needs a token.</strong> The agent reports your hardware, your loaded models and your operating conditions, so with <code className="font-mono text-xs text-gray-300">bind_address = "0.0.0.0"</code> it <strong className="text-gray-300">refuses to start</strong> unless a <code className="font-mono text-xs text-gray-300">session_token</code> is configured; requests from other machines then carry it as a bearer token, compared in constant time. The refusal names the key to set. A token authenticates the caller and does not encrypt anything — remote access belongs behind TLS or a trusted private network.
+              </span>
+            </NoteBox>
 
             <div className="bg-gray-900 border border-gray-700 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center gap-3">
               <div>
@@ -1712,7 +1870,7 @@ WES Version:     2
               </div>
               <div className="sm:ml-auto">
                 <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Auth</p>
-                <code className="font-mono text-sm text-gray-400">None required</code>
+                <code className="font-mono text-sm text-gray-400">None on loopback</code>
               </div>
             </div>
 
@@ -1808,6 +1966,34 @@ WES Version:     2
                   <tr>
                     <Td mono>GET /api/insights/dismissed</Td>
                     <Td>List all permanently dismissed pattern IDs for this node</Td>
+                  </tr>
+                  <tr>
+                    <Td mono>GET /v1/state</Td>
+                    <Td>Per-model residency, running context, measured footprint, placement, last real caller, plus the runtime capability record. <a href="#diagnostics" className="text-blue-400 hover:text-blue-300">Diagnostics</a></Td>
+                  </tr>
+                  <tr>
+                    <Td mono>GET /v1/readiness?model=X</Td>
+                    <Td>Whether a model can run now without displacing another, with headroom and evidence</Td>
+                  </tr>
+                  <tr>
+                    <Td mono>GET /v1/inspect?since=24h</Td>
+                    <Td>Findings, readiness and the not-checked list — the body behind <code className="text-gray-400 font-mono text-[10px]">wicklee inspect</code></Td>
+                  </tr>
+                  <tr>
+                    <Td mono>GET /v1/findings?all=true</Td>
+                    <Td>Findings alone, open or resolved, each statement with its evidence label and basis</Td>
+                  </tr>
+                  <tr>
+                    <Td mono>GET/POST /v1/receipts</Td>
+                    <Td>Exact per-request measurements. POST refuses any payload carrying <code className="text-gray-400 font-mono text-[10px]">prompt</code>, <code className="text-gray-400 font-mono text-[10px]">response</code>, <code className="text-gray-400 font-mono text-[10px]">messages</code> or <code className="text-gray-400 font-mono text-[10px]">context</code></Td>
+                  </tr>
+                  <tr>
+                    <Td mono>POST /v1/fingerprint</Td>
+                    <Td>Consented measurement run. Local machine only, needs <code className="text-gray-400 font-mono text-[10px]">"consent": true</code></Td>
+                  </tr>
+                  <tr>
+                    <Td mono>POST /v1/verify</Td>
+                    <Td>Re-run a finding's test and compare. Local machine only, needs <code className="text-gray-400 font-mono text-[10px]">"consent": true</code></Td>
                   </tr>
                 </tbody>
               </table>
@@ -2095,14 +2281,21 @@ curl https://wicklee.dev/api/v1/fleet \\
               <table className="w-full text-xs">
                 <thead><tr className="border-b border-gray-700"><Th>Tool</Th><Th>Description</Th></tr></thead>
                 <tbody>
+                  <tr className="border-b border-gray-700"><Td>wicklee_state</Td><Td>What is installed and loaded, with residency, running context, placement and measured footprint</Td></tr>
+                  <tr className="border-b border-gray-700"><Td>wicklee_readiness</Td><Td>Whether a model can run now without displacing another. Call it before starting a task</Td></tr>
+                  <tr className="border-b border-gray-700"><Td>wicklee_inspect</Td><Td>Current findings about slow or unstable inference, with evidence labels</Td></tr>
                   <tr className="border-b border-gray-700"><Td>get_node_status</Td><Td>Full hardware + inference metrics snapshot</Td></tr>
                   <tr className="border-b border-gray-700"><Td>get_inference_state</Td><Td>Live/idle/busy state with sensor context and tier match</Td></tr>
                   <tr className="border-b border-gray-700"><Td>get_active_models</Td><Td>Running models across Ollama, vLLM, llama.cpp</Td></tr>
-                  <tr className="border-b border-gray-700"><Td>get_observations</Td><Td>Server-side pattern evaluation — 17 agent-evaluated observations</Td></tr>
                   <tr className="border-b border-gray-700"><Td>get_metrics_history</Td><Td>1-hour rolling telemetry buffer from DuckDB</Td></tr>
-                  <tr className="border-b border-gray-700"><Td>get_model_fit</Td><Td>Memory Fit, WES Efficiency, Context Runway, and Quant Sweet Spot for the currently loaded model</Td></tr>
                 </tbody>
               </table>
+              <p className="text-xs text-gray-500 mt-2">
+                The three <code className="text-gray-400 font-mono text-[10px]">wicklee_*</code> tools call the same functions their HTTP routes call, so tool output and route output cannot drift apart. <code className="text-gray-400 font-mono text-[10px]">fingerprint</code> and <code className="text-gray-400 font-mono text-[10px]">verify</code> are deliberately not here: they are the only operations that load models, and that is a person's decision.
+              </p>
+              <p className="text-xs text-gray-500 mt-2">
+                <code className="text-gray-400 font-mono text-[10px]">get_model_fit</code> and <code className="text-gray-400 font-mono text-[10px]">get_observations</code> are <strong className="text-gray-300">retired</strong> — <a href="#diagnostics" className="text-blue-400 hover:text-blue-300">readiness and inspect</a> replace them. They answer with the name of their replacement rather than "unknown tool", so an agent that called one yesterday is told where the answer moved.
+              </p>
             </div>
 
             <div>
