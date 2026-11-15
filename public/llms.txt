@@ -217,7 +217,7 @@ Cloud-evaluated (2 patterns, Pro):
 - fleet_load_imbalance — node WES > 20% below best healthy peer
 - wes_long_term_drift — recent 24h avg ≥15% below 6-day baseline (gradual degradation)
 
-Fleet alerts (5, cloud, all tiers): zombied_engine, thermal_redline, oom_warning,
+Fleet alerts (5, cloud): zombied_engine, thermal_redline, oom_warning,
 wes_cliff, agent_version_mismatch
 
 ## Runtimes Supported

@@ -432,7 +432,7 @@ sudo ~/.wicklee/bin/wicklee --install-service   # re-install as daemon`}</Code>
             accent="border-blue-500/20"
             title="Diagnostics — wicklee inspect and the /v1 surface"
           >
-            <p>Three questions about local inference, answered from the CLI, HTTP and MCP by the same functions: <strong className="text-white">what is happening</strong>, <strong className="text-white">which models can run safely right now</strong>, and <strong className="text-white">what could I change and how do I verify it</strong>. Available on all tiers, no fleet connection required.</p>
+            <p>Three questions about local inference, answered from the CLI, HTTP and MCP by the same functions: <strong className="text-white">what is happening</strong>, <strong className="text-white">which models can run safely right now</strong>, and <strong className="text-white">what could I change and how do I verify it</strong>. No fleet connection required.</p>
 
             <Code>{`wicklee inspect`}</Code>
 
@@ -2010,7 +2010,7 @@ NODE_ID=$(curl -s http://localhost:7700/api/pair/status | jq -r .node_id)
 curl "http://localhost:7700/api/history?node_id=$NODE_ID" | jq '.samples | length'`}</Code>
 
             <NoteBox>
-              The localhost API is available on every tier including Community — no account, no pairing, no internet required. Ideal for local shell scripts, Ray clusters, or internal tools that need real-time node telemetry without data leaving the network.
+              The localhost API needs no account, no pairing and no internet connection. Ideal for local shell scripts, Ray clusters, or internal tools that need real-time node telemetry without data leaving the network.
             </NoteBox>
           </Section>
 
@@ -2151,7 +2151,7 @@ curl https://wicklee.dev/api/v1/fleet \\
 
             <div>
               <p className="font-semibold text-white mb-1">Rate limits</p>
-              <p>Community: 60 req/min &nbsp;·&nbsp; Team and Enterprise: 600 req/min. Rate limits are operational throttles, not feature gates — API access is available on all tiers.</p>
+              <p>Community: 60 req/min &nbsp;·&nbsp; Team and Enterprise: 600 req/min. Rate limits are operational throttles, not feature gates.</p>
             </div>
           </Section>
 
@@ -2263,7 +2263,7 @@ curl https://wicklee.dev/api/v1/fleet \\
             accent="border-cyan-500/20"
             title="MCP Server"
           >
-            <p>Wicklee exposes a local <strong className="text-white">Model Context Protocol</strong> server for AI agents (Cursor, Claude Desktop, custom agents). Available on all tiers.</p>
+            <p>Wicklee exposes a local <strong className="text-white">Model Context Protocol</strong> server for AI agents (Cursor, Claude Desktop, custom agents).</p>
 
             <div>
               <p className="font-semibold text-white mb-2">Endpoints</p>
@@ -2558,7 +2558,7 @@ sudo systemctl restart wicklee`}
             </div>
 
             <NoteBox>
-              <strong className="text-gray-300">Tier note:</strong> The proxy works locally on all tiers (Community included). Proxy-derived metrics (E2E latency, request count, production tok/s) are visible in the fleet dashboard for <strong className="text-gray-300">Team tier and above</strong>.
+              The proxy works locally on any install. Proxy-derived metrics (E2E latency, request count, production tok/s) are visible in the fleet dashboard for <strong className="text-gray-300">Team tier and above</strong>.
             </NoteBox>
 
             <div>

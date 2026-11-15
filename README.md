@@ -227,8 +227,8 @@ For teams running multiple nodes, [wicklee.dev](https://wicklee.dev) aggregates 
 | SSO / SAML | — | — | ✅ |
 | Self-hosted control plane | — | — | ✅ |
 
-Unlimited local nodes on every tier — the node limit applies only to the cloud
-fleet view. Full detail at [wicklee.dev/pricing](https://wicklee.dev/pricing).
+Local nodes are unlimited — the node limit applies only to the cloud fleet
+view. Full detail at [wicklee.dev/pricing](https://wicklee.dev/pricing).
 
 To pair a node: open `localhost:7700` and click **Connect to Fleet**, or run `wicklee --pair`.
 
@@ -245,7 +245,7 @@ Wicklee exposes structured telemetry for AI agents via MCP, REST, and standard d
 - **REST API** — Fleet state, WES scores, best-route inference, observations. On the agent, `GET /api/metrics` is an SSE stream; `GET /api/metrics/snapshot` returns the latest frame as JSON for scripts.
 - **`/v1` diagnostics** — `state`, `readiness`, `inspect`, `findings`, `receipts`. Evidence-labelled, same functions as the CLI and MCP. [Above](#diagnose-local-inference--wicklee-inspect).
 
-### Local MCP Tools (localhost:7700, all tiers)
+### Local MCP Tools (localhost:7700)
 
 | Tool | Description |
 |------|-------------|

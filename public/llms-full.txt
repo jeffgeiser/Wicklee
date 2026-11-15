@@ -43,7 +43,7 @@ The default Linux build now uses glibc (not musl), restoring DuckDB and the
 ## Localhost API
 
 Base URL: `http://localhost:7700`
-Auth: None required. All endpoints available on every tier.
+Auth: None required on the default loopback bind.
 
 ### GET /api/metrics
 SSE stream. 1 Hz cadence. Returns `data: {MetricsPayload}\n\n` per tick.
@@ -382,7 +382,7 @@ the JSON.
 
 ## MCP Server (Model Context Protocol)
 
-The agent exposes a JSON-RPC 2.0 MCP endpoint for AI agents. Available on all tiers, localhost only, no auth required.
+The agent exposes a JSON-RPC 2.0 MCP endpoint for AI agents. Localhost only, no auth required.
 
 ### POST /mcp
 JSON-RPC 2.0 endpoint. Content-Type: application/json.
@@ -478,7 +478,7 @@ Optional `?model=qwen2.5:7b` filters to nodes with the target model loaded and u
 
 ### GET /api/v1/models/discover
 Model discovery with tiered access:
-- **Browse** (all tiers): `?search=llama&limit=20` — catalog search with fit scores
+- **Browse**: `?search=llama&limit=20` — catalog search with fit scores
 - **Simulate** (Pro+): `?simulate_hw=nvidia_4090` — score models against hardware you don't own. Profiles: m4, m4_pro_24gb, m4_max_36gb, m4_max_64gb, m4_ultra_128gb, nvidia_4060, nvidia_4070, nvidia_4080, nvidia_4090, nvidia_a100_40gb, nvidia_a100_80gb, nvidia_h100. Custom: `?simulate_vram_mb=24576&simulate_power_w=350`
 - **Fleet match** (Team+): `?fleet=true&model_id=bartowski/Llama-3.1-70B-GGUF` — which fleet nodes can run this model?
 ```json
@@ -789,7 +789,7 @@ Pro (9):
 - **fleet_load_imbalance:** Node WES > 20% below best healthy peer (Pro)
 - **wes_long_term_drift:** *(Pro, severity warning)* recent 24h avg WES ≥15% below 6-day baseline. Detects gradual degradation (dust, thermal paste, driver regression, background process creep). Evaluated every 6h against the 7-day Postgres rollup. Cooldown 24h. Mirror chart annotation in WESHistoryChart when 7d range is selected.
 
-### Fleet Alerts (5, all tiers)
+### Fleet Alerts (5)
 Evaluated by the cloud backend every 60 seconds.
 - **zombied_engine:** Inference stuck in "busy" > 10 minutes
 - **thermal_redline:** Node in "Critical" thermal for 2+ consecutive ticks
