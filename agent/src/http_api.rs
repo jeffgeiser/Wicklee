@@ -968,6 +968,9 @@ pub(crate) async fn handle_v1_inspect(
         transitions: &transitions,
         ps_context_length,
         ps_expires_at,
+        // Apple Silicon is one memory pool, so cpu_split has no boundary to
+        // find there and says so instead of never firing.
+        unified_memory: cfg!(all(target_os = "macos", target_arch = "aarch64")),
         #[cfg(not(target_env = "musl"))]
         receipts: &stored_receipts,
         #[cfg(not(target_env = "musl"))]
@@ -1181,6 +1184,9 @@ pub(crate) async fn handle_v1_findings(
         transitions: &transitions,
         ps_context_length,
         ps_expires_at,
+        // Apple Silicon is one memory pool, so cpu_split has no boundary to
+        // find there and says so instead of never firing.
+        unified_memory: cfg!(all(target_os = "macos", target_arch = "aarch64")),
         #[cfg(not(target_env = "musl"))]
         receipts: &stored_receipts,
         #[cfg(not(target_env = "musl"))]

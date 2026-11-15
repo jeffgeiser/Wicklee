@@ -1,0 +1,49 @@
+{
+  "_comment": [
+    "Fill this in for your own hardware and copy it to scenarios.json.",
+    "Nothing here is guessed from your machine: model names, sizes and the",
+    "contexts that do or do not fit are things only you know, and a harness",
+    "that assumed them would induce the wrong condition and report a pass.",
+    "",
+    "Sizes are the resident footprint in GB, which is weights plus KV cache at",
+    "the context you run them at — not the file size /api/tags reports. Read",
+    "them off `ollama ps` while the model is loaded.",
+    "",
+    "Run the harness against a runtime you control. Both scripts load and",
+    "unload models."
+  ],
+
+  "host": {
+    "label": "M4 Mac mini, 16 GB unified",
+    "accelerator_budget_gb": 11.6,
+    "notes": "iogpu.wired_limit_mb reads 0 on this M4, so the agent falls back to 75% of total RAM."
+  },
+
+  "ollama_base_url": "http://127.0.0.1:11999",
+  "agent_base_url": "http://127.0.0.1:7999",
+
+  "models": {
+    "small": { "name": "qwen3.5:4b", "resident_gb": 3.4, "default_context": 8192 },
+    "large": { "name": "qwen3.5:9b", "resident_gb": 6.6, "default_context": 8192 },
+    "other": { "name": "llama3.1:8b", "resident_gb": 4.9, "default_context": 8192 }
+  },
+
+  "contexts": {
+    "fits": 8192,
+    "runtime_default": 4096,
+    "too_large_for_accelerator": 131072
+  },
+
+  "workflow": {
+    "_comment": [
+      "For the reference controller. Workflow A holds `held` continuously.",
+      "Workflow B's step may run on any model in `acceptable`, in preference",
+      "order — the operator declares that, not Wicklee. `defer_allowed` lets",
+      "the wicklee policy wait rather than displace."
+    ],
+    "held": "other",
+    "acceptable": ["large", "small"],
+    "defer_allowed": true,
+    "defer_timeout_s": 30
+  }
+}

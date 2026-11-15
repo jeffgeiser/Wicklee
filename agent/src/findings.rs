@@ -527,6 +527,20 @@ pub(crate) struct RuleInputs<'a> {
     /// Whether this runtime reports `context_length` on `/api/ps`. Without it
     /// `context_reset` cannot run and says so.
     pub(crate) ps_context_length: bool,
+    /// Whether accelerator memory and system memory are one pool.
+    ///
+    /// When they are, `/api/ps` reports `size_vram` equal to `size` for every
+    /// model and the difference `cpu_split` looks for cannot exist, so the
+    /// rule is listed as not checked rather than left to silently never fire.
+    /// The step 8 harness found this by trying to induce a split at context
+    /// 131072 and measuring size_vram == size == 7,961,250,364 bytes.
+    ///
+    /// An input rather than a `cfg`, so the rule stays compiled and tested on
+    /// the platform most of the development happens on. A caller passes the
+    /// platform fact; it is not inferred from the data, because "every model
+    /// seen so far reported equal sizes" is also true of a discrete GPU with
+    /// room to spare, and that host should keep the rule.
+    pub(crate) unified_memory: bool,
     /// Whether this runtime reports `expires_at`. Without it `expiry_reload`
     /// cannot tell an expiry from an eviction.
     pub(crate) ps_expires_at: bool,
@@ -562,7 +576,27 @@ pub(crate) fn evaluate(inputs: &RuleInputs) -> Inspection {
     let mut findings = Vec::new();
     let mut not_checked = Vec::new();
 
-    findings.extend(cpu_split(inputs, &real));
+    // On Apple Silicon there is one memory pool, so `/api/ps` reports
+    // `size_vram` equal to `size` for every model and the difference this rule
+    // looks for cannot exist. It is listed as not checked rather than left to
+    // silently never fire: the spec's rule requirement is that a rule whose
+    // signal is missing says so, and the step 8 fault-injection harness found
+    // this by trying to induce a split at context 131072 and measuring
+    // size_vram == size == 7,961,250,364 bytes.
+    //
+    // Keyed on the platform rather than on the data, because "every model seen
+    // so far reported equal sizes" is also true of a discrete GPU with room to
+    // spare, and that host should keep the rule.
+    if inputs.unified_memory {
+        not_checked.push(NotChecked {
+            rule: "cpu_split",
+            reason: "this host has unified memory, so there is no accelerator boundary for part of \
+                     a model to fall outside of"
+                .into(),
+        });
+    } else {
+        findings.extend(cpu_split(inputs, &real));
+    }
 
     if inputs.ps_context_length {
         findings.extend(context_reset(inputs, &real));
@@ -1318,6 +1352,46 @@ mod tests {
         }
     }
 
+    #[test]
+    fn unified_memory_declares_cpu_split_rather_than_never_firing_it() {
+        // A split that a discrete-GPU host would report.
+        let mut split = ModelState {
+            model: "coder:14b".into(),
+            digest: None,
+            residency: Residency::Loaded,
+            size_bytes: Some(8_000_000_000),
+            size_vram_bytes: Some(4_000_000_000),
+            context_length: Some(8192),
+            expires_at_ms: None,
+            last_activity_ms: None,
+            installed_size_bytes: None,
+            measured: None,
+            observed_at_ms: T0,
+        };
+        split.observed_at_ms = T0;
+        let states = [&split];
+
+        let i = RuleInputs { ..inputs(&states, &[], T0 + SPLIT_SETTLE_MS + 1) };
+        let on_discrete = evaluate(&i);
+        assert!(
+            on_discrete.not_checked.iter().all(|n| n.rule != "cpu_split"),
+            "a host with two pools keeps the rule",
+        );
+
+        let i = RuleInputs { unified_memory: true, ..inputs(&states, &[], T0 + SPLIT_SETTLE_MS + 1) };
+        let on_unified = evaluate(&i);
+        assert!(
+            on_unified.findings.iter().all(|f| f.rule != "cpu_split"),
+            "with one pool the rule does not run",
+        );
+        let said = on_unified
+            .not_checked
+            .iter()
+            .find(|n| n.rule == "cpu_split")
+            .expect("and says so");
+        assert!(said.reason.contains("unified memory"), "{}", said.reason);
+    }
+
     #[cfg(not(target_env = "musl"))]
     #[test]
     fn baseline_regression_fires_on_a_measured_drop_and_names_what_changed() {
@@ -1611,6 +1685,8 @@ mod tests {
             transitions,
             ps_context_length: true,
             ps_expires_at: true,
+            // False, so cpu_split is exercised by the tests wherever they run.
+            unified_memory: false,
             #[cfg(not(target_env = "musl"))]
             receipts: &[],
             #[cfg(not(target_env = "musl"))]
@@ -1888,6 +1964,7 @@ mod tests {
             transitions: &[],
             ps_context_length: false,
             ps_expires_at: false,
+            unified_memory: false,
             #[cfg(not(target_env = "musl"))]
             receipts: &[],
             #[cfg(not(target_env = "musl"))]
