@@ -40,6 +40,102 @@ Dashboard opens at **http://localhost:7700**.
 
 ---
 
+## Diagnose local inference — `wicklee inspect`
+
+```bash
+wicklee inspect
+```
+
+```
+WHAT IS HAPPENING
+  F-7fff93  OBSERVED  qwen3.5:4b was reloaded at the default 4096-token context 4
+                      times in the last 5 minutes, dropping from as high as 8192
+                      tokens. The load cost of each reload is not measured.
+            INFERRED  A caller is likely omitting num_ctx, so each such request
+                      silently reloads qwen3.5:4b at the default instead of reusing
+                      the resident copy.
+
+  F-e0438f  OBSERVED  3 models were cleared 5 times in the last 7 minutes within 10
+                      seconds of another model loading, each before its own
+                      keep-alive expired: llama3.1:8b, qwen3.5:4b, qwen3.5:9b.
+            INFERRED  Memory contention may be causing the reloads: a load that does
+                      not fit clears resident models rather than queueing.
+
+WHICH MODELS CAN RUN SAFELY NOW
+  llama3.1:8b     May require eviction: likely clears qwen3.5:4b, which is in
+                  use
+  qwen3.5:4b      Ready now, in use 7 s ago
+  qwen3.5:9b      Requires loading, and fits on a measured footprint
+
+WHAT TO CHANGE
+  F-7fff93  Re-measure qwen3.5:4b and compare: wicklee verify F-7fff93
+  F-e0438f  Re-measure qwen3.5:9b, qwen3.5:4b, llama3.1:8b and compare:
+            wicklee verify F-e0438f
+```
+
+Real output, two of that run's five findings. The whole transcript, including
+the three left out, is in
+[docs/bench-fault-inject-m4-2026-11-15.json](docs/bench-fault-inject-m4-2026-11-15.json).
+
+### How to read it
+
+**Three sections, one per question.** What is happening, which models can run
+right now without disturbing what is already loaded, and what to change.
+
+**Every line carries its evidence label, and the labels are enforced in code.**
+
+| Label | What it guarantees |
+|---|---|
+| `OBSERVED` | A transition, a sample or a receipt that was recorded. Never states a cause |
+| `INFERRED` | A reading of observed evidence, always hedged, never shown on its own |
+| `VERIFIED` | Exact per-request receipts: a number and its range, from runs you consented to |
+
+A finding with nothing but inference is not shown. So "a caller is likely
+omitting `num_ctx`" sits under a count of reloads that actually happened, and
+the word "likely" is there because the cause was not measured.
+
+**A rule that could not run says so.** It prints
+`Not checked: baseline_regression (no fingerprint baseline yet)` rather than
+nothing, because a diagnostic that goes quiet when it cannot see is worse than
+one that says it cannot see.
+
+**Findings resolve by being looked for and not found.** A finding's resolved
+time is when Wicklee last checked and did not see it — never a timer.
+
+### The rest of the surface
+
+| Command | What it does |
+|---|---|
+| `wicklee inspect [--since 24h] [--json]` | Findings, readiness, what to change |
+| `wicklee ready [MODEL]` | Readiness only: ready now, requires loading, would displace, cannot determine |
+| `wicklee findings [--all]` | Findings alone, `--all` including resolved ones |
+| `wicklee fingerprint [MODEL] [--cold]` | Measure a model and store a baseline. Asks first — it sends real requests |
+| `wicklee verify F-xxxxxx` | Re-run a finding's own test and compare against the last run |
+
+Same data over HTTP, from the same functions: `GET /v1/state`,
+`/v1/readiness`, `/v1/inspect`, `/v1/findings`, `/v1/receipts`, and
+`POST /v1/fingerprint`, `/v1/verify` (both local-only, both need
+`"consent": true`). `POST /v1/receipts` takes the completion metadata your
+runtime already handed you and turns it into an exact measurement — it
+**refuses** any payload carrying `prompt`, `response`, `messages` or `context`,
+so a careless integration fails loudly rather than sending content Wicklee
+promises never to store.
+
+Two things worth knowing before you rely on it:
+
+- **It needs the agent running**, and a store for anything that spans time. The
+  CLI is a client of `localhost:7700`, like `--status`.
+- **Readiness can be wrong about displacement.** On a 16 GB M4, Ollama evicted
+  an in-use model in five of six cases where readiness said the load would fit
+  — and the same two models coexist in one load order and evict in the other,
+  so no margin fixes it. Measured, published, not papered over:
+  [docs/PHASE1_RESULTS.md](docs/PHASE1_RESULTS.md).
+
+Design and rules: [docs/PHASE1_SPEC.md](docs/PHASE1_SPEC.md). Measured runtime
+behaviour: [docs/ollama-capabilities.md](docs/ollama-capabilities.md).
+
+---
+
 ## What It Monitors
 
 | Metric | Apple Silicon | NVIDIA (Linux/Windows) |
@@ -147,17 +243,28 @@ Wicklee exposes structured telemetry for AI agents via MCP, REST, and standard d
 - **`/llms.txt`** — Lightweight discovery file
 - **`/openapi.json`** — OpenAPI 3.0 spec
 - **REST API** — Fleet state, WES scores, best-route inference, observations. On the agent, `GET /api/metrics` is an SSE stream; `GET /api/metrics/snapshot` returns the latest frame as JSON for scripts.
+- **`/v1` diagnostics** — `state`, `readiness`, `inspect`, `findings`, `receipts`. Evidence-labelled, same functions as the CLI and MCP. [Above](#diagnose-local-inference--wicklee-inspect).
 
 ### Local MCP Tools (localhost:7700, all tiers)
 
 | Tool | Description |
 |------|-------------|
+| `wicklee_state` | What is installed and loaded, with residency, context, placement and measured footprint |
+| `wicklee_readiness` | Whether a model can run now without displacing another. Call it before starting a task |
+| `wicklee_inspect` | Current findings about slow or unstable inference, with evidence labels |
 | `get_node_status` | Full hardware + inference metrics snapshot |
 | `get_inference_state` | Live/idle/busy state with sensor context |
 | `get_active_models` | Running models across Ollama and vLLM |
-| `get_observations` | Local hardware pattern evaluation |
 | `get_metrics_history` | 1-hour rolling telemetry buffer |
-| `get_model_fit` | Memory Fit, WES Efficiency, Context Runway, and Quant Sweet Spot for the currently loaded model |
+
+The three `wicklee_*` tools call the same functions their HTTP routes call, so
+tool output and route output cannot drift apart. `fingerprint` and `verify` are
+deliberately not on MCP: they are the only operations that load models, and
+that needs a person's consent, not an agent's.
+
+`get_model_fit` and `get_observations` are retired — `wicklee_readiness` and
+`wicklee_inspect` replace them. They answer with the name of their replacement
+rather than "unknown tool".
 
 ### Cloud MCP Tools (wicklee.dev/mcp, Team tier)
 
@@ -198,7 +305,8 @@ wicklee (single binary)
 │   ├── Embedded React dashboard
 │   ├── SSE telemetry stream (1 Hz)
 │   ├── WebSocket live charts (1 Hz)
-│   └── MCP server (JSON-RPC 2.0)
+│   ├── MCP server (JSON-RPC 2.0)
+│   └── /v1 diagnostics (state, readiness, inspect, findings, receipts)
 ├── Hardware harvester (Tokio background tasks)
 │   ├── Apple Silicon: ioreg, powermetrics, pmset, vm_stat
 │   ├── NVIDIA: nvml-wrapper (zero-privilege)

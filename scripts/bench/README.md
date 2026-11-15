@@ -1,6 +1,6 @@
 # Benchmark and fault-injection harness
 
-Phase 1, steps 0 and 8. Node scripts with no dependencies, Node 18+. Nothing
+Phase 1, steps 0, 8 and 9. Node scripts with no dependencies, Node 18+. Nothing
 here ships in the agent binary.
 
 | Script | What it does |
@@ -8,6 +8,11 @@ here ships in the agent binary.
 | `ollama-capabilities.mjs` | Step 0. Records real Ollama responses and answers V1–V9 from `docs/PHASE1_SPEC.md` |
 | `fault-inject.mjs` | Step 8. Creates each condition the diagnostic rules are meant to catch, then asks the agent whether it caught it |
 | `reference-controller.mjs` | Step 8. Three policies choose a model for a workflow step; measures whether reading readiness changed the decision and whether that was worth anything |
+| `headroom-margin.mjs` | Step 9. Loads every ordered pair of declared models and records whether both stayed resident, against what readiness predicted. Exits non-zero on any optimistic prediction |
+| `acceptance.mjs` | Step 9. Runs the acceptance rows that fit one pass — reproducible, evidence, no side effects, overhead — and names the rows this host cannot answer rather than skipping them |
+
+Results from the maintainer's M4, with method and raw transcripts:
+[`docs/PHASE1_RESULTS.md`](../../docs/PHASE1_RESULTS.md).
 
 ## Set up a host you can disturb
 

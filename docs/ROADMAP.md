@@ -196,181 +196,103 @@ The SPA served every route from one index.html shell with identical landing-page
 
 ## Planned
 
-### ★ Phase 1 — `wicklee inspect` (November 2026 strategy revision) — ACTIVE
+### ★ Phase 1 — `wicklee inspect` (November 2026 strategy revision) — CODE COMPLETE ON MAIN
 
 `docs/STRATEGY.md` (November 2026) is the strategic source of truth. It
-supersedes the v3.2 brief and the earlier GTM and next-steps documents, and
-`docs/PHASE1_SPEC.md` is its implementation spec. **This is the work in
-flight.** Everything below this entry predates that revision and has not been
+supersedes the v3.2 brief and the earlier GTM and next-steps documents;
+`docs/PHASE1_SPEC.md` is its implementation spec and holds the per-step
+deviations; **`docs/PHASE1_RESULTS.md` is the write-up of what running it
+found.** Everything below this entry predates the revision and has not been
 re-prioritised against it — read the Readiness Program and GTM ordering as the
 July–September view until it is.
 
 Phase 1 answers three questions on one Ollama host, from the CLI, HTTP and MCP:
 what is happening with my local inference, which models can run safely right
-now, and what could I change and how do I verify the improvement. The stage-1
-command surface is `inspect`, `ready`, `findings`, `fingerprint`, `verify`.
+now, and what could I change and how do I verify the improvement.
 
-**Shipped in v0.13.0 — steps 0 to 3:**
+**All ten steps are on `main`. Shipped in v0.13.0: steps 0 to 3. Steps 4 to 10
+are merged and not yet tagged.** 259 tests, clippy clean at `-D warnings` on
+every commit.
 
-- **Step 0 — verification.** Measured against a real Ollama 0.40.16 host rather
-  than assumed from documentation. `docs/ollama-capabilities.md` answers V1–V9;
-  `docs/CLEANUP_AUDIT.md` maps every removal candidate to its callers. Three
-  rules changed as a result, and `context_limit` was **dropped outright** — no
-  truncation signal exists on this runtime, and `prompt_eval_count` is not
-  clamped to the context, so the proposed trigger would not have fired.
-  `Displacement::Confirmed` was removed for the same reason: eviction is
-  memory-gated and not reproducible.
-- **Step 1 — `ollama_client.rs`, `caps.rs`, `auth.rs`.** Typed Ollama responses
-  with `model_info` keys resolved from `general.architecture` (the hardcoded
-  `llama.*` prefix nulled context and KV-cache for every non-llama model).
-  Three fixes to shipping behaviour: the throughput probe now sends the running
-  `num_ctx` — it was silently reloading a 65536-context model at 4096 on every
-  interval, measured at 2,626 ms against 3 ms after; the `model_info` prefix;
-  and inbound authentication, which **did not exist at all**, leaving
-  `/api/pair/claim` and `/mcp` reachable by anything on the network under a
-  non-loopback bind. **Breaking:** a non-loopback bind with no `session_token`
-  now refuses to start.
-- **Step 2 — `residency.rs` and the `model_transitions` table.** Per-model
-  residency state and a real transition log, with probe- and test-caused
-  changes tagged by cause. `query_model_switches` reads the table instead of
-  inferring switches from the metrics table's primary-model column.
-- **Step 3 — `readiness.rs`, `GET /v1/state`, `GET /v1/readiness`,
-  `wicklee ready`.** The first subcommand, and the first two routes on the
-  `/v1` surface.
+| | |
+| --- | --- |
+| CLI | `wicklee inspect`, `ready`, `findings`, `fingerprint`, `verify`, each with `--json` |
+| HTTP | `GET /v1/state`, `/v1/readiness`, `/v1/inspect`, `/v1/findings`, `/v1/receipts`; `POST /v1/receipts`, `/v1/fingerprint`, `/v1/verify` |
+| MCP | `wicklee_state`, `wicklee_readiness`, `wicklee_inspect`, each calling the same handler its route calls. `get_model_fit` and `get_observations` retired with a pointer to their replacement |
+| Agent modules | `ollama_client`, `caps`, `residency`, `readiness`, `findings`, `receipts`, `fingerprint`, `cli`, `auth` |
+| Rules | `cpu_split`, `context_reset`, `eviction_churn`, `expiry_reload`, `baseline_regression`, plus the nineteen hardware patterns adapted through the observations bridge |
+| Harness | `scripts/bench/`: capability recording, fault injection, a reference controller, headroom margin, acceptance |
 
-**Merged to main, not yet tagged — step 4.** `findings.rs`: the four rules
-(`cpu_split`, `context_reset`, `eviction_churn`, `expiry_reload`), the
-`findings` table with resolution, content-derived IDs, the observations
-adapter, `GET /v1/inspect`, `GET /v1/findings`, `wicklee inspect`,
-`wicklee findings`. 218 tests. This is the point the spec names as shippable
-without any test requests: *"If time runs short, ship after step 4 and
-continue."* Two things to know about what it does and does not do:
+**Three fixes to shipping behaviour came out of step 1, and one is breaking:**
 
-- **Resolution is observed, not scheduled.** A finding's `resolved_at_ms` is
-  when Wicklee last looked and did not see it, so a finding that stops firing
-  because the agent stopped looking is not resolved.
-- **Most adapted hardware findings carry only a title and a measurement.** The
-  nineteen patterns' prose mixes measurement with mechanism, and a mechanism is
-  a cause, which cannot be labelled observed. Separating the two is real work
-  the cloud also consumes, and it is not step 4. Each dropped sentence is
-  logged, so that work has a worklist.
+- **Inbound authentication did not exist at all.** `session_token` is the
+  outbound cloud credential, not an inbound one, so with
+  `bind_address = "0.0.0.0"` both `/api/pair/claim` and `/mcp` were reachable
+  by anything on the network. **Breaking: a non-loopback bind with no token now
+  refuses to start**, and the refusal names the key to set.
+- **The throughput probe was silently reloading models at 4096.** It sent no
+  `num_ctx`, so every interval took a 65536-context model down to the default:
+  2,626 ms of reload, measured, against 3 ms after the fix.
+- **`model_info` keys were hardcoded to `llama.*`**, which nulled context and
+  KV-cache for every non-llama model. They resolve from the model's own family
+  now.
 
-**The production-code budget is retired, 2026-11-14.** Both reported
-overruns were counting doc comments: the modules hold 3,378 lines of code,
-under the original ~3,500. The standard is code efficiency rather than a
-ceiling. See *Measured* in `docs/PHASE1_SPEC.md` for the split.
+**What the live runs changed, which is the point of having them.** Full
+numbers and method in `docs/PHASE1_RESULTS.md`:
 
-**Step 5 is in, on main, not yet tagged.** Receipts from all three sources —
-a caller's callback, the proxy's done packet, and Wicklee's own consented test
-runs — stored in DuckDB with 30-day retention. `POST /v1/receipts` refuses a
-payload carrying `prompt`, `response`, `messages` or `context` with a 400 that
-names the field, rather than storing it minus the content. `wicklee
-fingerprint` runs warm, cold and sequence tests behind a two-step consent
-handshake, tags every request it sends so the rules ignore it, and reloads
-what it unloaded while saying plainly that the original keep-alive expiry
-cannot be restored.
+- **Readiness's displacement answer is optimistic and no margin fixes it.**
+  Five of six ordered model pairs evicted an in-use model where readiness said
+  the load would fit, and the decisive pair coexists at 9.32 GB in one load
+  order while evicting in the other. The brackets cross, so eviction on that
+  host is not a function of total resident size. Three ways forward are
+  written down; **none is chosen on one host's evidence.** This is the open
+  item that matters.
+- **A non-overlap is not a measurement.** Two runs of the same test on an idle
+  host, nothing changed between them, reported "worse" at 1.5% — two tight
+  ranges that happen not to touch. A verdict now also needs the medians to
+  differ by at least 5%.
+- **Interleave the blocks.** A two-block A/B said the agent cost −2.96% of
+  throughput with disjoint ranges; interleaved, the same measurement is −1.34%
+  and overlapping. The first was thermal drift.
+- **Every binary-size delta reported before step 8 was confounded** by an
+  unrecorded toolchain. Same-toolchain Phase 1 growth is +5.27%, not +1.50%.
+- **An old agent restarted on a networked host does not stay old.** Starting
+  0.12.0 to measure a baseline had `self-replace` swap it for the 0.14.0 asset
+  in about five seconds.
+- **Overhead at idle is nothing measurable**: 22 MB RSS against the baseline's
+  23 MB, 0.00% CPU both. The DuckDB store is the real cost at about 61 MB, and
+  it is what makes history, receipts and `baseline_regression` possible.
 
-Verified against a real runtime on the maintainer's M4, not only the mock: a
-posted receipt matched the runtime's own tok/s to the digit, three warm runs
-measured 27.5 tok/s with a 27.4–27.6 range, three cold loads measured 2556 ms
-with a 2300–2853 range, and a second fingerprint run left `last_activity_ms`
-untouched, which is the tagging working. Four deviations and three
-live-only bugs are recorded in `docs/PHASE1_SPEC.md`.
+**Three design rules that must not be relaxed**, each enforced by construction
+rather than by review:
 
-**The line budget is retired.** Counting it properly: the eight new modules
-hold **3,338 lines of code**, under the original ~3,500, plus 1,285 lines of
-comment and 325 blank. Both overruns reported earlier — 3,762 and 4,990 —
-were counting the prose that explains why each rule holds. The standard is
-code that earns its space, which clippy at `-D warnings` already enforces
-mechanically: a function with no caller fails the build. See *Measured* in the
-spec for the per-module split.
+- **Evidence labels.** A `Statement` is built only through a constructor that
+  rejects a basis not meeting its label. `observed` needs a transition, sample
+  or receipt and never states a cause; `inferred` must hedge and must build on
+  something observed or verified; `verified` needs exact receipts. A finding
+  with only inferred statements is not shown.
+- **`num_ctx` on every request, never guessed.** Omitting it reloads the model
+  at 4096. An unknown running context refuses the run rather than assuming one.
+- **A receipt never carries content.** `POST /v1/receipts` refuses `prompt`,
+  `response`, `messages` or `context` with a 400 naming the field, rather than
+  storing the body minus them.
 
-**Step 6 is in, on main, not yet tagged.** `wicklee verify F-xxxxxx` re-runs a
-finding's own test, stores the result with a snapshot of what was loaded, and
-compares it against the first run: medians, ranges, what differed in the
-configuration, and one of three verdicts. The `Verified` evidence label
-arrives with the runs that can produce one, and `baseline_regression` fires
-when a fingerprinted model's generation rate falls more than 20% below its own
-baseline at the same digest and context.
+**The production-code budget is retired, 2026-11-14.** Both reported overruns
+were counting doc comments: the modules hold 3,848 lines of code against an
+original ~3,500 estimate made before anyone had read the code it was
+estimating. The standard is code that earns its space, which clippy at
+`-D warnings` already enforces mechanically — a function with no caller fails
+the build. Per-module split in *Measured* in the spec.
 
-The live runs changed a rule. Two runs of the same test on an idle host,
-nothing altered between them, reported "worse" at 1.5% — two tight ranges that
-happen not to touch. A non-overlap alone is not a measurement, so a verdict
-now also needs the medians to differ by at least 5%, set from that measured
-noise floor. Everything else is "no measurable change", with the reason
-printed beside the delta so it does not read as a bug.
+**Open, and each blocked on something outside the code:**
 
-**Step 7 is in, on main, not yet tagged.** Three MCP tools — `wicklee_state`,
-`wicklee_readiness`, `wicklee_inspect` — each calling the same handler its HTTP
-route calls, so tool output and route output cannot diverge. `get_model_fit`
-and `get_observations` are retired, answering with the name of their
-replacement rather than "unknown tool". `fingerprint` and `verify` stay off
-MCP on purpose: they are the only routes that load models.
-
-**Step 8 is in, on main, not yet tagged.** Two Node scripts in
-`scripts/bench/`, no dependencies, nothing shipped in the binary:
-`fault-inject.mjs` creates each condition the diagnostic rules are meant to
-catch and asks the agent whether it caught it; `reference-controller.mjs` runs
-three policies over randomised runs and writes a JSON transcript plus a
-Markdown summary with medians and ranges. Both refuse to run against :11434 or
-:7700, and both read a scenario file the operator fills in for their own
-hardware rather than guessing model sizes.
-
-On the M4: `context_reset`, `eviction_churn` and `expiry_reload` all fired with
-their expected statements, the healthy control stayed quiet, and two scenarios
-were not inducible on this hardware — `cpu_split` because unified memory has no
-accelerator boundary, and `baseline_regression` because 16 GB cannot hold two
-models resident with one of them busy.
-
-**The run found a real gap.** All three controller policies chose the same
-model and all fifteen runs displaced the in-use one. `wicklee` did not avoid it
-because readiness predicted a fit: 5.65 GB into 6.93 GB free. The runtime
-evicted anyway. Measured on this host, Ollama keeps two models at 9.26 GB and
-evicts at 11.60 GB, while the agent computes a budget of about 12.88 GB — so
-the headroom model is more generous than the runtime's own eviction policy.
-The arithmetic was right; the budget it was done against was not. That is the
-first thing step 9 should measure across machines, and it is recorded in
-`docs/PHASE1_SPEC.md` rather than patched from one host's evidence.
-
-**Step 9 is partly done, on main, not yet tagged.** `acceptance.mjs` runs the
-rows that fit one pass and names the two it cannot reach;
-`headroom-margin.mjs` measures the displacement question step 8 raised. Both
-ran on the M4.
-
-Three rows pass. Reproducibility: three fingerprints of one unchanged model all
-overlap, medians spread 0.7%. Evidence: every statement carries a basis, every
-finding an observed or verified one, every inference hedges — checked
-structurally. No side effects: `expires_at` unmoved across reads of all four
-read routes.
-
-**Overhead is nothing measurable.** Against a rebuilt 0.12.0, idle RSS is 22 MB
-against 23 MB and idle CPU is 0.00% for both; the DuckDB store accounts for
-about 61 MB on top. Throughput with the agent against without, interleaved, is
-−1.34% with overlapping ranges — and a two-block A/B of the same thing said
-−2.96% with ranges disjoint by 0.02 tok/s, which was thermal drift. The binary
-is +5.27% on a same-toolchain 0.12.0; the +1.50% recorded earlier compared
-against a figure built on a different toolchain.
-
-**One row fails, and it is the one that matters.** Readiness's displacement
-answer was optimistic in five of six ordered model pairs. The decisive pair:
-`llama3.1:8b` then `qwen3.5:4b` keeps both resident at 9.32 GB, and the same
-pair in the opposite order evicts — reproducibly. Eviction on this host is not
-a function of total size, so no margin tweak fixes it, and that is why step 8's
-controller tied. Three ways forward are written down in
-`docs/PHASE1_SPEC.md`; none is chosen on one host's evidence.
-
-Not reached: the 24-hour quiet control, "fix confirmed" (needs a >5% lever that
-16 GB cannot provide), and three outside machines — which is other people, and
-why `acceptance.mjs` produces one comparable transcript instead of a prose
-checklist.
-
-**Then:** step 10 README and this file.
-
-*This entry is a status index, not the rewrite.* Commit `49e332d` left the
-ROADMAP alone on purpose — repositioning the whole document around
-`docs/STRATEGY.md` is step 10, after the acceptance runs, when there are
-results to write up. Until then this section says where Phase 1 stands and
-flags that the ordering below it is pre-revision.
+| Open item | Needs |
+| --- | --- |
+| The displacement decision | Evidence from more than one host before changing what readiness promises |
+| `inspect` against the installed service daemon | A daemon restart onto a current binary, which needs root. Everything verified so far used a hand-started agent with a fresh store, which proves the query and the render but not what a week of real traffic looks like |
+| Four acceptance rows | A day of normal use, a >5% fix lever that 16 GB cannot provide, and three other machines |
+| `src/site/DocsPage.tsx` | The user-facing docs page is the one AI-discovery surface still carrying the pre-Phase-1 API. It sits under `src/site/`, which the standing instruction puts off-limits |
+| A tag | Steps 4 to 10 are untagged. The next tag should also publish the two-asset Linux matrix |
 
 ### ★ Business & Enterprise Readiness Program (July 2026 strategic review)
 The July 2026 Teams/Enterprise review found the Team tier strong and differentiated, but the Business/Enterprise story thin where enterprise buyers screen. This program is the ship-order plan. Each item carries implementation pointers + acceptance criteria so any session can pick one up cold. Work items sequentially within a phase; phases 1→5 are priority order.

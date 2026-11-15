@@ -949,7 +949,7 @@ Steps are in dependency order. Each step ends with its tests passing and a short
 | 7 | **Done.** `wicklee_state`, `wicklee_readiness` and `wicklee_inspect`, each calling the same handler its route calls so the two cannot diverge. `get_model_fit` and `get_observations` retired, answering with a pointer to their replacement rather than "unknown tool" | 3, 4 | Tool output equals the HTTP JSON |
 | 8 | **Done.** `scripts/bench/fault-inject.mjs` (six scenarios) and `scripts/bench/reference-controller.mjs` (three policies, randomised runs, JSON plus a Markdown summary), with `scenarios.example.json` for the operator's own hardware. Results and what they exposed are below | 3, 4, 6 | Each scenario runs end to end on the maintainer's host |
 | 9 | **Partly done.** `acceptance.mjs` and `headroom-margin.mjs` added and run on the maintainer's M4; overhead measured against a rebuilt 0.12.0. Three rows pass, one fails, four need a day or other people's hardware. Results below | 8 | Both demonstrations pass, or the write-up states plainly what did not |
-| 10 | Update the README and `docs/ROADMAP.md`. Publish results with method and raw data | 9 | A new user can install, run `wicklee inspect`, and understand the output from the README alone |
+| 10 | **Done.** `docs/PHASE1_RESULTS.md` publishes the method, the numbers and the raw transcripts. The README gained a `wicklee inspect` section with real output, the evidence labels, the command and route surface, and the displacement caveat; its MCP table was corrected. The Phase 1 ROADMAP entry was rewritten from a running status index into what shipped, what the runs found, and what is open. `inspect` also gained the third section this spec always specified — see below | 9 | A new user can install, run `wicklee inspect`, and understand the output from the README alone |
 
 The remote-access rule moved from step 3 to step 1, because V8 showed the existing routes are already exposed.
 
@@ -984,6 +984,8 @@ The remote-access rule moved from step 3 to step 1, because V8 showed the existi
 | Release binary, 0.12.0 rebuilt | 23,584,416 bytes on rustc 1.94.1. The 24,411,328 recorded above was a different toolchain, so every delta against it was confounded |
 | Release binary, after step 8 | 24,827,088 bytes, **+5.27% on a same-toolchain 0.12.0** |
 | Step 9 shipped in | Commits straight to main on 2026-11-15, not yet tagged |
+| Tests, after step 10 | 259 passing, clippy clean at every commit |
+| Step 10 shipped in | Commits straight to main on 2026-11-15, not yet tagged |
 
 The pristine and step 1 figures were measured on the same toolchain, which is the only way that comparison means anything. The step 4 figure is on rustc 1.94.1 and its toolchain match to step 1 is unverified, so the +0.81% is indicative.
 
@@ -1360,6 +1362,44 @@ much as the code.
 | Other hardware | Needs three machines with different configurations, which is other people. `acceptance.mjs` exists so they produce one comparable transcript instead of following prose |
 | Decision changed, measured benefit | Blocked on the displacement prediction above |
 
+### Step 10 — what was published, and the one file it could not touch
+
+`docs/PHASE1_RESULTS.md` is the results write-up: the host and its isolation,
+detection, acceptance, overhead, the failing displacement prediction with its
+three unchosen options, the two corrections to the record, how to reproduce it,
+and what is still unverified. The raw transcripts are committed beside it, so
+every table can be checked rather than taken on faith.
+
+The README gained a `wicklee inspect` section ahead of the dashboard copy: the
+command first, then real output from the step 8 fault-injection run, then how to
+read it — the three sections, the three evidence labels and what each
+guarantees, why "not checked" is printed rather than omitted, and that
+resolution is observed. Then the command table, the `/v1` routes, the
+content-refusal on `POST /v1/receipts`, and the displacement caveat, stated in
+the README rather than left in a docs file. Its MCP table still listed
+`get_model_fit` and `get_observations` as current and did not mention the three
+`wicklee_*` tools; it does now.
+
+**One deviation, in the opposite direction from the usual.** Writing the README
+meant rendering `wicklee inspect` for the first time as a reader rather than as
+an implementer, and the output was missing the spec's third section. "WHAT TO
+CHANGE" was left out at step 4 with a comment saying `verify` did not exist
+yet — true then, and `verify` has existed since step 6, so the output had been
+quietly not telling anyone the command exists. It prints now, one line per
+finding, gated on the two conditions that would otherwise send someone to a
+refusal: `POST /v1/verify` answers 409 for a finding that names no model, and
+an agent not storing findings cannot look one up by an id printed two lines
+above. Documenting a surface is a good way to find out what it does not do.
+
+**`src/site/DocsPage.tsx` is not updated, and that is a standing instruction
+rather than an oversight.** It is the last AI-discovery surface still carrying
+the pre-Phase-1 API: `public/llms.txt`, `llms-full.txt`, `api.md`,
+`openapi.json` and `.well-known/ai-plugin.json` were all brought up to the
+`/v1` surface after step 7. The page sits under `src/site/`, which the
+maintainer's standing instruction puts off-limits for this work, so the note
+above that "step 10 should cover it" is wrong about who can do it. It needs
+either that instruction lifted for one file or a separate pass.
+
 ### Open verification: `inspect` against the installed daemon
 
 `wicklee inspect` has never run against the service daemon with a store that
@@ -1423,7 +1463,8 @@ thing and should not be started before it.
   writing the same files three times while the surface was still growing.
   **One is still outstanding:** `src/site/DocsPage.tsx`, the user-facing
   documentation page, which sits under `src/site/` and is off-limits under the
-  current standing instruction. Step 10 should cover it.
+  current standing instruction. Step 10 could not cover it for that reason —
+  it needs the instruction lifted for one file, or a pass of its own.
 
 ## Sources
 
