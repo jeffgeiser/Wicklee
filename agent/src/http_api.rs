@@ -1424,6 +1424,247 @@ pub(crate) fn serve_asset(path: &str) -> Response<Body> {
         .unwrap()
 }
 
+// ── /v1/receipts ──────────────────────────────────────────────────────────────
+
+/// What the agent knows about a model that the caller's payload cannot carry.
+///
+/// Read from the tracker and the latest broadcast frame rather than accepted
+/// from the body, because a self-reported co-residency list is not evidence of
+/// anything. The thermal state is from the most recent 1 Hz sample, so it is
+/// the host's state a moment before or after the request rather than during
+/// it — close enough to explain a slow run, not close enough to attribute one.
+#[cfg(not(target_env = "musl"))]
+fn ambient_for(
+    model: &str,
+    residency: &crate::residency::SharedTracker,
+    frame: &crate::metrics::LatestFrame,
+    now_ms: i64,
+) -> crate::receipts::Ambient {
+    let mut a = crate::receipts::Ambient { ts_ms: now_ms, ..Default::default() };
+
+    if let Ok(t) = residency.lock() {
+        for s in t.states() {
+            if s.model == model {
+                a.was_loaded = true;
+                a.digest = s.digest.clone();
+                a.size_bytes = s.size_bytes;
+                a.size_vram_bytes = s.size_vram_bytes;
+                a.running_context_length = s.context_length;
+            } else {
+                a.co_resident.push(s.model.clone());
+            }
+        }
+    }
+    a.co_resident.sort();
+
+    a.thermal_state = frame
+        .0
+        .read()
+        .ok()
+        .and_then(|f| f.clone())
+        .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok())
+        .and_then(|v| v.get("thermal_state").and_then(|t| t.as_str()).map(str::to_string));
+
+    a
+}
+
+/// POST /v1/receipts — a caller's own completion metadata, stored as a receipt.
+///
+/// The preferred receipt path, and on a default macOS install the only one
+/// that works: the proxy cannot bind 11434 while Ollama holds it, and a
+/// fingerprint costs a model load.
+///
+/// The body is the runtime's final response object with its content fields
+/// removed. A payload that still carries `prompt`, `response`, `messages` or
+/// `context` is refused with 400 rather than stored minus those fields,
+/// because an integration that silently sends user text for months is the
+/// failure this promise exists to prevent.
+#[cfg(not(target_env = "musl"))]
+pub(crate) async fn handle_v1_receipts_post(
+    axum::extract::Extension(residency): axum::extract::Extension<crate::residency::SharedTracker>,
+    axum::extract::Extension(node_id_ext): axum::extract::Extension<NodeId>,
+    axum::extract::Extension(frame): axum::extract::Extension<crate::metrics::LatestFrame>,
+    store: MaybeStore,
+    body: Result<axum::extract::Json<serde_json::Value>, axum::extract::rejection::JsonRejection>,
+) -> axum::response::Response {
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+
+    let axum::extract::Json(body) = match body {
+        Ok(b) => b,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                axum::Json(serde_json::json!({
+                    "error": "the body must be JSON",
+                    "detail": e.body_text(),
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let now_ms = crate::residency::now_ms();
+    let model = body.get("model").and_then(|m| m.as_str()).unwrap_or("").to_string();
+    let ambient = ambient_for(&model, &residency, &frame, now_ms);
+
+    let receipt = match crate::receipts::from_callback(&body, &ambient) {
+        Ok(r) => r,
+        Err(e) => {
+            let mut payload = serde_json::json!({ "error": e.message() });
+            // Name the offending field separately as well as in the sentence,
+            // so a caller can branch on it without parsing prose.
+            if let crate::receipts::CallbackError::ContentPresent(f)
+            | crate::receipts::CallbackError::NotANumber(f) = e
+            {
+                payload["field"] = serde_json::json!(f);
+            }
+            payload["accepted_fields"] = serde_json::json!([
+                "model", "total_duration", "load_duration", "prompt_eval_count",
+                "prompt_eval_cached_count", "prompt_eval_duration", "eval_count",
+                "eval_duration", "num_ctx",
+            ]);
+            return (StatusCode::BAD_REQUEST, axum::Json(payload)).into_response();
+        }
+    };
+
+    let Some(axum::extract::Extension(store)) = store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            axum::Json(serde_json::json!({
+                "error": "this agent has no local store, so a receipt cannot be kept",
+                "hint":  "GET /api/health reports why the store did not open",
+            })),
+        )
+            .into_response();
+    };
+
+    let node_id = node_id_ext.0.to_string();
+    let to_write = receipt.clone();
+    // store.rs's rule: blocking database calls run off the async thread.
+    match tokio::task::spawn_blocking(move || store.write_receipt(&node_id, &to_write)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            eprintln!("[receipts] could not store a posted receipt: {e}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                axum::Json(serde_json::json!({ "error": "the receipt could not be stored" })),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            eprintln!("[receipts] store task failed: {e}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                axum::Json(serde_json::json!({ "error": "the receipt could not be stored" })),
+            )
+                .into_response();
+        }
+    }
+
+    // A posted receipt is activity: someone ran a request against this model,
+    // which is exactly what `in_use` is asking. Without this, a model serving
+    // real traffic through a caller that posts receipts reads as idle, and
+    // readiness would happily offer it up for displacement.
+    let counted_as_activity = residency
+        .lock()
+        .map(|mut t| t.note_activity(&receipt.model, now_ms))
+        .unwrap_or(false);
+
+    (
+        StatusCode::CREATED,
+        axum::Json(serde_json::json!({
+            "receipt": receipt,
+            "decode_tps": receipt.decode_tps(),
+            "prompt_tps": receipt.prompt_tps(),
+            // Whether it marked the model in use. False means the tracker has
+            // not polled this model as loaded yet, which is worth knowing: the
+            // receipt is stored either way.
+            "counted_as_activity": counted_as_activity,
+        })),
+    )
+        .into_response()
+}
+
+/// GET /v1/receipts — stored receipts, newest first. `?model=` narrows,
+/// `?limit=` bounds (default 100).
+#[cfg(not(target_env = "musl"))]
+pub(crate) async fn handle_v1_receipts_get(
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+    axum::extract::Extension(node_id_ext): axum::extract::Extension<NodeId>,
+    store: MaybeStore,
+) -> axum::response::Response {
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+
+    let Some(axum::extract::Extension(store)) = store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            axum::Json(serde_json::json!({
+                "error": "this agent has no local store, so it has no receipts to show",
+                "hint":  "GET /api/health reports why the store did not open",
+            })),
+        )
+            .into_response();
+    };
+
+    let model = params.get("model").cloned();
+    let limit = params
+        .get("limit")
+        .and_then(|l| l.parse::<usize>().ok())
+        .unwrap_or(100);
+    let node_id = node_id_ext.0.to_string();
+
+    let rows = tokio::task::spawn_blocking(move || {
+        store.query_receipts(&node_id, model.as_deref(), limit)
+    })
+    .await;
+
+    match rows {
+        Ok(Ok(receipts)) => {
+            // The rates alongside each receipt, computed once here rather than
+            // by every consumer: a caller that divides eval_count by the wrong
+            // duration gets a plausible wrong answer.
+            let enriched: Vec<serde_json::Value> = receipts
+                .iter()
+                .map(|r| {
+                    let mut v = serde_json::to_value(r).unwrap_or_default();
+                    if let Some(obj) = v.as_object_mut() {
+                        obj.insert("decode_tps".into(), serde_json::json!(r.decode_tps()));
+                        obj.insert("prompt_tps".into(), serde_json::json!(r.prompt_tps()));
+                    }
+                    v
+                })
+                .collect();
+            let decode: Vec<f64> = receipts.iter().filter_map(|r| r.decode_tps()).collect();
+            axum::Json(serde_json::json!({
+                "receipts": enriched,
+                "count": enriched.len(),
+                // A range rather than a mean, for the reason Stats documents:
+                // three inference runs are not normally distributed.
+                "decode_tps": crate::receipts::Stats::of(&decode),
+            }))
+            .into_response()
+        }
+        Ok(Err(e)) => {
+            eprintln!("[receipts] could not read receipts: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                axum::Json(serde_json::json!({ "error": "the receipts could not be read" })),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            eprintln!("[receipts] read task failed: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                axum::Json(serde_json::json!({ "error": "the receipts could not be read" })),
+            )
+                .into_response()
+        }
+    }
+}
+
 #[cfg(test)]
 mod metrics_sse_tests {
     use super::*;

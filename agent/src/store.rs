@@ -574,6 +574,44 @@ impl Store {
             -- statements holds the serialised Vec<Statement>, for the same
             -- reason before_state does above: a later rule's new field must not
             -- need a schema change.
+            -- One exact measurement of one request. See receipts.rs for
+            -- what each source is worth; the column set is that struct.
+            --
+            -- Durations stay in nanoseconds, in the runtime's own field
+            -- names. Converting on the way in would mean every reader
+            -- converting back to compare against a raw response, and a unit
+            -- converted twice is a unit converted wrong.
+            --
+            -- The primary key is content-derived, so a caller that retries a
+            -- POST stores one receipt rather than two. That matters more than
+            -- it sounds: a double-counted receipt pulls a median toward
+            -- whichever request happened to be retried.
+            CREATE TABLE IF NOT EXISTS receipts (
+                node_id                  TEXT   NOT NULL,
+                id                       TEXT   NOT NULL,
+                ts_ms                    BIGINT NOT NULL,
+                source                   TEXT   NOT NULL,
+                model                    TEXT   NOT NULL,
+                digest                   TEXT,
+                context_length           BIGINT,
+                size_bytes               BIGINT,
+                size_vram_bytes          BIGINT,
+                start_state              TEXT   NOT NULL,
+                load_ns                  BIGINT,
+                prompt_eval_count        BIGINT,
+                prompt_eval_cached_count BIGINT,
+                prompt_eval_ns           BIGINT,
+                eval_count               BIGINT,
+                eval_ns                  BIGINT,
+                total_ns                 BIGINT,
+                wall_ms                  BIGINT,
+                co_resident              TEXT   NOT NULL DEFAULT '',
+                thermal_state            TEXT,
+                test_id                  TEXT,
+                finding_id               TEXT,
+                PRIMARY KEY (node_id, id)
+            );
+
             CREATE TABLE IF NOT EXISTS findings (
                 node_id        TEXT   NOT NULL,
                 id             TEXT   NOT NULL,
@@ -715,6 +753,13 @@ impl Store {
         // pruned — an open finding with no evidence left in the window is
         // still true, and the next evaluation will resolve it if it is not.
         let finding_cutoff = now_ms - 30_i64 * 86_400_000_i64;
+        // Receipts are the only exact numbers on the host, and a fingerprint
+        // baseline is worth nothing if it expires before the operator changes
+        // the thing it was measuring. Thirty days, same as a resolved
+        // finding — step 6 compares a run against a baseline taken "before
+        // the change", and a week is not long enough for that to mean a
+        // configuration change someone actually made.
+        let receipt_cutoff = now_ms - 30_i64 * 86_400_000_i64;
 
         let conn = self.0.lock().unwrap();
 
@@ -814,6 +859,7 @@ impl Store {
             DELETE FROM model_transitions WHERE ts_ms < {transition_cutoff};
             DELETE FROM findings
              WHERE resolved_at_ms IS NOT NULL AND resolved_at_ms < {finding_cutoff};
+            DELETE FROM receipts WHERE ts_ms < {receipt_cutoff};
         "))?;
 
         // Fold the WAL into the main file after the hourly prune so deleted
@@ -2104,6 +2150,72 @@ mod tests {
     }
 
     #[test]
+    fn receipts_survive_a_round_trip_and_a_retry_stores_one_row() {
+        use crate::receipts::{Ambient, ReceiptSource, StartState, from_callback};
+
+        let (store, dir) = temp_store("receipts");
+        let t0 = 1_700_000_000_000_i64;
+        let ambient = Ambient {
+            ts_ms: t0,
+            digest: Some("sha256:abc".into()),
+            size_bytes: Some(5_280_104_447),
+            size_vram_bytes: Some(5_280_104_447),
+            running_context_length: Some(8192),
+            co_resident: vec!["other:7b".into()],
+            thermal_state: Some("Normal".into()),
+            was_loaded: true,
+        };
+        let body = serde_json::json!({
+            "model": "coder:14b",
+            "total_duration": 8_113_331_500_u64,
+            "load_duration": 6_396_458_u64,
+            "prompt_eval_count": 26,
+            "prompt_eval_duration": 130_079_000_u64,
+            "eval_count": 298,
+            "eval_duration": 4_868_000_000_u64,
+            "num_ctx": 32768
+        });
+        let r = from_callback(&body, &ambient).unwrap();
+        store.write_receipt("WK-TEST", &r).unwrap();
+
+        let back = store.query_receipts("WK-TEST", None, 10).unwrap();
+        assert_eq!(back.len(), 1);
+        // Every field, because the point of the table is that the numbers
+        // come back exactly as the runtime reported them.
+        assert_eq!(back[0], r);
+        assert_eq!(back[0].source, ReceiptSource::Callback);
+        assert_eq!(back[0].start_state, StartState::Loaded);
+        assert_eq!(back[0].co_resident, vec!["other:7b".to_string()]);
+        assert!((back[0].decode_tps().unwrap() - 61.2).abs() < 0.1);
+
+        // The same receipt posted twice is one row, not two: a retried POST
+        // must not move a median.
+        store.write_receipt("WK-TEST", &r).unwrap();
+        assert_eq!(store.query_receipts("WK-TEST", None, 10).unwrap().len(), 1);
+
+        // Newest first, and filterable by model.
+        let mut later = ambient.clone();
+        later.ts_ms = t0 + 60_000;
+        let mut other_body = body.clone();
+        other_body.as_object_mut().unwrap().insert("model".into(), serde_json::json!("tiny:1b"));
+        let r2 = from_callback(&other_body, &later).unwrap();
+        store.write_receipt("WK-TEST", &r2).unwrap();
+
+        let all = store.query_receipts("WK-TEST", None, 10).unwrap();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].model, "tiny:1b", "newest first");
+        assert_eq!(
+            store.query_receipts("WK-TEST", Some("coder:14b"), 10).unwrap().len(),
+            1,
+        );
+        // Another node's receipts are its own.
+        assert!(store.query_receipts("WK-OTHER", None, 10).unwrap().is_empty());
+
+        drop(store);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn findings_survive_a_real_round_trip_and_resolve_when_they_stop_firing() {
         use crate::findings::{Finding, Statement};
         use crate::residency::{Cause, ModelState, Residency, Transition, TransitionKind};
@@ -2534,5 +2646,134 @@ impl Store {
             })
         })?;
         Ok(rows.filter_map(Result::ok).collect())
+    }
+
+    /// Store one receipt. A receipt already stored under the same id is
+    /// replaced rather than duplicated, so a caller that retries a POST does
+    /// not pull its own median around.
+    pub fn write_receipt(
+        &self,
+        node_id: &str,
+        r: &crate::receipts::Receipt,
+    ) -> Result<(), duckdb::Error> {
+        // u64 to i64: every column here is a nanosecond duration or a token
+        // count, and i64 nanoseconds runs to the year 2262. A value that did
+        // not fit would be a runtime reporting nonsense, which is worth
+        // storing as NULL rather than as a negative number.
+        let n = |v: Option<u64>| v.and_then(|x| i64::try_from(x).ok());
+        let conn = self.0.lock().unwrap();
+        // DELETE then INSERT for the same reason reconcile_findings does
+        // UPDATE then INSERT: the upsert syntax has moved between DuckDB
+        // versions and this runs on a request path.
+        conn.execute("DELETE FROM receipts WHERE node_id = ? AND id = ?", params![node_id, r.id.as_str()])?;
+        conn.execute(
+            "INSERT INTO receipts
+               (node_id, id, ts_ms, source, model, digest, context_length,
+                size_bytes, size_vram_bytes, start_state, load_ns,
+                prompt_eval_count, prompt_eval_cached_count, prompt_eval_ns,
+                eval_count, eval_ns, total_ns, wall_ms, co_resident,
+                thermal_state, test_id, finding_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            params![
+                node_id,
+                r.id.as_str(),
+                r.ts_ms,
+                r.source.as_str(),
+                r.model.as_str(),
+                r.digest.as_deref(),
+                n(r.context_length),
+                n(r.size_bytes),
+                n(r.size_vram_bytes),
+                r.start_state.as_str(),
+                n(r.load_ns),
+                n(r.prompt_eval_count),
+                n(r.prompt_eval_cached_count),
+                n(r.prompt_eval_ns),
+                n(r.eval_count),
+                n(r.eval_ns),
+                n(r.total_ns),
+                n(r.wall_ms),
+                // Model names cannot contain a comma, as write_transitions
+                // already relies on.
+                r.co_resident.join(",").as_str(),
+                r.thermal_state.as_deref(),
+                r.test_id.as_deref(),
+                r.finding_id.as_deref(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Receipts for this node, newest first, optionally for one model.
+    ///
+    /// `limit` is required rather than optional: every caller wants a recent
+    /// window, and an unbounded read of thirty days of proxy receipts on a
+    /// busy host would hold the store mutex long enough to stall the writer.
+    pub fn query_receipts(
+        &self,
+        node_id: &str,
+        model: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<crate::receipts::Receipt>, duckdb::Error> {
+        use crate::receipts::{Receipt, ReceiptSource, StartState};
+        const COLS: &str = "id, ts_ms, source, model, digest, context_length,
+                            size_bytes, size_vram_bytes, start_state, load_ns,
+                            prompt_eval_count, prompt_eval_cached_count,
+                            prompt_eval_ns, eval_count, eval_ns, total_ns,
+                            wall_ms, co_resident, thermal_state, test_id,
+                            finding_id";
+        let limit = limit.min(10_000) as i64;
+        let conn = self.0.lock().unwrap();
+        let u = |v: Option<i64>| v.and_then(|x| u64::try_from(x).ok());
+        let build = |r: &duckdb::Row| -> Result<Receipt, duckdb::Error> {
+            let source: String = r.get(2)?;
+            let start: String = r.get(8)?;
+            let co: String = r.get(17)?;
+            Ok(Receipt {
+                id: r.get(0)?,
+                ts_ms: r.get(1)?,
+                // An unreadable name falls back rather than dropping the row:
+                // the measurements are still exact, and Callback is the
+                // honest guess because it is the only source a stranger can
+                // write to.
+                source: ReceiptSource::from_name(&source).unwrap_or(ReceiptSource::Callback),
+                model: r.get(3)?,
+                digest: r.get(4)?,
+                context_length: u(r.get(5)?),
+                size_bytes: u(r.get(6)?),
+                size_vram_bytes: u(r.get(7)?),
+                start_state: StartState::from_name(&start).unwrap_or(StartState::ColdUnknown),
+                load_ns: u(r.get(9)?),
+                prompt_eval_count: u(r.get(10)?),
+                prompt_eval_cached_count: u(r.get(11)?),
+                prompt_eval_ns: u(r.get(12)?),
+                eval_count: u(r.get(13)?),
+                eval_ns: u(r.get(14)?),
+                total_ns: u(r.get(15)?),
+                wall_ms: u(r.get(16)?),
+                co_resident: co.split(',').filter(|m| !m.is_empty()).map(str::to_string).collect(),
+                thermal_state: r.get(18)?,
+                test_id: r.get(19)?,
+                finding_id: r.get(20)?,
+            })
+        };
+        match model {
+            Some(m) => {
+                let mut stmt = conn.prepare(&format!(
+                    "SELECT {COLS} FROM receipts WHERE node_id = ? AND model = ?
+                      ORDER BY ts_ms DESC LIMIT ?"
+                ))?;
+                let rows = stmt.query_map(params![node_id, m, limit], build)?;
+                Ok(rows.filter_map(Result::ok).collect())
+            }
+            None => {
+                let mut stmt = conn.prepare(&format!(
+                    "SELECT {COLS} FROM receipts WHERE node_id = ?
+                      ORDER BY ts_ms DESC LIMIT ?"
+                ))?;
+                let rows = stmt.query_map(params![node_id, limit], build)?;
+                Ok(rows.filter_map(Result::ok).collect())
+            }
+        }
     }
 }

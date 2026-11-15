@@ -527,6 +527,32 @@ impl Tracker {
         }
     }
 
+    /// Record that a real caller used this model at `ts_ms`.
+    ///
+    /// The tracker infers activity from an expiry reset it attributes to a
+    /// user, which is the best it can do from polling alone and misses a
+    /// request shorter than the poll interval. A posted receipt is direct
+    /// evidence of the same thing, so it marks the model in use rather than
+    /// waiting for the next `/api/ps` to maybe show a reset.
+    ///
+    /// Returns whether it applied. A model the tracker has not polled as
+    /// loaded gets nothing: an activity timestamp on a model with no state
+    /// would be a readiness answer about a model Wicklee cannot see.
+    pub(crate) fn note_activity(&mut self, model: &str, ts_ms: i64) -> bool {
+        match self.states.get_mut(model) {
+            Some(state) => {
+                // Never move it backwards. Receipts can arrive out of order —
+                // a caller that batches its posts sends the oldest last — and
+                // the field means "most recent use", not "last one reported".
+                if state.last_activity_ms.is_none_or(|prev| ts_ms > prev) {
+                    state.last_activity_ms = Some(ts_ms);
+                }
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Every model the tracker has seen, loaded or not.
     pub(crate) fn states(&self) -> impl Iterator<Item = &ModelState> {
         self.states.values()
@@ -898,6 +924,33 @@ mod tests {
         assert_eq!(ctx.before.as_ref().unwrap().context_length, Some(8192));
         assert_eq!(ctx.after.as_ref().unwrap().context_length, Some(4096));
         assert_eq!(ctx.cause, Cause::User);
+    }
+
+    #[test]
+    fn a_receipt_marks_a_model_in_use_and_never_moves_activity_backwards() {
+        let mut t = Tracker::new();
+        t.observe(&poll(T0, Actor::Probe, vec![pm("a", 100, 100, 4096, T0 + 300_000)]));
+        assert_eq!(
+            t.states().next().unwrap().last_activity_ms,
+            None,
+            "a probe load is not activity",
+        );
+
+        // A posted receipt is direct evidence a caller used it.
+        assert!(t.note_activity("a", T0 + 1_000));
+        assert_eq!(t.states().next().unwrap().last_activity_ms, Some(T0 + 1_000));
+
+        // A receipt that arrives late does not rewind the field: it means
+        // "most recent use", not "last one reported".
+        assert!(t.note_activity("a", T0 + 500));
+        assert_eq!(t.states().next().unwrap().last_activity_ms, Some(T0 + 1_000));
+        assert!(t.note_activity("a", T0 + 2_000));
+        assert_eq!(t.states().next().unwrap().last_activity_ms, Some(T0 + 2_000));
+
+        // A model the tracker has never polled gets nothing, rather than a
+        // state invented from a receipt.
+        assert!(!t.note_activity("never-seen", T0 + 3_000));
+        assert_eq!(t.states().count(), 1);
     }
 
     #[test]
