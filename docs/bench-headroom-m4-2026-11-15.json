@@ -1,0 +1,153 @@
+{
+  "started_at": "2026-11-15T13:23:04.944Z",
+  "host": {
+    "label": "M4 Mac mini, 16 GB unified",
+    "accelerator_budget_gb": 11.6,
+    "notes": "iogpu.wired_limit_mb reads 0 on this M4, so the agent falls back to 75% of total RAM."
+  },
+  "context": 8192,
+  "env": {
+    "agent_version": "0.14.0",
+    "ollama_version": "0.40.16"
+  },
+  "pairs": [
+    {
+      "first": "qwen3.5:4b",
+      "second": "qwen3.5:9b",
+      "first_resident_bytes": 3373426277,
+      "predicted": {
+        "readiness": "requires_loading",
+        "fit_basis": "estimated_weights_only",
+        "footprint_bytes": 6562265784,
+        "headroom_bytes": 9511475611,
+        "headroom_source": "apple_wired_limit",
+        "safety_margin_bytes": 536870912,
+        "would_displace": []
+      },
+      "both_resident": false,
+      "resident_after": [
+        "qwen3.5:9b"
+      ],
+      "total_bytes_after": 5653659646,
+      "attempted_total_bytes": 9027085923,
+      "verdict": "optimistic"
+    },
+    {
+      "first": "qwen3.5:4b",
+      "second": "llama3.1:8b",
+      "first_resident_bytes": 3373426277,
+      "predicted": {
+        "readiness": "requires_loading",
+        "fit_basis": "estimated_weights_only",
+        "footprint_bytes": 4896719240,
+        "headroom_bytes": 9511475611,
+        "headroom_source": "apple_wired_limit",
+        "safety_margin_bytes": 536870912,
+        "would_displace": []
+      },
+      "both_resident": false,
+      "resident_after": [
+        "llama3.1:8b"
+      ],
+      "total_bytes_after": 5951214059,
+      "attempted_total_bytes": 9324640336,
+      "verdict": "optimistic"
+    },
+    {
+      "first": "qwen3.5:9b",
+      "second": "qwen3.5:4b",
+      "first_resident_bytes": 5779509738,
+      "predicted": {
+        "readiness": "requires_loading",
+        "fit_basis": "measured",
+        "footprint_bytes": 3373426277,
+        "headroom_bytes": 7105392150,
+        "headroom_source": "apple_wired_limit",
+        "safety_margin_bytes": 536870912,
+        "would_displace": []
+      },
+      "both_resident": false,
+      "resident_after": [
+        "qwen3.5:4b"
+      ],
+      "total_bytes_after": 3373426277,
+      "attempted_total_bytes": 9152936015,
+      "verdict": "optimistic"
+    },
+    {
+      "first": "qwen3.5:9b",
+      "second": "llama3.1:8b",
+      "first_resident_bytes": 5779509738,
+      "predicted": {
+        "readiness": "requires_loading",
+        "fit_basis": "measured",
+        "footprint_bytes": 5951214059,
+        "headroom_bytes": 7105392150,
+        "headroom_source": "apple_wired_limit",
+        "safety_margin_bytes": 536870912,
+        "would_displace": []
+      },
+      "both_resident": false,
+      "resident_after": [
+        "llama3.1:8b"
+      ],
+      "total_bytes_after": 5951214059,
+      "attempted_total_bytes": 11730723797,
+      "verdict": "optimistic"
+    },
+    {
+      "first": "llama3.1:8b",
+      "second": "qwen3.5:4b",
+      "first_resident_bytes": 5951214059,
+      "predicted": {
+        "readiness": "requires_loading",
+        "fit_basis": "measured",
+        "footprint_bytes": 3373426277,
+        "headroom_bytes": 6933687829,
+        "headroom_source": "apple_wired_limit",
+        "safety_margin_bytes": 536870912,
+        "would_displace": []
+      },
+      "both_resident": true,
+      "resident_after": [
+        "qwen3.5:4b",
+        "llama3.1:8b"
+      ],
+      "total_bytes_after": 9324640336,
+      "attempted_total_bytes": 9324640336,
+      "verdict": "correct"
+    },
+    {
+      "first": "llama3.1:8b",
+      "second": "qwen3.5:9b",
+      "first_resident_bytes": 5951214059,
+      "predicted": {
+        "readiness": "requires_loading",
+        "fit_basis": "measured",
+        "footprint_bytes": 5779509738,
+        "headroom_bytes": 6933687829,
+        "headroom_source": "apple_wired_limit",
+        "safety_margin_bytes": 536870912,
+        "would_displace": []
+      },
+      "both_resident": false,
+      "resident_after": [
+        "qwen3.5:9b"
+      ],
+      "total_bytes_after": 5653659646,
+      "attempted_total_bytes": 11604873705,
+      "verdict": "optimistic"
+    }
+  ],
+  "bracket": {
+    "largest_coexisting_bytes": 9324640336,
+    "smallest_evicting_attempt_bytes": 9027085923,
+    "agent_budget_bytes": 12884901888,
+    "headroom_source": "apple_wired_limit"
+  },
+  "summary": {
+    "optimistic": 5,
+    "correct": 1
+  },
+  "finished_at": "2026-11-15T13:25:04.430Z"
+}

@@ -948,7 +948,7 @@ Steps are in dependency order. Each step ends with its tests passing and a short
 | 6 | **Done.** Verify runs and comparison, `POST /v1/verify` and `wicklee verify`. Rule `baseline_regression`. The `Verified` label, with `Receipt` and `VerifyRun` evidence references. Three deviations, all recorded below | 4, 5 | Two runs with a changed mock configuration report "improved." Unchanged runs report "no measurable change" |
 | 7 | **Done.** `wicklee_state`, `wicklee_readiness` and `wicklee_inspect`, each calling the same handler its route calls so the two cannot diverge. `get_model_fit` and `get_observations` retired, answering with a pointer to their replacement rather than "unknown tool" | 3, 4 | Tool output equals the HTTP JSON |
 | 8 | **Done.** `scripts/bench/fault-inject.mjs` (six scenarios) and `scripts/bench/reference-controller.mjs` (three policies, randomised runs, JSON plus a Markdown summary), with `scenarios.example.json` for the operator's own hardware. Results and what they exposed are below | 3, 4, 6 | Each scenario runs end to end on the maintainer's host |
-| 9 | Acceptance runs on the maintainer's machines, then three outside machines. Overhead measurement | 8 | Both demonstrations pass, or the write-up states plainly what did not |
+| 9 | **Partly done.** `acceptance.mjs` and `headroom-margin.mjs` added and run on the maintainer's M4; overhead measured against a rebuilt 0.12.0. Three rows pass, one fails, four need a day or other people's hardware. Results below | 8 | Both demonstrations pass, or the write-up states plainly what did not |
 | 10 | Update the README and `docs/ROADMAP.md`. Publish results with method and raw data | 9 | A new user can install, run `wicklee inspect`, and understand the output from the README alone |
 
 The remote-access rule moved from step 3 to step 1, because V8 showed the existing routes are already exposed.
@@ -981,6 +981,9 @@ The remote-access rule moved from step 3 to step 1, because V8 showed the existi
 | Step 7 shipped in | Commits straight to main on 2026-11-15, not yet tagged |
 | Tests, after step 8 | 258 passing, clippy clean at every commit |
 | Step 8 shipped in | Commits straight to main on 2026-11-15, not yet tagged |
+| Release binary, 0.12.0 rebuilt | 23,584,416 bytes on rustc 1.94.1. The 24,411,328 recorded above was a different toolchain, so every delta against it was confounded |
+| Release binary, after step 8 | 24,827,088 bytes, **+5.27% on a same-toolchain 0.12.0** |
+| Step 9 shipped in | Commits straight to main on 2026-11-15, not yet tagged |
 
 The pristine and step 1 figures were measured on the same toolchain, which is the only way that comparison means anything. The step 4 figure is on rustc 1.94.1 and its toolchain match to step 1 is unverified, so the +0.81% is indicative.
 
@@ -1245,6 +1248,117 @@ threshold would have picked it, and the `wicklee` policy would have followed.
 Nothing here is a reason to adjust the margin on one host's evidence — that is
 a step 9 question across several machines — but it is the first thing step 9
 should measure.
+
+### Step 9 results, on the maintainer's M4 (2026-11-15)
+
+`scripts/bench/acceptance.mjs` runs the rows that fit in one pass and says
+which it cannot reach; `scripts/bench/headroom-margin.mjs` measures the
+displacement question step 8 raised. Transcripts in `docs/bench-*`.
+
+**Overhead. Phase 1 adds nothing measurable at idle.** Both builds run with no
+store, same ports, five samples, 0.12.0 with its startup self-update disabled
+(see below):
+
+| | idle RSS | idle CPU |
+| --- | --- | --- |
+| 0.12.0 baseline, no store | 23 MB | 0.00% (peak 0.10%) |
+| 0.14.0 Phase 1, no store | 22 MB | 0.00% |
+| 0.14.0 Phase 1, with the DuckDB store | 83 MB | 0.10% |
+
+The 1 MB difference is below what `ps` resolves, and Phase 1 reads lower than
+the baseline, so the honest statement is "no measurable change". The store is
+the real cost at about 61 MB, and it is what makes history, receipts and
+`baseline_regression` possible.
+
+Inference throughput, with the agent against without, four interleaved blocks
+of four:
+
+| | median | range | n |
+| --- | --- | --- | --- |
+| agent running | 27.36 tok/s | 27.04–27.98 | 8 |
+| agent stopped | 27.73 tok/s | 25.97–28.11 | 8 |
+
+−1.34%, ranges overlapping, so no resolvable cost. **A two-block A/B of the
+same measurement said −2.96% with ranges disjoint by 0.02 tok/s**, which would
+have been reported as a real regression. Interleaving dissolved it: that was
+thermal drift across the session, and it is the same trap the 5%
+`MIN_MEASURABLE_PCT` floor exists for.
+
+**Acceptance rows that pass.**
+
+| Row | Result |
+| --- | --- |
+| Reproducible | **pass.** Three fingerprints of one unchanged model all overlap; medians spread 0.7% |
+| Hard test / evidence | **pass**, checked structurally rather than by opinion: every statement carries a basis, every finding carries an observed or verified statement, every inferred one hedges |
+| No side effects | **pass.** `expires_at` unchanged across reads of `/v1/state`, `/v1/readiness`, `/v1/inspect` and `/v1/findings` |
+| Detection | **partial.** Three of six scenarios fired on this hardware; two are not inducible here and one is below the rule's threshold. See step 8 |
+| Overhead | **measured**, above |
+
+**The row that fails, and it is the important one. Readiness's displacement
+answer is optimistic, and it cannot be fixed by tuning a margin.** Six ordered
+pairs of three models, each loaded at context 8192, with the first made
+recently-used so it reads as in use:
+
+| First | Second | Predicted | Actual |
+| --- | --- | --- | --- |
+| `qwen3.5:4b` | `qwen3.5:9b` | requires_loading, nothing displaced | 4b evicted |
+| `qwen3.5:4b` | `llama3.1:8b` | requires_loading, nothing displaced | 4b evicted |
+| `qwen3.5:9b` | `qwen3.5:4b` | requires_loading, nothing displaced | 9b evicted |
+| `qwen3.5:9b` | `llama3.1:8b` | requires_loading, nothing displaced | 9b evicted |
+| `llama3.1:8b` | `qwen3.5:4b` | requires_loading, nothing displaced | **both resident** |
+| `llama3.1:8b` | `qwen3.5:9b` | requires_loading, nothing displaced | 8b evicted |
+
+Five optimistic, one correct. The decisive pair is `llama3.1:8b` with
+`qwen3.5:4b`: loaded in that order both stay resident at 9.32 GB total; loaded
+the other way the first is evicted. Same two models, same total, opposite
+outcome, and it reproduced twice in each direction.
+
+So the brackets cross — the largest coexisting pair was 9.32 GB and the
+smallest evicting attempt 9.03 GB — which means **eviction on this host is not
+a function of total resident size.** The agent works from a 12.88 GB budget
+(`apple_wired_limit`, 75% of 16 GB because `iogpu.wired_limit_mb` reads 0), and
+no "budget minus a constant" reproduces the observed pattern. Ollama's
+scheduler is deciding on accounting that `/api/ps` does not expose.
+
+That bears directly on what readiness can honestly promise. Three options, none
+of them a margin tweak, and all needing evidence from more than one host:
+report co-residency as `may_require_eviction` whenever another model is
+resident and in use; carry the uncertainty in the answer rather than in a
+boolean; or find a runtime signal that does predict it. **Recorded, not
+chosen.**
+
+This also explains step 8's tie. All three policies chose the same model and
+all fifteen runs displaced, because readiness told the `wicklee` policy the
+load would fit. The right answer existed — `qwen3.5:4b` coexists with the held
+model — so the agent-value demonstration is not a null result about readiness
+in principle. It is a measurement of this prediction being wrong.
+
+**A finding about the old binary, found by trying to measure it.** v0.12.0
+predates `--no-cloud`, so starting it on a networked host ran its startup
+update check and `self-replace` swapped the binary for the 0.14.0 release asset
+within about five seconds — the file on disk changed from 23,584,416 to
+24,628,176 bytes and began reporting v0.14.0. The baseline is only measurable
+with that one call disabled, which is what the numbers above used. Worth
+knowing generally: an old agent restarted on a networked host does not stay
+old, and the installed service on this machine is still 0.11.1 only because it
+has not restarted since 2026-11-13.
+
+**Correction to the Measured table above.** Every binary-size delta recorded
+for steps 1, 4 and 5 compared against a pristine 0.12.0 figure of 24,411,328
+bytes taken on an unrecorded toolchain. Rebuilt from the v0.12.0 tag on
+rustc 1.94.1, the same source produces **23,584,416 bytes**. Same-toolchain
+Phase 1 growth is therefore **+5.27%** (24,827,088 against 23,584,416), not the
++1.50% recorded at step 5. The earlier deltas were measuring the toolchain as
+much as the code.
+
+**Rows not reached, and why.**
+
+| Row | Why not |
+| --- | --- |
+| Quiet across 24 hours | Needs a day of real use. The short control is quiet; the long one is an operator reading `wicklee inspect` after a normal day |
+| Fix confirmed | Needs an injected fault whose fix moves the generation rate by more than 5%. On this host the only lever is memory contention, and 16 GB cannot hold two models resident with one busy — the same reason `baseline_regression` is not inducible here |
+| Other hardware | Needs three machines with different configurations, which is other people. `acceptance.mjs` exists so they produce one comparable transcript instead of following prose |
+| Decision changed, measured benefit | Blocked on the displacement prediction above |
 
 ### Open verification: `inspect` against the installed daemon
 

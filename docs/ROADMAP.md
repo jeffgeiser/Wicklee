@@ -332,7 +332,39 @@ The arithmetic was right; the budget it was done against was not. That is the
 first thing step 9 should measure across machines, and it is recorded in
 `docs/PHASE1_SPEC.md` rather than patched from one host's evidence.
 
-**Then:** step 9 acceptance runs, 10 README and this file.
+**Step 9 is partly done, on main, not yet tagged.** `acceptance.mjs` runs the
+rows that fit one pass and names the two it cannot reach;
+`headroom-margin.mjs` measures the displacement question step 8 raised. Both
+ran on the M4.
+
+Three rows pass. Reproducibility: three fingerprints of one unchanged model all
+overlap, medians spread 0.7%. Evidence: every statement carries a basis, every
+finding an observed or verified one, every inference hedges — checked
+structurally. No side effects: `expires_at` unmoved across reads of all four
+read routes.
+
+**Overhead is nothing measurable.** Against a rebuilt 0.12.0, idle RSS is 22 MB
+against 23 MB and idle CPU is 0.00% for both; the DuckDB store accounts for
+about 61 MB on top. Throughput with the agent against without, interleaved, is
+−1.34% with overlapping ranges — and a two-block A/B of the same thing said
+−2.96% with ranges disjoint by 0.02 tok/s, which was thermal drift. The binary
+is +5.27% on a same-toolchain 0.12.0; the +1.50% recorded earlier compared
+against a figure built on a different toolchain.
+
+**One row fails, and it is the one that matters.** Readiness's displacement
+answer was optimistic in five of six ordered model pairs. The decisive pair:
+`llama3.1:8b` then `qwen3.5:4b` keeps both resident at 9.32 GB, and the same
+pair in the opposite order evicts — reproducibly. Eviction on this host is not
+a function of total size, so no margin tweak fixes it, and that is why step 8's
+controller tied. Three ways forward are written down in
+`docs/PHASE1_SPEC.md`; none is chosen on one host's evidence.
+
+Not reached: the 24-hour quiet control, "fix confirmed" (needs a >5% lever that
+16 GB cannot provide), and three outside machines — which is other people, and
+why `acceptance.mjs` produces one comparable transcript instead of a prose
+checklist.
+
+**Then:** step 10 README and this file.
 
 *This entry is a status index, not the rewrite.* Commit `49e332d` left the
 ROADMAP alone on purpose — repositioning the whole document around

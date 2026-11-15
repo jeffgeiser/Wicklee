@@ -1,0 +1,217 @@
+{
+  "started_at": "2026-11-15T13:27:47.830Z",
+  "label": "M4 Mac mini, 16 GB unified (maintainer)",
+  "host": {
+    "declared": {
+      "label": "M4 Mac mini, 16 GB unified",
+      "accelerator_budget_gb": 11.6,
+      "notes": "iogpu.wired_limit_mb reads 0 on this M4, so the agent falls back to 75% of total RAM."
+    },
+    "platform": "darwin arm64 25.5.0",
+    "cpus": 10,
+    "cpu_model": "Apple M4",
+    "total_mem_bytes": 17179869184
+  },
+  "env": {
+    "agent_version": "0.14.0",
+    "build_target": "macos-aarch64",
+    "store_healthy": true,
+    "ollama_version": "0.40.16"
+  },
+  "checks": {
+    "reproducible": {
+      "pass": true,
+      "detail": "all three overlap; medians spread 0.7%",
+      "data": {
+        "runs": [
+          {
+            "high": 28.227462768554688,
+            "low": 27.61057472229004,
+            "median": 28.044376373291016,
+            "n": 3
+          },
+          {
+            "high": 28.2553653717041,
+            "low": 27.400609970092773,
+            "median": 28.250776290893555,
+            "n": 3
+          },
+          {
+            "high": 28.420785903930664,
+            "low": 27.15697479248047,
+            "median": 28.253507614135742,
+            "n": 3
+          }
+        ],
+        "median_spread_pct": 0.7
+      },
+      "took_s": 51.6
+    },
+    "evidence": {
+      "pass": true,
+      "detail": "1 finding(s), all evidenced",
+      "data": {
+        "findings": [
+          {
+            "id": "F-e0438f",
+            "rule": "eviction_churn",
+            "statements": [
+              {
+                "basis": [
+                  {
+                    "id": 4,
+                    "kind": "transition",
+                    "ts_ms": 1794749023421
+                  },
+                  {
+                    "id": 6,
+                    "kind": "transition",
+                    "ts_ms": 1794749033420
+                  },
+                  {
+                    "id": 9,
+                    "kind": "transition",
+                    "ts_ms": 1794749048421
+                  },
+                  {
+                    "id": 11,
+                    "kind": "transition",
+                    "ts_ms": 1794749053419
+                  },
+                  {
+                    "id": 13,
+                    "kind": "transition",
+                    "ts_ms": 1794749068421
+                  },
+                  {
+                    "id": 18,
+                    "kind": "transition",
+                    "ts_ms": 1794749098421
+                  },
+                  {
+                    "id": 22,
+                    "kind": "transition",
+                    "ts_ms": 1794749208426
+                  },
+                  {
+                    "id": 24,
+                    "kind": "transition",
+                    "ts_ms": 1794749213426
+                  }
+                ],
+                "label": "observed",
+                "subjects": [
+                  "qwen3.5:4b",
+                  "llama3.1:8b",
+                  "qwen3.5:9b"
+                ],
+                "text": "3 models were cleared 8 times in the last 5 minutes within 10 seconds of another model loading, each before its own keep-alive expired: llama3.1:8b, qwen3.5:4b, qwen3.5:9b."
+              },
+              {
+                "basis": [
+                  {
+                    "id": 4,
+                    "kind": "transition",
+                    "ts_ms": 1794749023421
+                  },
+                  {
+                    "id": 6,
+                    "kind": "transition",
+                    "ts_ms": 1794749033420
+                  },
+                  {
+                    "id": 9,
+                    "kind": "transition",
+                    "ts_ms": 1794749048421
+                  },
+                  {
+                    "id": 11,
+                    "kind": "transition",
+                    "ts_ms": 1794749053419
+                  },
+                  {
+                    "id": 13,
+                    "kind": "transition",
+                    "ts_ms": 1794749068421
+                  },
+                  {
+                    "id": 18,
+                    "kind": "transition",
+                    "ts_ms": 1794749098421
+                  },
+                  {
+                    "id": 22,
+                    "kind": "transition",
+                    "ts_ms": 1794749208426
+                  },
+                  {
+                    "id": 24,
+                    "kind": "transition",
+                    "ts_ms": 1794749213426
+                  }
+                ],
+                "label": "inferred",
+                "subjects": [
+                  "qwen3.5:4b",
+                  "llama3.1:8b",
+                  "qwen3.5:9b"
+                ],
+                "text": "Memory contention may be causing the reloads: a load that does not fit clears resident models rather than queueing."
+              }
+            ]
+          }
+        ]
+      },
+      "took_s": 0
+    },
+    "no_side_effects": {
+      "pass": true,
+      "detail": "expires_at unchanged across all four reads",
+      "data": {
+        "before": "2026-11-15T08:43:39.57505-05:00",
+        "after": "2026-11-15T08:43:39.57505-05:00"
+      },
+      "took_s": 3.7
+    },
+    "overhead": {
+      "pass": null,
+      "detail": "0.14.0: RSS 51 MB (peak 51), CPU 0.4% (peak 0.7%). Reported, not judged — the spec asks for the numbers against the 0.12.0 baseline, which needs both builds",
+      "data": {
+        "agent_version": "0.14.0",
+        "pid": 27590,
+        "rss_mb_median": 51,
+        "rss_mb_max": 51,
+        "cpu_pct_median": 0.4,
+        "cpu_pct_max": 0.7,
+        "samples": [
+          {
+            "rss_kb": 52048,
+            "cpu_pct": 0.7
+          },
+          {
+            "rss_kb": 52176,
+            "cpu_pct": 0.4
+          },
+          {
+            "rss_kb": 52256,
+            "cpu_pct": 0.4
+          },
+          {
+            "rss_kb": 52128,
+            "cpu_pct": 0.5
+          },
+          {
+            "rss_kb": 52032,
+            "cpu_pct": 0.4
+          }
+        ]
+      },
+      "took_s": 20.1
+    }
+  },
+  "not_covered": {
+    "healthy_24h": "a day of normal use with `wicklee inspect` read at the end",
+    "throughput_without_agent": "needs the agent stopped and restarted; run by hand"
+  },
+  "finished_at": "2026-11-15T13:29:03.207Z"
+}
