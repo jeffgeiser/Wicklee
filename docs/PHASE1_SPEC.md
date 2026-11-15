@@ -886,6 +886,8 @@ The dashboard components are shared with the hosted fleet view on wicklee.dev. R
 
 ### Deployed infrastructure
 
+The ordered, step-by-step version of this section, with owners and completion checks, is `docs/TRANSITION_PLAN.md`. Where the two disagree, that document is newer.
+
 Everything above concerns code. This section concerns running services, which are a separate decision: freezing a directory in the repository does not turn off the service built from it.
 
 **Phase 1's product needs two pieces of infrastructure.** Somewhere to serve a static site, and GitHub Releases to distribute the binary. The deliverable is a single binary a developer installs, reached through the CLI, HTTP on localhost and MCP. Nothing in this spec calls out to a server. Every other running component is either the withdrawn paid product or the frozen fleet view.
