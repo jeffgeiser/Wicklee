@@ -205,32 +205,9 @@ An **optional transparent proxy** (port 11434) is available for teams that want 
 
 ---
 
-## Fleet View
+## Plans
 
-For teams running multiple nodes, [wicklee.dev](https://wicklee.dev) aggregates all paired agents into a single dashboard with SSE real-time streaming.
-
-| | Community | Team | Enterprise |
-|---|---|---|---|
-| Price | Free | $99/mo (10 nodes) · $200/mo (25 nodes) | Custom |
-| Nodes in fleet view | 3 | 10 or 25 | Unlimited |
-| History | 24 hours | 90 days | 12 months |
-| Patterns | 9 | 20 | 20 |
-| Alerts | — | Slack, Email, PagerDuty | Slack, Email, PagerDuty |
-| Local API + MCP | ✅ | ✅ | ✅ |
-| Fleet API (`/api/v1/*`) | ✅ core endpoints, 60 req/min | ✅ + analytics, 600 req/min | ✅ + analytics, 600 req/min |
-| Cloud MCP | — | ✅ | ✅ |
-| OTel + Prometheus | — | ✅ | ✅ |
-| Cost & chargeback reports | — | ✅ | ✅ |
-| Idle-waste + capacity planner | — | ✅ | ✅ |
-| SLOs with error budgets | — | ✅ | ✅ |
-| Audit log export + SIEM drain | — | — | ✅ |
-| SSO / SAML | — | — | ✅ |
-| Self-hosted control plane | — | — | ✅ |
-
-Local nodes are unlimited — the node limit applies only to the cloud fleet
-view. Full detail at [wicklee.dev/pricing](https://wicklee.dev/pricing).
-
-To pair a node: open `localhost:7700` and click **Connect to Fleet**, or run `wicklee --pair`.
+There are no paid plans today.
 
 ---
 
@@ -266,7 +243,7 @@ that needs a person's consent, not an agent's.
 `wicklee_inspect` replace them. They answer with the name of their replacement
 rather than "unknown tool".
 
-### Cloud MCP Tools (wicklee.dev/mcp, Team tier)
+### Cloud MCP Tools (wicklee.dev/mcp)
 
 Fleet-aggregated MCP for remote AI agents — multi-node routing, cross-node WES comparison, and fleet-wide observations. Includes `get_fleet_model_fit` to score any HuggingFace GGUF against every online node simultaneously.
 
@@ -287,7 +264,7 @@ curl -X POST http://localhost:7700/mcp \
 
 Point your agent at **wicklee.dev/llms.txt** for full capability discovery.
 
-### Enterprise Bridge (Team tier)
+### Enterprise Bridge
 
 - **OpenTelemetry Export** — OTLP metrics to Datadog, Grafana Cloud, New Relic
 - **Prometheus Endpoint** — `GET https://wicklee.dev/metrics` on the cloud (not the agent) with API key authentication — see [docs/GRAFANA.md](docs/GRAFANA.md)
