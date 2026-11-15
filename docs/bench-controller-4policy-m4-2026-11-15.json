@@ -1,0 +1,585 @@
+{
+  "started_at": "2026-11-15T18:40:59.498Z",
+  "host": {
+    "label": "M4 Mac mini, 16 GB unified",
+    "accelerator_budget_gb": 11.6,
+    "notes": "iogpu.wired_limit_mb reads 0 on this M4, so the agent falls back to 75% of total RAM."
+  },
+  "workflow": {
+    "held": {
+      "name": "llama3.1:8b",
+      "resident_gb": 4.9,
+      "default_context": 8192
+    },
+    "acceptable": [
+      {
+        "name": "qwen3.5:9b",
+        "resident_gb": 6.6,
+        "default_context": 8192
+      },
+      {
+        "name": "qwen3.5:4b",
+        "resident_gb": 3.4,
+        "default_context": 8192
+      }
+    ],
+    "defer_allowed": true
+  },
+  "runs_per_policy": 5,
+  "order": [
+    "loaded_check",
+    "smallest_first",
+    "naive",
+    "naive",
+    "wicklee",
+    "loaded_check",
+    "loaded_check",
+    "loaded_check",
+    "loaded_check",
+    "smallest_first",
+    "smallest_first",
+    "naive",
+    "wicklee",
+    "smallest_first",
+    "wicklee",
+    "naive",
+    "wicklee",
+    "smallest_first",
+    "wicklee",
+    "naive"
+  ],
+  "env": {
+    "agent_version": "0.14.0",
+    "ollama_version": "0.40.16",
+    "models": [
+      {
+        "model": "llama3.1:8b",
+        "installed_size_bytes": 4920753328
+      },
+      {
+        "model": "qwen3.5:4b",
+        "installed_size_bytes": 3389983735
+      },
+      {
+        "model": "qwen3.5:9b",
+        "installed_size_bytes": 6594474711
+      }
+    ]
+  },
+  "runs": [
+    {
+      "policy": "loaded_check",
+      "chose": "qwen3.5:9b",
+      "reason": "none of the acceptable options is loaded",
+      "considered": null,
+      "held_loaded_before": true,
+      "decide_ms": 1,
+      "deferred_ms": 0,
+      "step_total_ms": 6948,
+      "step_ms": 6948,
+      "workflow_a_ms": 4196,
+      "workflow_a_reloaded": true,
+      "workflow_a_load_ms": 3641,
+      "displaced_in_use": true,
+      "transitions_added": 1
+    },
+    {
+      "policy": "smallest_first",
+      "chose": "qwen3.5:4b",
+      "reason": "qwen3.5:4b is the smallest installed (3.4 GB on disk)",
+      "considered": {
+        "ranked": [
+          "qwen3.5:4b 3.4GB",
+          "qwen3.5:9b 6.6GB"
+        ]
+      },
+      "held_loaded_before": true,
+      "decide_ms": 4,
+      "deferred_ms": 0,
+      "step_total_ms": 4803,
+      "step_ms": 4803,
+      "workflow_a_ms": 528,
+      "workflow_a_reloaded": false,
+      "workflow_a_load_ms": 6,
+      "displaced_in_use": false,
+      "transitions_added": 1
+    },
+    {
+      "policy": "naive",
+      "chose": "qwen3.5:9b",
+      "reason": "preferred option, unconditionally",
+      "considered": null,
+      "held_loaded_before": true,
+      "decide_ms": 5,
+      "deferred_ms": 0,
+      "step_total_ms": 7010,
+      "step_ms": 7010,
+      "workflow_a_ms": 4460,
+      "workflow_a_reloaded": true,
+      "workflow_a_load_ms": 3889,
+      "displaced_in_use": true,
+      "transitions_added": 3
+    },
+    {
+      "policy": "naive",
+      "chose": "qwen3.5:9b",
+      "reason": "preferred option, unconditionally",
+      "considered": null,
+      "held_loaded_before": true,
+      "decide_ms": 0,
+      "deferred_ms": 0,
+      "step_total_ms": 7023,
+      "step_ms": 7023,
+      "workflow_a_ms": 4486,
+      "workflow_a_reloaded": true,
+      "workflow_a_load_ms": 3920,
+      "displaced_in_use": true,
+      "transitions_added": 3
+    },
+    {
+      "policy": "wicklee",
+      "chose": "qwen3.5:4b",
+      "reason": "no option's co-residency is verified, so qwen3.5:4b — the smallest footprint (3.4 GB), which displaces the least",
+      "considered": {
+        "safe": [],
+        "unsafe": [
+          "qwen3.5:9b (fits by accounting, but co-residency with llama3.1:8b (in use) is unverified)",
+          "qwen3.5:4b (fits by accounting, but co-residency with llama3.1:8b (in use) is unverified)"
+        ],
+        "ranked": [
+          "qwen3.5:4b 3.4GB",
+          "qwen3.5:9b 5.7GB"
+        ]
+      },
+      "held_loaded_before": true,
+      "decide_ms": 9,
+      "deferred_ms": 0,
+      "step_total_ms": 5356,
+      "step_ms": 5356,
+      "workflow_a_ms": 528,
+      "workflow_a_reloaded": false,
+      "workflow_a_load_ms": 5,
+      "displaced_in_use": false,
+      "transitions_added": 1
+    },
+    {
+      "policy": "loaded_check",
+      "chose": "qwen3.5:9b",
+      "reason": "none of the acceptable options is loaded",
+      "considered": null,
+      "held_loaded_before": true,
+      "decide_ms": 2,
+      "deferred_ms": 0,
+      "step_total_ms": 7342,
+      "step_ms": 7342,
+      "workflow_a_ms": 4450,
+      "workflow_a_reloaded": true,
+      "workflow_a_load_ms": 3877,
+      "displaced_in_use": true,
+      "transitions_added": 4
+    },
+    {
+      "policy": "loaded_check",
+      "chose": "qwen3.5:9b",
+      "reason": "none of the acceptable options is loaded",
+      "considered": null,
+      "held_loaded_before": true,
+      "decide_ms": 0,
+      "deferred_ms": 0,
+      "step_total_ms": 6994,
+      "step_ms": 6994,
+      "workflow_a_ms": 4224,
+      "workflow_a_reloaded": true,
+      "workflow_a_load_ms": 3652,
+      "displaced_in_use": true,
+      "transitions_added": 2
+    },
+    {
+      "policy": "loaded_check",
+      "chose": "qwen3.5:9b",
+      "reason": "none of the acceptable options is loaded",
+      "considered": null,
+      "held_loaded_before": true,
+      "decide_ms": 0,
+      "deferred_ms": 0,
+      "step_total_ms": 6868,
+      "step_ms": 6868,
+      "workflow_a_ms": 4161,
+      "workflow_a_reloaded": true,
+      "workflow_a_load_ms": 3623,
+      "displaced_in_use": true,
+      "transitions_added": 2
+    },
+    {
+      "policy": "loaded_check",
+      "chose": "qwen3.5:9b",
+      "reason": "none of the acceptable options is loaded",
+      "considered": null,
+      "held_loaded_before": true,
+      "decide_ms": 0,
+      "deferred_ms": 0,
+      "step_total_ms": 6604,
+      "step_ms": 6604,
+      "workflow_a_ms": 4189,
+      "workflow_a_reloaded": true,
+      "workflow_a_load_ms": 3639,
+      "displaced_in_use": true,
+      "transitions_added": 1
+    },
+    {
+      "policy": "smallest_first",
+      "chose": "qwen3.5:4b",
+      "reason": "qwen3.5:4b is the smallest installed (3.4 GB on disk)",
+      "considered": {
+        "ranked": [
+          "qwen3.5:4b 3.4GB",
+          "qwen3.5:9b 6.6GB"
+        ]
+      },
+      "held_loaded_before": true,
+      "decide_ms": 3,
+      "deferred_ms": 0,
+      "step_total_ms": 4670,
+      "step_ms": 4670,
+      "workflow_a_ms": 502,
+      "workflow_a_reloaded": false,
+      "workflow_a_load_ms": 5,
+      "displaced_in_use": false,
+      "transitions_added": 1
+    },
+    {
+      "policy": "smallest_first",
+      "chose": "qwen3.5:4b",
+      "reason": "qwen3.5:4b is the smallest installed (3.4 GB on disk)",
+      "considered": {
+        "ranked": [
+          "qwen3.5:4b 3.4GB",
+          "qwen3.5:9b 6.6GB"
+        ]
+      },
+      "held_loaded_before": true,
+      "decide_ms": 4,
+      "deferred_ms": 0,
+      "step_total_ms": 4409,
+      "step_ms": 4409,
+      "workflow_a_ms": 481,
+      "workflow_a_reloaded": false,
+      "workflow_a_load_ms": 5,
+      "displaced_in_use": false,
+      "transitions_added": 1
+    },
+    {
+      "policy": "naive",
+      "chose": "qwen3.5:9b",
+      "reason": "preferred option, unconditionally",
+      "considered": null,
+      "held_loaded_before": true,
+      "decide_ms": 0,
+      "deferred_ms": 0,
+      "step_total_ms": 6893,
+      "step_ms": 6893,
+      "workflow_a_ms": 3927,
+      "workflow_a_reloaded": true,
+      "workflow_a_load_ms": 3367,
+      "displaced_in_use": true,
+      "transitions_added": 2
+    },
+    {
+      "policy": "wicklee",
+      "chose": "qwen3.5:4b",
+      "reason": "no option's co-residency is verified, so qwen3.5:4b — the smallest footprint (3.4 GB), which displaces the least",
+      "considered": {
+        "safe": [],
+        "unsafe": [
+          "qwen3.5:9b (fits by accounting, but co-residency with llama3.1:8b (in use) is unverified)",
+          "qwen3.5:4b (fits by accounting, but co-residency with llama3.1:8b (in use) is unverified)"
+        ],
+        "ranked": [
+          "qwen3.5:4b 3.4GB",
+          "qwen3.5:9b 5.7GB"
+        ]
+      },
+      "held_loaded_before": true,
+      "decide_ms": 4,
+      "deferred_ms": 0,
+      "step_total_ms": 4391,
+      "step_ms": 4391,
+      "workflow_a_ms": 488,
+      "workflow_a_reloaded": false,
+      "workflow_a_load_ms": 4,
+      "displaced_in_use": false,
+      "transitions_added": 0
+    },
+    {
+      "policy": "smallest_first",
+      "chose": "qwen3.5:4b",
+      "reason": "qwen3.5:4b is the smallest installed (3.4 GB on disk)",
+      "considered": {
+        "ranked": [
+          "qwen3.5:4b 3.4GB",
+          "qwen3.5:9b 6.6GB"
+        ]
+      },
+      "held_loaded_before": true,
+      "decide_ms": 3,
+      "deferred_ms": 0,
+      "step_total_ms": 4655,
+      "step_ms": 4655,
+      "workflow_a_ms": 481,
+      "workflow_a_reloaded": false,
+      "workflow_a_load_ms": 3,
+      "displaced_in_use": false,
+      "transitions_added": 1
+    },
+    {
+      "policy": "wicklee",
+      "chose": "qwen3.5:4b",
+      "reason": "no option's co-residency is verified, so qwen3.5:4b — the smallest footprint (3.4 GB), which displaces the least",
+      "considered": {
+        "safe": [],
+        "unsafe": [
+          "qwen3.5:9b (fits by accounting, but co-residency with llama3.1:8b (in use) is unverified)",
+          "qwen3.5:4b (fits by accounting, but co-residency with llama3.1:8b (in use) is unverified)"
+        ],
+        "ranked": [
+          "qwen3.5:4b 3.4GB",
+          "qwen3.5:9b 5.7GB"
+        ]
+      },
+      "held_loaded_before": true,
+      "decide_ms": 4,
+      "deferred_ms": 0,
+      "step_total_ms": 4353,
+      "step_ms": 4353,
+      "workflow_a_ms": 485,
+      "workflow_a_reloaded": false,
+      "workflow_a_load_ms": 4,
+      "displaced_in_use": false,
+      "transitions_added": 0
+    },
+    {
+      "policy": "naive",
+      "chose": "qwen3.5:9b",
+      "reason": "preferred option, unconditionally",
+      "considered": null,
+      "held_loaded_before": true,
+      "decide_ms": 0,
+      "deferred_ms": 0,
+      "step_total_ms": 6704,
+      "step_ms": 6704,
+      "workflow_a_ms": 3920,
+      "workflow_a_reloaded": true,
+      "workflow_a_load_ms": 3383,
+      "displaced_in_use": true,
+      "transitions_added": 1
+    },
+    {
+      "policy": "wicklee",
+      "chose": "qwen3.5:4b",
+      "reason": "no option's co-residency is verified, so qwen3.5:4b — the smallest footprint (3.4 GB), which displaces the least",
+      "considered": {
+        "safe": [],
+        "unsafe": [
+          "qwen3.5:9b (fits by accounting, but co-residency with llama3.1:8b (in use) is unverified)",
+          "qwen3.5:4b (fits by accounting, but co-residency with llama3.1:8b (in use) is unverified)"
+        ],
+        "ranked": [
+          "qwen3.5:4b 3.4GB",
+          "qwen3.5:9b 5.7GB"
+        ]
+      },
+      "held_loaded_before": true,
+      "decide_ms": 3,
+      "deferred_ms": 0,
+      "step_total_ms": 4390,
+      "step_ms": 4390,
+      "workflow_a_ms": 493,
+      "workflow_a_reloaded": false,
+      "workflow_a_load_ms": 3,
+      "displaced_in_use": false,
+      "transitions_added": 1
+    },
+    {
+      "policy": "smallest_first",
+      "chose": "qwen3.5:4b",
+      "reason": "qwen3.5:4b is the smallest installed (3.4 GB on disk)",
+      "considered": {
+        "ranked": [
+          "qwen3.5:4b 3.4GB",
+          "qwen3.5:9b 6.6GB"
+        ]
+      },
+      "held_loaded_before": true,
+      "decide_ms": 2,
+      "deferred_ms": 0,
+      "step_total_ms": 4417,
+      "step_ms": 4417,
+      "workflow_a_ms": 495,
+      "workflow_a_reloaded": false,
+      "workflow_a_load_ms": 5,
+      "displaced_in_use": false,
+      "transitions_added": 0
+    },
+    {
+      "policy": "wicklee",
+      "chose": "qwen3.5:4b",
+      "reason": "no option's co-residency is verified, so qwen3.5:4b — the smallest footprint (3.4 GB), which displaces the least",
+      "considered": {
+        "safe": [],
+        "unsafe": [
+          "qwen3.5:9b (fits by accounting, but co-residency with llama3.1:8b (in use) is unverified)",
+          "qwen3.5:4b (fits by accounting, but co-residency with llama3.1:8b (in use) is unverified)"
+        ],
+        "ranked": [
+          "qwen3.5:4b 3.4GB",
+          "qwen3.5:9b 5.7GB"
+        ]
+      },
+      "held_loaded_before": true,
+      "decide_ms": 3,
+      "deferred_ms": 0,
+      "step_total_ms": 4366,
+      "step_ms": 4366,
+      "workflow_a_ms": 485,
+      "workflow_a_reloaded": false,
+      "workflow_a_load_ms": 4,
+      "displaced_in_use": false,
+      "transitions_added": 0
+    },
+    {
+      "policy": "naive",
+      "chose": "qwen3.5:9b",
+      "reason": "preferred option, unconditionally",
+      "considered": null,
+      "held_loaded_before": true,
+      "decide_ms": 0,
+      "deferred_ms": 0,
+      "step_total_ms": 6951,
+      "step_ms": 6951,
+      "workflow_a_ms": 3915,
+      "workflow_a_reloaded": true,
+      "workflow_a_load_ms": 3362,
+      "displaced_in_use": true,
+      "transitions_added": 1
+    }
+  ],
+  "summary": {
+    "naive": {
+      "runs": 5,
+      "chose": {
+        "qwen3.5:9b": 5
+      },
+      "step_total_ms": {
+        "median": 6951,
+        "low": 6704,
+        "high": 7023,
+        "n": 5
+      },
+      "workflow_a_ms": {
+        "median": 3927,
+        "low": 3915,
+        "high": 4486,
+        "n": 5
+      },
+      "workflow_a_reloads": 5,
+      "displaced_in_use": 5,
+      "transitions_added": {
+        "median": 2,
+        "low": 1,
+        "high": 3,
+        "n": 5
+      },
+      "deferrals": 0
+    },
+    "loaded_check": {
+      "runs": 5,
+      "chose": {
+        "qwen3.5:9b": 5
+      },
+      "step_total_ms": {
+        "median": 6948,
+        "low": 6604,
+        "high": 7342,
+        "n": 5
+      },
+      "workflow_a_ms": {
+        "median": 4196,
+        "low": 4161,
+        "high": 4450,
+        "n": 5
+      },
+      "workflow_a_reloads": 5,
+      "displaced_in_use": 5,
+      "transitions_added": {
+        "median": 2,
+        "low": 1,
+        "high": 4,
+        "n": 5
+      },
+      "deferrals": 0
+    },
+    "smallest_first": {
+      "runs": 5,
+      "chose": {
+        "qwen3.5:4b": 5
+      },
+      "step_total_ms": {
+        "median": 4655,
+        "low": 4409,
+        "high": 4803,
+        "n": 5
+      },
+      "workflow_a_ms": {
+        "median": 495,
+        "low": 481,
+        "high": 528,
+        "n": 5
+      },
+      "workflow_a_reloads": 0,
+      "displaced_in_use": 0,
+      "transitions_added": {
+        "median": 1,
+        "low": 0,
+        "high": 1,
+        "n": 5
+      },
+      "deferrals": 0
+    },
+    "wicklee": {
+      "runs": 5,
+      "chose": {
+        "qwen3.5:4b": 5
+      },
+      "step_total_ms": {
+        "median": 4390,
+        "low": 4353,
+        "high": 5356,
+        "n": 5
+      },
+      "workflow_a_ms": {
+        "median": 488,
+        "low": 485,
+        "high": 528,
+        "n": 5
+      },
+      "workflow_a_reloads": 0,
+      "displaced_in_use": 0,
+      "transitions_added": {
+        "median": 0,
+        "low": 0,
+        "high": 1,
+        "n": 5
+      },
+      "deferrals": 0
+    }
+  },
+  "verdict": {
+    "outcome": "differs",
+    "detail": "wicklee chose qwen3.5:4b where loaded_check chose qwen3.5:9b. Compare displaced_in_use and workflow_a_reloads to see whether the difference was worth it."
+  },
+  "verdict_vs_smallest_first": {
+    "outcome": "tie",
+    "detail": "wicklee and smallest_first made the same choices (qwen3.5:4b), and displaced a model in use 0/5 against 0/5. Sorting /api/tags by installed size reached the same decision without Wicklee, so on this host readiness changed nothing a one-line heuristic would not have. It says nothing about whether the answer was better founded."
+  },
+  "finished_at": "2026-11-15T18:46:29.330Z"
+}

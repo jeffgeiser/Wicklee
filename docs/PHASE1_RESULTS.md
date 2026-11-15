@@ -217,6 +217,50 @@ literally, "unverified" collapses a ranking into a single bucket.
 
 Raw: [`bench-controller-rerun-m4-2026-11-15.json`](bench-controller-rerun-m4-2026-11-15.json).
 
+### Re-run with the ranking, against a cheap baseline
+
+Two changes. The `wicklee` policy now ranks unverified fits by footprint and
+chooses immediately instead of deferring — the ranking is the policy's, and
+Wicklee's own output still orders nothing. And a fourth policy,
+`smallest_first`, sorts `/api/tags` by installed size and takes the smallest,
+which costs one request and no Wicklee at all. Five runs each, randomised, same
+host:
+
+| Policy | Chose | B step ms | A latency ms | A reloads | In-use displaced | Deferrals |
+| --- | --- | --- | --- | --- | --- | --- |
+| `naive` | qwen3.5:9b ×5 | 6951 (6704–7023) | 3927 (3915–4486) | 5/5 | **5/5** | 0 |
+| `loaded_check` | qwen3.5:9b ×5 | 6948 (6604–7342) | 4196 (4161–4450) | 5/5 | **5/5** | 0 |
+| `smallest_first` | qwen3.5:4b ×5 | 4655 (4409–4803) | 495 (481–528) | 0/5 | **0/5** | 0 |
+| `wicklee` | qwen3.5:4b ×5 | 4390 (4353–5356) | 488 (485–528) | 0/5 | **0/5** | 0 |
+
+**Against `smallest_first`, this is a tie, and it is the result worth
+publishing.** Identical choices, identical displacement record, and the step
+and latency medians differ by less than run-to-run variation — they chose the
+same model, so they did the same work. **Sorting `/api/tags` by installed size
+made the same decision as the whole readiness surface, in one request.** On
+this host readiness changed nothing a one-line heuristic would not have.
+
+The deferral is gone: 0 of 5 against 5 of 5 in the previous run, with the step
+down from 34,742 ms to 4,390 ms. Ranking the unverified fits recovered
+everything the 30-second wait was costing, which confirms the wait was the
+policy's artifact and not the wording's price.
+
+What the tie does and does not say. It does not say readiness was wrong — both
+policies picked the model that genuinely coexists, and readiness said why while
+the heuristic guessed. It does say the **routing** claim has no support on this
+hardware: a controller that sorts by file size gets the same outcome for a
+fraction of the work, and the honest statement of Stage 2's value here is that
+it is unproven, not demonstrated.
+
+What `smallest_first` cannot do is visible in its construction rather than in
+these numbers, and is therefore not a claim: installed size is not the resident
+footprint, it has no notion of what is in use, and nothing stops it choosing a
+smallest option that still does not fit. A host where the smallest option is
+not the one that coexists would separate the two. This one does not, and three
+machines were already the open item.
+
+Raw: [`bench-controller-4policy-m4-2026-11-15.json`](bench-controller-4policy-m4-2026-11-15.json).
+
 ---
 
 ## Two corrections to the record
