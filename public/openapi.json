@@ -4,33 +4,337 @@
     "title": "Wicklee Fleet API",
     "description": "Sovereign GPU fleet monitor for local AI inference. Monitor WES scores, thermal state, inference efficiency, and hardware health across Ollama and vLLM nodes.",
     "version": "1.0.0",
-    "contact": { "name": "Wicklee", "url": "https://wicklee.dev" }
+    "contact": {
+      "name": "Wicklee",
+      "url": "https://wicklee.dev"
+    }
   },
   "servers": [
-    { "url": "https://wicklee.dev", "description": "Production fleet API" },
-    { "url": "http://localhost:7700", "description": "Local agent API (no auth)" }
+    {
+      "url": "https://wicklee.dev",
+      "description": "Production fleet API"
+    },
+    {
+      "url": "http://localhost:7700",
+      "description": "Local agent API (no auth)"
+    }
   ],
-  "security": [{ "ApiKeyAuth": [] }],
+  "security": [
+    {
+      "ApiKeyAuth": []
+    }
+  ],
   "paths": {
     "/mcp": {
       "post": {
         "operationId": "mcpJsonRpc",
         "summary": "MCP JSON-RPC 2.0 endpoint",
-        "description": "Model Context Protocol endpoint for AI agents. Supports tools (get_node_status, get_inference_state, get_active_models, get_observations — 18 agent-evaluated patterns; 2 additional cloud-evaluated patterns are queryable via the cloud Observations endpoint, get_metrics_history, get_model_fit) and resources (wicklee://node/metrics, wicklee://node/thermal). Localhost only, no auth required.",
-        "servers": [{ "url": "http://localhost:7700" }],
+        "description": "JSON-RPC 2.0. Tools: get_node_status, get_inference_state, get_active_models, get_metrics_history, wicklee_state, wicklee_readiness, wicklee_inspect. The three wicklee_* tools return the same JSON as GET /v1/state, /v1/readiness and /v1/inspect, calling the same handlers those routes call. get_model_fit and get_observations are retired and answer -32601 with the name of their replacement. fingerprint and verify are deliberately not exposed: they are the only routes that load models.",
+        "servers": [
+          {
+            "url": "http://localhost:7700"
+          }
+        ],
         "requestBody": {
           "required": true,
-          "content": { "application/json": { "schema": { "type": "object", "properties": { "jsonrpc": { "type": "string", "enum": ["2.0"] }, "method": { "type": "string" }, "params": { "type": "object" }, "id": {} }, "required": ["jsonrpc", "method", "id"] } } }
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "jsonrpc": {
+                    "type": "string",
+                    "enum": [
+                      "2.0"
+                    ]
+                  },
+                  "method": {
+                    "type": "string"
+                  },
+                  "params": {
+                    "type": "object"
+                  },
+                  "id": {}
+                },
+                "required": [
+                  "jsonrpc",
+                  "method",
+                  "id"
+                ]
+              }
+            }
+          }
         },
-        "responses": { "200": { "description": "JSON-RPC 2.0 response" } }
+        "responses": {
+          "200": {
+            "description": "JSON-RPC 2.0 response"
+          }
+        }
       }
     },
     "/.well-known/mcp.json": {
       "get": {
         "operationId": "mcpManifest",
         "summary": "MCP server discovery manifest",
-        "servers": [{ "url": "http://localhost:7700" }],
-        "responses": { "200": { "description": "MCP server manifest with capabilities, tools, and resources" } }
+        "servers": [
+          {
+            "url": "http://localhost:7700"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "MCP server manifest with capabilities, tools, and resources"
+          }
+        }
+      }
+    },
+    "/v1/state": {
+      "get": {
+        "operationId": "v1State",
+        "summary": "What is installed and loaded on this host",
+        "description": "Every installed model with its residency, the context it is running at, its measured footprint, how much of it sits outside accelerator memory, and when a real caller last used it. Includes a capability record of which response fields this runtime actually returns, so a caller can tell an unknown from a zero. Localhost agent; no auth when bound to loopback.",
+        "responses": {
+          "200": {
+            "description": "Per-model state and the runtime capability record",
+            "content": {
+              "application/json": {}
+            }
+          }
+        }
+      }
+    },
+    "/v1/readiness": {
+      "get": {
+        "operationId": "v1Readiness",
+        "summary": "Whether a model can run without displacing another",
+        "description": "Call before starting a task. Answers ready_now, requires_loading, would_displace or cannot_determine per model, with the memory headroom and the evidence behind the answer. valid_for_s says how long the answer holds.",
+        "parameters": [
+          {
+            "name": "model",
+            "in": "query",
+            "required": false,
+            "description": "One model to answer about. Omit for every installed model.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Readiness per model, or for the one named",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "404": {
+            "description": "The named model is not installed on this host"
+          }
+        }
+      }
+    },
+    "/v1/inspect": {
+      "get": {
+        "operationId": "v1Inspect",
+        "summary": "Findings about slow or unstable inference, with their evidence",
+        "description": "Findings, readiness and what could not be checked, in one answer. Each statement is labelled observed (Wicklee saw it), inferred (a likely cause, always hedged) or verified (measured, with a range), and carries the evidence behind it. A rule that could not run is listed under not_checked rather than silently omitted.",
+        "parameters": [
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "description": "How far back to look, e.g. 24h, 90m, 7d.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Findings, readiness and not_checked",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "400": {
+            "description": "The since window could not be parsed"
+          }
+        }
+      }
+    },
+    "/v1/findings": {
+      "get": {
+        "operationId": "v1Findings",
+        "summary": "The findings alone, open or resolved",
+        "description": "Resolution is observed rather than scheduled: a finding resolves because an evaluation ran and did not produce it, so resolved_at_ms is when Wicklee last looked and did not see it.",
+        "parameters": [
+          {
+            "name": "all",
+            "in": "query",
+            "required": false,
+            "description": "Include resolved findings.",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Open findings, or every finding recorded on this node",
+            "content": {
+              "application/json": {}
+            }
+          }
+        }
+      }
+    },
+    "/v1/receipts": {
+      "get": {
+        "operationId": "v1ReceiptsList",
+        "summary": "Stored per-request measurements",
+        "description": "Receipts newest first, with a median and range over the generation rates.",
+        "parameters": [
+          {
+            "name": "model",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Receipts with decode_tps and prompt_tps per receipt",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "503": {
+            "description": "This agent has no local store, so it keeps no receipts"
+          }
+        }
+      },
+      "post": {
+        "operationId": "v1ReceiptsPost",
+        "summary": "Hand back your runtime's own completion metadata",
+        "description": "The preferred way to get exact receipts, and on a default macOS install the only one that works: the proxy cannot bind 11434 while Ollama holds it. Durations are nanoseconds in the runtime's own field names, so the body is a copy of the response object rather than a transformation. Every field is optional except model. A posted receipt also counts as activity for readiness. The route REFUSES any payload containing prompt, response, messages or context with a 400 naming the field: Wicklee stores metadata only, and failing loudly beats quietly dropping a user's text.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "example": {
+                "model": "coder:14b",
+                "total_duration": 8113331500,
+                "load_duration": 6396458,
+                "prompt_eval_count": 26,
+                "prompt_eval_duration": 130079000,
+                "eval_count": 298,
+                "eval_duration": 4868000000,
+                "num_ctx": 32768
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Stored, with the receipt and its derived rates",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "400": {
+            "description": "Content field present, model missing, or a duration that is not a number"
+          },
+          "503": {
+            "description": "This agent has no local store, so a receipt cannot be kept"
+          }
+        }
+      }
+    },
+    "/v1/fingerprint": {
+      "post": {
+        "operationId": "v1Fingerprint",
+        "summary": "A consented test run",
+        "description": "The only routes that send inference requests are this one and /v1/verify. Sends a fixed synthetic prompt at a known length, temperature zero and a fixed seed, always passing the model's running num_ctx \u2014 omitting it reloads the model at 4096, which would destroy the state being measured. An unknown running context refuses rather than guessing. A body without consent true is answered 400 with the plan and the sentence being agreed to. Not exposed over MCP.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "example": {
+                "kind": "decode_rate",
+                "models": [
+                  "coder:14b"
+                ],
+                "runs": 3,
+                "consent": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The run's measurements, with a median and range per model",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "400": {
+            "description": "Consent missing: the body carries the plan and the consent text"
+          },
+          "409": {
+            "description": "Refused by the host \u2014 not resident, unknown context, or a model in use"
+          },
+          "503": {
+            "description": "No runtime found, or no local store"
+          }
+        }
+      }
+    },
+    "/v1/verify": {
+      "post": {
+        "operationId": "v1Verify",
+        "summary": "Re-run a finding's test and compare it with the first run",
+        "description": "Run it once for a baseline, change something, run it again. Returns both sides with medians and ranges, what differed in the configuration, and one of improved, worse or no measurable change. A verdict needs non-overlapping ranges, three receipts a side, and medians at least 5% apart; anything else is no measurable change with the reason stated. Not exposed over MCP.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "example": {
+                "finding_id": "F-7fff93",
+                "consent": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The run, and the comparison when there is a baseline to compare against",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "400": {
+            "description": "Consent missing, or finding_id absent"
+          },
+          "404": {
+            "description": "No such finding on this node"
+          },
+          "409": {
+            "description": "Refused by the host, or the finding names no model to measure"
+          },
+          "503": {
+            "description": "No runtime found, or no local store"
+          }
+        }
       }
     },
     "/metrics": {
@@ -38,8 +342,30 @@
         "operationId": "prometheusMetrics",
         "summary": "Prometheus scrape endpoint (Team+ tier)",
         "description": "Returns fleet metrics in Prometheus text format. 7 gauges per node: gpu_utilization, power_watts, tokens_per_second, wes_score, thermal_penalty, memory_pressure, ttft_ms.",
-        "parameters": [{ "name": "X-API-Key", "in": "header", "required": true, "schema": { "type": "string" } }],
-        "responses": { "200": { "description": "Prometheus text format", "content": { "text/plain": {} } }, "401": { "description": "Missing API key" }, "403": { "description": "Team tier required" } }
+        "parameters": [
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Prometheus text format",
+            "content": {
+              "text/plain": {}
+            }
+          },
+          "401": {
+            "description": "Missing API key"
+          },
+          "403": {
+            "description": "Team tier required"
+          }
+        }
       }
     },
     "/api/v1/fleet": {
@@ -50,9 +376,17 @@
         "responses": {
           "200": {
             "description": "Fleet node list",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FleetResponse" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FleetResponse"
+                }
+              }
+            }
           },
-          "401": { "description": "Missing or invalid API key" }
+          "401": {
+            "description": "Missing or invalid API key"
+          }
         }
       }
     },
@@ -64,7 +398,13 @@
         "responses": {
           "200": {
             "description": "WES scores",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WesResponse" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WesResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -73,13 +413,31 @@
       "get": {
         "operationId": "getNode",
         "summary": "Get single node deep dive",
-        "parameters": [{ "name": "nodeId", "in": "path", "required": true, "schema": { "type": "string" }, "example": "WK-XXXX" }],
+        "parameters": [
+          {
+            "name": "nodeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "WK-XXXX"
+          }
+        ],
         "responses": {
           "200": {
             "description": "Node with full metrics",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NodeResponse" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeResponse"
+                }
+              }
+            }
           },
-          "404": { "description": "Node not found" }
+          "404": {
+            "description": "Node not found"
+          }
         }
       }
     },
@@ -91,7 +449,13 @@
         "responses": {
           "200": {
             "description": "Routing recommendation",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RouteResponse" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RouteResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -104,9 +468,17 @@
         "responses": {
           "200": {
             "description": "Intelligence snapshot",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/InsightsResponse" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InsightsResponse"
+                }
+              }
+            }
           },
-          "402": { "description": "Requires Team tier or above" }
+          "402": {
+            "description": "Requires Team tier or above"
+          }
         }
       }
     },
@@ -116,14 +488,18 @@
         "summary": "Create a new API key",
         "description": "Returns the raw key once (prefix wk_live_). Stored as SHA-256 hash.",
         "responses": {
-          "200": { "description": "API key created" }
+          "200": {
+            "description": "API key created"
+          }
         }
       },
       "get": {
         "operationId": "listApiKeys",
         "summary": "List all API keys",
         "responses": {
-          "200": { "description": "API key list (hashes never exposed)" }
+          "200": {
+            "description": "API key list (hashes never exposed)"
+          }
         }
       }
     },
@@ -131,58 +507,159 @@
       "delete": {
         "operationId": "revokeApiKey",
         "summary": "Revoke an API key",
-        "parameters": [{ "name": "keyId", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "parameters": [
+          {
+            "name": "keyId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
-          "200": { "description": "Key revoked" }
+          "200": {
+            "description": "Key revoked"
+          }
         }
       }
     },
     "/api/sla": {
       "get": {
         "operationId": "getInferenceSla",
-        "summary": "Inference SLA Monitor — p50/p95/p99 percentiles",
-        "description": "Returns p50/p95/p99/max for TTFT, end-to-end latency, and TPOT computed via DuckDB quantile_cont() over per-request inference_traces. Compliance percentage against a configurable TTFT target, the 20 most-recent violations, and per-model breakdown. Requires the Ollama proxy (Settings → Proxy) to capture per-request data. Window: 1–1440 minutes (24h hard ceiling — that's the trace retention).",
-        "servers": [{ "url": "http://localhost:7700" }],
+        "summary": "Inference SLA Monitor \u2014 p50/p95/p99 percentiles",
+        "description": "Returns p50/p95/p99/max for TTFT, end-to-end latency, and TPOT computed via DuckDB quantile_cont() over per-request inference_traces. Compliance percentage against a configurable TTFT target, the 20 most-recent violations, and per-model breakdown. Requires the Ollama proxy (Settings \u2192 Proxy) to capture per-request data. Window: 1\u20131440 minutes (24h hard ceiling \u2014 that's the trace retention).",
+        "servers": [
+          {
+            "url": "http://localhost:7700"
+          }
+        ],
         "parameters": [
-          { "name": "window_min",      "in": "query", "required": false, "schema": { "type": "integer", "default": 60,  "minimum": 1, "maximum": 1440 } },
-          { "name": "target_ttft_ms",  "in": "query", "required": false, "schema": { "type": "integer", "default": 500, "minimum": 1 } },
-          { "name": "model",           "in": "query", "required": false, "schema": { "type": "string" }, "description": "Optional model filter — narrows percentiles to a single model name." }
+          {
+            "name": "window_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 60,
+              "minimum": 1,
+              "maximum": 1440
+            }
+          },
+          {
+            "name": "target_ttft_ms",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 500,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "model",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Optional model filter \u2014 narrows percentiles to a single model name."
+          }
         ],
         "responses": {
-          "200": { "description": "SLA summary", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SlaSummary" } } } }
+          "200": {
+            "description": "SLA summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlaSummary"
+                }
+              }
+            }
+          }
         }
       }
     },
     "/api/v1/thermal-budget": {
       "get": {
         "operationId": "getThermalBudget",
-        "summary": "Thermal Budget Calculator (Pro+) — predicts when pushing harder backfires",
-        "description": "Walks the 7-day metrics_5min Postgres rollup, identifies sustained Normal-thermal blocks (≥30 min) and Normal→Fair transitions, computes the sustainable tok/s rate, the load level that pushes the node out of Normal, the average time-to-Fair, and the resulting penalized rate (push ÷ 1.25). Generates a plain-English advice string comparing 1-hour token output of stay-sustainable vs push-then-drop-to-penalized.",
+        "summary": "Thermal Budget Calculator (Pro+) \u2014 predicts when pushing harder backfires",
+        "description": "Walks the 7-day metrics_5min Postgres rollup, identifies sustained Normal-thermal blocks (\u226530 min) and Normal\u2192Fair transitions, computes the sustainable tok/s rate, the load level that pushes the node out of Normal, the average time-to-Fair, and the resulting penalized rate (push \u00f7 1.25). Generates a plain-English advice string comparing 1-hour token output of stay-sustainable vs push-then-drop-to-penalized.",
         "parameters": [
-          { "name": "node_id", "in": "query", "required": true, "schema": { "type": "string" }, "example": "WK-XXXX" }
+          {
+            "name": "node_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "WK-XXXX"
+          }
         ],
         "responses": {
-          "200": { "description": "Thermal budget summary", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ThermalBudget" } } } },
-          "400": { "description": "node_id query param required" },
-          "401": { "description": "Missing or invalid auth" },
-          "403": { "description": "Pro tier or higher required" },
-          "404": { "description": "Node not found in user's fleet" }
+          "200": {
+            "description": "Thermal budget summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThermalBudget"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "node_id query param required"
+          },
+          "401": {
+            "description": "Missing or invalid auth"
+          },
+          "403": {
+            "description": "Pro tier or higher required"
+          },
+          "404": {
+            "description": "Node not found in user's fleet"
+          }
         }
       }
     },
     "/api/runtime-config": {
       "get": {
         "operationId": "getRuntimeConfig",
-        "summary": "Runtime Config Surface (v0.9.0) — cached launch-time config for a model",
-        "description": "Returns the cached RuntimeConfig for the named model. Available across Ollama (parsed from /api/show on model change), vLLM (5-min poller, tries /v1/server_info then falls back to ps aux), and llama.cpp (5-min poller, tries /props then falls back to ps aux). Reads in-memory cache only — never blocks on I/O and works regardless of DuckDB store health. Templates and system prompts stay local — the cloud telemetry push does NOT carry these fields.",
-        "servers": [{ "url": "http://localhost:7700" }],
+        "summary": "Runtime Config Surface (v0.9.0) \u2014 cached launch-time config for a model",
+        "description": "Returns the cached RuntimeConfig for the named model. Available across Ollama (parsed from /api/show on model change), vLLM (5-min poller, tries /v1/server_info then falls back to ps aux), and llama.cpp (5-min poller, tries /props then falls back to ps aux). Reads in-memory cache only \u2014 never blocks on I/O and works regardless of DuckDB store health. Templates and system prompts stay local \u2014 the cloud telemetry push does NOT carry these fields.",
+        "servers": [
+          {
+            "url": "http://localhost:7700"
+          }
+        ],
         "parameters": [
-          { "name": "model", "in": "query", "required": true, "schema": { "type": "string" }, "example": "llama3.1:8b" }
+          {
+            "name": "model",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "llama3.1:8b"
+          }
         ],
         "responses": {
-          "200": { "description": "Cached RuntimeConfig", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RuntimeConfig" } } } },
-          "400": { "description": "Missing ?model= query param" },
-          "404": { "description": "No cached config for this model yet" }
+          "200": {
+            "description": "Cached RuntimeConfig",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeConfig"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing ?model= query param"
+          },
+          "404": {
+            "description": "No cached config for this model yet"
+          }
         }
       }
     },
@@ -192,11 +669,32 @@
         "summary": "Fleet-wide per-model rollup (WES, tok/s, watts, TTFT, cost)",
         "description": "Per-model aggregated stats across every node owned by the authenticated tenant. Reads metrics_5min for the long window plus a metrics_raw side query for TTFT (last 24h only). Empty array until new telemetry is ingested under the v0.9.x schema (ollama_active_model column).",
         "parameters": [
-          { "name": "hours", "in": "query", "required": false, "schema": { "type": "integer", "default": 168, "minimum": 1, "maximum": 720 } }
+          {
+            "name": "hours",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 168,
+              "minimum": 1,
+              "maximum": 720
+            }
+          }
         ],
         "responses": {
-          "200": { "description": "Per-model rollup", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FleetModelComparison" } } } },
-          "401": { "description": "Missing or invalid auth" }
+          "200": {
+            "description": "Per-model rollup",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FleetModelComparison"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid auth"
+          }
         }
       }
     },
@@ -206,11 +704,32 @@
         "summary": "Cross-node model swap events (LAG over metrics_raw)",
         "description": "Returns model transitions detected via a Postgres LAG window function over metrics_raw partitioned by node_id. Capped at 200 rows.",
         "parameters": [
-          { "name": "hours", "in": "query", "required": false, "schema": { "type": "integer", "default": 24, "minimum": 1, "maximum": 168 } }
+          {
+            "name": "hours",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 24,
+              "minimum": 1,
+              "maximum": 168
+            }
+          }
         ],
         "responses": {
-          "200": { "description": "Swap events", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FleetModelSwitches" } } } },
-          "401": { "description": "Missing or invalid auth" }
+          "200": {
+            "description": "Swap events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FleetModelSwitches"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid auth"
+          }
         }
       }
     },
@@ -220,29 +739,73 @@
         "summary": "Fleet-wide per-model power cost",
         "description": "Cost = avg_watts x hours_active x $0.16 / 1000. Uses metrics_raw at 30s granularity.",
         "parameters": [
-          { "name": "hours", "in": "query", "required": false, "schema": { "type": "integer", "default": 24, "minimum": 1, "maximum": 168 } }
+          {
+            "name": "hours",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 24,
+              "minimum": 1,
+              "maximum": 168
+            }
+          }
         ],
         "responses": {
-          "200": { "description": "Per-model cost rollup", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FleetCostByModel" } } } },
-          "401": { "description": "Missing or invalid auth" }
+          "200": {
+            "description": "Per-model cost rollup",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FleetCostByModel"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid auth"
+          }
         }
       }
     },
     "/api/v1/webhooks": {
       "post": {
         "operationId": "createWebhook",
-        "summary": "Threshold Webhooks (Pro+) — create subscription",
-        "description": "Register a webhook for state-transition push notifications (thermal_state_changed, inference_state_changed, wes_below, wes_above). Returns the HMAC-SHA256 secret ONCE — store it. Receivers verify the X-Wicklee-Signature header to confirm authenticity.",
+        "summary": "Threshold Webhooks (Pro+) \u2014 create subscription",
+        "description": "Register a webhook for state-transition push notifications (thermal_state_changed, inference_state_changed, wes_below, wes_above). Returns the HMAC-SHA256 secret ONCE \u2014 store it. Receivers verify the X-Wicklee-Signature header to confirm authenticity.",
         "requestBody": {
           "required": true,
-          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateWebhookBody" } } }
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWebhookBody"
+              }
+            }
+          }
         },
         "responses": {
-          "200": { "description": "Subscription created (secret returned ONCE)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WebhookSubscription" } } } },
-          "400": { "description": "Invalid url, event_type, or missing required threshold" },
-          "401": { "description": "Missing or invalid auth" },
-          "403": { "description": "Pro tier or higher required" },
-          "404": { "description": "Specified node_id not found in user's fleet" }
+          "200": {
+            "description": "Subscription created (secret returned ONCE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookSubscription"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid url, event_type, or missing required threshold"
+          },
+          "401": {
+            "description": "Missing or invalid auth"
+          },
+          "403": {
+            "description": "Pro tier or higher required"
+          },
+          "404": {
+            "description": "Specified node_id not found in user's fleet"
+          }
         }
       },
       "get": {
@@ -251,9 +814,21 @@
         "responses": {
           "200": {
             "description": "Subscription list",
-            "content": { "application/json": { "schema": { "type": "object", "properties": {
-              "subscriptions": { "type": "array", "items": { "$ref": "#/components/schemas/WebhookSubscription" } }
-            } } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "subscriptions": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/WebhookSubscription"
+                      }
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -262,10 +837,23 @@
       "delete": {
         "operationId": "deleteWebhook",
         "summary": "Remove a webhook subscription",
-        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
-          "200": { "description": "Subscription deleted" },
-          "404": { "description": "Subscription not found" }
+          "200": {
+            "description": "Subscription deleted"
+          },
+          "404": {
+            "description": "Subscription not found"
+          }
         }
       }
     },
@@ -274,11 +862,42 @@
         "operationId": "testWebhook",
         "summary": "Fire a synthetic test payload to a subscription's URL",
         "description": "Sends a synthetic webhook payload to the subscription's configured URL with a valid HMAC signature. Use to verify your receiver before relying on real condition triggers.",
-        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
-          "200": { "description": "Test delivered", "content": { "application/json": { "schema": { "type": "object", "properties": { "delivered": { "type": "boolean" }, "status": { "type": "integer", "description": "Receiver's HTTP response status" } } } } } },
-          "404": { "description": "Subscription not found" },
-          "502": { "description": "Receiver unreachable or returned non-2xx" }
+          "200": {
+            "description": "Test delivered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "delivered": {
+                      "type": "boolean"
+                    },
+                    "status": {
+                      "type": "integer",
+                      "description": "Receiver's HTTP response status"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Subscription not found"
+          },
+          "502": {
+            "description": "Receiver unreachable or returned non-2xx"
+          }
         }
       }
     }
@@ -295,275 +914,744 @@
       "FleetResponse": {
         "type": "object",
         "properties": {
-          "nodes": { "type": "array", "items": { "$ref": "#/components/schemas/FleetNode" } }
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FleetNode"
+            }
+          }
         }
       },
       "FleetNode": {
         "type": "object",
         "properties": {
-          "node_id": { "type": "string", "example": "WK-XXXX" },
-          "hostname": { "type": "string", "example": "macmini.local" },
-          "online": { "type": "boolean" },
-          "last_seen_ms": { "type": "integer", "format": "int64" },
-          "metrics": { "$ref": "#/components/schemas/MetricsPayload" }
+          "node_id": {
+            "type": "string",
+            "example": "WK-XXXX"
+          },
+          "hostname": {
+            "type": "string",
+            "example": "macmini.local"
+          },
+          "online": {
+            "type": "boolean"
+          },
+          "last_seen_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "metrics": {
+            "$ref": "#/components/schemas/MetricsPayload"
+          }
         }
       },
       "WesResponse": {
         "type": "object",
         "properties": {
-          "nodes": { "type": "array", "items": {
-            "type": "object",
-            "properties": {
-              "node_id": { "type": "string" },
-              "online": { "type": "boolean" },
-              "wes": { "type": "number", "format": "float" }
+          "nodes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "node_id": {
+                  "type": "string"
+                },
+                "online": {
+                  "type": "boolean"
+                },
+                "wes": {
+                  "type": "number",
+                  "format": "float"
+                }
+              }
             }
-          }}
+          }
         }
       },
       "NodeResponse": {
         "type": "object",
         "properties": {
-          "node_id": { "type": "string" },
-          "hostname": { "type": "string" },
-          "online": { "type": "boolean" },
-          "last_seen_ms": { "type": "integer", "format": "int64" },
-          "metrics": { "$ref": "#/components/schemas/MetricsPayload" }
+          "node_id": {
+            "type": "string"
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "online": {
+            "type": "boolean"
+          },
+          "last_seen_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "metrics": {
+            "$ref": "#/components/schemas/MetricsPayload"
+          }
         }
       },
       "RouteResponse": {
         "type": "object",
         "properties": {
-          "latency": { "$ref": "#/components/schemas/RouteCandidate" },
-          "efficiency": { "$ref": "#/components/schemas/RouteCandidate" },
-          "default": { "type": "string", "enum": ["latency", "efficiency"] }
+          "latency": {
+            "$ref": "#/components/schemas/RouteCandidate"
+          },
+          "efficiency": {
+            "$ref": "#/components/schemas/RouteCandidate"
+          },
+          "default": {
+            "type": "string",
+            "enum": [
+              "latency",
+              "efficiency"
+            ]
+          }
         }
       },
       "RouteCandidate": {
         "type": "object",
         "properties": {
-          "node": { "type": "string" },
-          "tok_s": { "type": "number", "format": "float" },
-          "wes": { "type": "number", "format": "float" },
-          "reason": { "type": "string" }
+          "node": {
+            "type": "string"
+          },
+          "tok_s": {
+            "type": "number",
+            "format": "float"
+          },
+          "wes": {
+            "type": "number",
+            "format": "float"
+          },
+          "reason": {
+            "type": "string"
+          }
         }
       },
       "InsightsResponse": {
         "type": "object",
         "properties": {
-          "generated_at_ms": { "type": "integer", "format": "int64" },
+          "generated_at_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
           "fleet": {
             "type": "object",
             "properties": {
-              "online_count": { "type": "integer" },
-              "total_count": { "type": "integer" },
-              "avg_wes": { "type": "number", "format": "float" },
-              "fleet_tok_s": { "type": "number", "format": "float" }
+              "online_count": {
+                "type": "integer"
+              },
+              "total_count": {
+                "type": "integer"
+              },
+              "avg_wes": {
+                "type": "number",
+                "format": "float"
+              },
+              "fleet_tok_s": {
+                "type": "number",
+                "format": "float"
+              }
             }
           },
-          "findings": { "type": "array", "items": { "$ref": "#/components/schemas/Finding" } }
+          "findings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Finding"
+            }
+          }
         }
       },
       "Finding": {
         "type": "object",
         "properties": {
-          "node_id": { "type": "string" },
-          "hostname": { "type": "string" },
-          "severity": { "type": "string", "enum": ["low", "medium", "high"] },
-          "pattern": { "type": "string" },
-          "title": { "type": "string" },
-          "detail": { "type": "string" },
-          "value": { "type": "number", "format": "float" },
-          "unit": { "type": "string" }
+          "node_id": {
+            "type": "string"
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          "pattern": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "value": {
+            "type": "number",
+            "format": "float"
+          },
+          "unit": {
+            "type": "string"
+          }
         }
       },
       "SlaSummary": {
         "type": "object",
         "properties": {
-          "window_minutes":       { "type": "integer" },
-          "request_count":        { "type": "integer" },
-          "error_count":          { "type": "integer" },
-          "error_rate_pct":       { "type": "number", "format": "float" },
-          "ttft":                 { "$ref": "#/components/schemas/SlaPercentiles" },
-          "e2e":                  { "$ref": "#/components/schemas/SlaPercentiles" },
-          "tpot":                 { "$ref": "#/components/schemas/SlaPercentiles" },
+          "window_minutes": {
+            "type": "integer"
+          },
+          "request_count": {
+            "type": "integer"
+          },
+          "error_count": {
+            "type": "integer"
+          },
+          "error_rate_pct": {
+            "type": "number",
+            "format": "float"
+          },
+          "ttft": {
+            "$ref": "#/components/schemas/SlaPercentiles"
+          },
+          "e2e": {
+            "$ref": "#/components/schemas/SlaPercentiles"
+          },
+          "tpot": {
+            "$ref": "#/components/schemas/SlaPercentiles"
+          },
           "sla": {
             "type": "object",
             "properties": {
-              "target_ttft_ms":   { "type": "integer" },
-              "compliance_pct":   { "type": "number", "format": "float" },
-              "violations_count": { "type": "integer" },
-              "violations":       { "type": "array", "items": { "$ref": "#/components/schemas/SlaViolation" } }
+              "target_ttft_ms": {
+                "type": "integer"
+              },
+              "compliance_pct": {
+                "type": "number",
+                "format": "float"
+              },
+              "violations_count": {
+                "type": "integer"
+              },
+              "violations": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/SlaViolation"
+                }
+              }
             }
           },
-          "by_model": { "type": "array", "items": {
-            "type": "object",
-            "properties": {
-              "model":        { "type": "string" },
-              "count":        { "type": "integer" },
-              "p95_ttft_ms":  { "type": "number", "format": "float" },
-              "p95_e2e_ms":   { "type": "number", "format": "float" }
+          "by_model": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "model": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "integer"
+                },
+                "p95_ttft_ms": {
+                  "type": "number",
+                  "format": "float"
+                },
+                "p95_e2e_ms": {
+                  "type": "number",
+                  "format": "float"
+                }
+              }
             }
-          } }
+          }
         }
       },
       "SlaPercentiles": {
         "type": "object",
         "properties": {
-          "p50": { "type": "number", "format": "float" },
-          "p95": { "type": "number", "format": "float" },
-          "p99": { "type": "number", "format": "float" },
-          "max": { "type": "number", "format": "float" }
+          "p50": {
+            "type": "number",
+            "format": "float"
+          },
+          "p95": {
+            "type": "number",
+            "format": "float"
+          },
+          "p99": {
+            "type": "number",
+            "format": "float"
+          },
+          "max": {
+            "type": "number",
+            "format": "float"
+          }
         }
       },
       "SlaViolation": {
         "type": "object",
         "properties": {
-          "ts_ms":      { "type": "integer", "format": "int64" },
-          "model":      { "type": "string" },
-          "ttft_ms":    { "type": "integer" },
-          "latency_ms": { "type": "integer" }
+          "ts_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "model": {
+            "type": "string"
+          },
+          "ttft_ms": {
+            "type": "integer"
+          },
+          "latency_ms": {
+            "type": "integer"
+          }
         }
       },
       "ThermalBudget": {
         "type": "object",
         "properties": {
-          "node_id":              { "type": "string" },
-          "samples_analyzed":     { "type": "integer" },
-          "transitions_detected": { "type": "integer" },
-          "confidence":           { "type": "string", "enum": ["insufficient", "low", "medium", "high"] },
-          "sustainable_tps":      { "type": "number", "format": "float", "description": "Max tok/s sustained during any Normal-thermal block ≥30 min" },
-          "sustainable_watts":    { "type": "number", "format": "float" },
-          "push_threshold_tps":   { "type": "number", "format": "float", "nullable": true, "description": "Median tok/s in 10 min before any Normal→Fair transition" },
-          "push_threshold_watts": { "type": "number", "format": "float", "nullable": true },
-          "time_to_fair_min":     { "type": "number", "format": "float", "nullable": true, "description": "Avg duration of Normal blocks before Fair transition (minutes)" },
-          "fair_penalized_tps":   { "type": "number", "format": "float", "nullable": true, "description": "push_threshold_tps ÷ 1.25 — effective rate once Fair triggers" },
-          "advice":               { "type": "string", "description": "Plain-English 1-hour-output comparison: stay-sustainable vs push-then-drop" }
+          "node_id": {
+            "type": "string"
+          },
+          "samples_analyzed": {
+            "type": "integer"
+          },
+          "transitions_detected": {
+            "type": "integer"
+          },
+          "confidence": {
+            "type": "string",
+            "enum": [
+              "insufficient",
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          "sustainable_tps": {
+            "type": "number",
+            "format": "float",
+            "description": "Max tok/s sustained during any Normal-thermal block \u226530 min"
+          },
+          "sustainable_watts": {
+            "type": "number",
+            "format": "float"
+          },
+          "push_threshold_tps": {
+            "type": "number",
+            "format": "float",
+            "nullable": true,
+            "description": "Median tok/s in 10 min before any Normal\u2192Fair transition"
+          },
+          "push_threshold_watts": {
+            "type": "number",
+            "format": "float",
+            "nullable": true
+          },
+          "time_to_fair_min": {
+            "type": "number",
+            "format": "float",
+            "nullable": true,
+            "description": "Avg duration of Normal blocks before Fair transition (minutes)"
+          },
+          "fair_penalized_tps": {
+            "type": "number",
+            "format": "float",
+            "nullable": true,
+            "description": "push_threshold_tps \u00f7 1.25 \u2014 effective rate once Fair triggers"
+          },
+          "advice": {
+            "type": "string",
+            "description": "Plain-English 1-hour-output comparison: stay-sustainable vs push-then-drop"
+          }
         }
       },
       "CreateWebhookBody": {
         "type": "object",
-        "required": ["url", "event_type"],
+        "required": [
+          "url",
+          "event_type"
+        ],
         "properties": {
-          "url":        { "type": "string", "format": "uri", "example": "https://your-server.example.com/wicklee-hook" },
-          "event_type": { "type": "string", "enum": ["thermal_state_changed", "inference_state_changed", "wes_below", "wes_above"] },
-          "node_id":    { "type": "string", "nullable": true, "description": "Omit to fire for any node owned by the user" },
-          "threshold":  { "type": "number", "format": "float", "nullable": true, "description": "Required for wes_below / wes_above" },
-          "cooldown_s": { "type": "integer", "minimum": 10, "default": 60, "description": "Min seconds between fires per (subscription, node) pair" }
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "example": "https://your-server.example.com/wicklee-hook"
+          },
+          "event_type": {
+            "type": "string",
+            "enum": [
+              "thermal_state_changed",
+              "inference_state_changed",
+              "wes_below",
+              "wes_above"
+            ]
+          },
+          "node_id": {
+            "type": "string",
+            "nullable": true,
+            "description": "Omit to fire for any node owned by the user"
+          },
+          "threshold": {
+            "type": "number",
+            "format": "float",
+            "nullable": true,
+            "description": "Required for wes_below / wes_above"
+          },
+          "cooldown_s": {
+            "type": "integer",
+            "minimum": 10,
+            "default": 60,
+            "description": "Min seconds between fires per (subscription, node) pair"
+          }
         }
       },
       "WebhookSubscription": {
         "type": "object",
         "properties": {
-          "id":            { "type": "string" },
-          "url":           { "type": "string" },
-          "event_type":    { "type": "string" },
-          "node_id":       { "type": "string", "nullable": true },
-          "threshold":     { "type": "number", "format": "float", "nullable": true },
-          "cooldown_s":    { "type": "integer" },
-          "enabled":       { "type": "boolean" },
-          "last_fired_ms": { "type": "integer", "format": "int64", "nullable": true },
-          "secret":        { "type": "string", "description": "HMAC-SHA256 secret returned ONLY at creation. Used to verify X-Wicklee-Signature on incoming webhook calls." }
+          "id": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "event_type": {
+            "type": "string"
+          },
+          "node_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "threshold": {
+            "type": "number",
+            "format": "float",
+            "nullable": true
+          },
+          "cooldown_s": {
+            "type": "integer"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "last_fired_ms": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "secret": {
+            "type": "string",
+            "description": "HMAC-SHA256 secret returned ONLY at creation. Used to verify X-Wicklee-Signature on incoming webhook calls."
+          }
         }
       },
       "RuntimeConfig": {
         "type": "object",
         "properties": {
-          "model":           { "type": "string", "example": "llama3.1:8b" },
-          "runtime":         { "type": "string", "enum": ["ollama", "vllm", "llamacpp"] },
-          "captured_at_ms":  { "type": "integer", "format": "int64" },
-          "context_length":  { "type": "integer", "format": "int64", "nullable": true },
-          "n_gpu_layers":    { "type": "integer", "nullable": true },
-          "quantization":    { "type": "string", "nullable": true, "example": "Q4_K_M" },
-          "parameter_count": { "type": "integer", "format": "int64", "nullable": true },
-          "template":        { "type": "string", "nullable": true, "description": "Ollama only. Stays local — never pushed to cloud." },
-          "system_prompt":   { "type": "string", "nullable": true, "description": "Ollama only. Stays local — never pushed to cloud." },
-          "process_args":    { "type": "array", "items": { "type": "string" }, "nullable": true, "description": "vLLM / llama.cpp — full command-line args." },
-          "raw":             { "type": "object", "nullable": true, "description": "Full raw runtime-introspection response." }
+          "model": {
+            "type": "string",
+            "example": "llama3.1:8b"
+          },
+          "runtime": {
+            "type": "string",
+            "enum": [
+              "ollama",
+              "vllm",
+              "llamacpp"
+            ]
+          },
+          "captured_at_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "context_length": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "n_gpu_layers": {
+            "type": "integer",
+            "nullable": true
+          },
+          "quantization": {
+            "type": "string",
+            "nullable": true,
+            "example": "Q4_K_M"
+          },
+          "parameter_count": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "template": {
+            "type": "string",
+            "nullable": true,
+            "description": "Ollama only. Stays local \u2014 never pushed to cloud."
+          },
+          "system_prompt": {
+            "type": "string",
+            "nullable": true,
+            "description": "Ollama only. Stays local \u2014 never pushed to cloud."
+          },
+          "process_args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true,
+            "description": "vLLM / llama.cpp \u2014 full command-line args."
+          },
+          "raw": {
+            "type": "object",
+            "nullable": true,
+            "description": "Full raw runtime-introspection response."
+          }
         }
       },
       "FleetModelComparison": {
         "type": "object",
         "properties": {
-          "models": { "type": "array", "items": {
-            "type": "object",
-            "properties": {
-              "model":         { "type": "string" },
-              "hours_active":  { "type": "number", "format": "double" },
-              "avg_tok_s":     { "type": "number", "format": "float", "nullable": true },
-              "avg_watts":     { "type": "number", "format": "float", "nullable": true },
-              "wes":           { "type": "number", "format": "float", "nullable": true },
-              "avg_ttft_ms":   { "type": "number", "format": "float", "nullable": true },
-              "cost_per_hour": { "type": "number", "format": "double", "nullable": true },
-              "total_cost":    { "type": "number", "format": "double", "nullable": true },
-              "sample_count":  { "type": "integer", "format": "int64" }
+          "models": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "model": {
+                  "type": "string"
+                },
+                "hours_active": {
+                  "type": "number",
+                  "format": "double"
+                },
+                "avg_tok_s": {
+                  "type": "number",
+                  "format": "float",
+                  "nullable": true
+                },
+                "avg_watts": {
+                  "type": "number",
+                  "format": "float",
+                  "nullable": true
+                },
+                "wes": {
+                  "type": "number",
+                  "format": "float",
+                  "nullable": true
+                },
+                "avg_ttft_ms": {
+                  "type": "number",
+                  "format": "float",
+                  "nullable": true
+                },
+                "cost_per_hour": {
+                  "type": "number",
+                  "format": "double",
+                  "nullable": true
+                },
+                "total_cost": {
+                  "type": "number",
+                  "format": "double",
+                  "nullable": true
+                },
+                "sample_count": {
+                  "type": "integer",
+                  "format": "int64"
+                }
+              }
             }
-          }}
+          }
         }
       },
       "FleetModelSwitches": {
         "type": "object",
         "properties": {
-          "swaps": { "type": "array", "items": {
-            "type": "object",
-            "properties": {
-              "ts_ms":      { "type": "integer", "format": "int64" },
-              "node_id":    { "type": "string" },
-              "from_model": { "type": "string", "nullable": true },
-              "to_model":   { "type": "string" },
-              "gap_ms":     { "type": "number", "format": "double" }
+          "swaps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "ts_ms": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "node_id": {
+                  "type": "string"
+                },
+                "from_model": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "to_model": {
+                  "type": "string"
+                },
+                "gap_ms": {
+                  "type": "number",
+                  "format": "double"
+                }
+              }
             }
-          }},
-          "total_swaps":       { "type": "integer", "format": "int64" },
-          "total_gap_ms":      { "type": "number", "format": "double" },
-          "total_gap_minutes": { "type": "number", "format": "double" }
+          },
+          "total_swaps": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total_gap_ms": {
+            "type": "number",
+            "format": "double"
+          },
+          "total_gap_minutes": {
+            "type": "number",
+            "format": "double"
+          }
         }
       },
       "FleetCostByModel": {
         "type": "object",
         "properties": {
-          "models": { "type": "array", "items": {
-            "type": "object",
-            "properties": {
-              "model":        { "type": "string" },
-              "hours_active": { "type": "number", "format": "double" },
-              "avg_watts":    { "type": "number", "format": "float", "nullable": true },
-              "cost_usd":     { "type": "number", "format": "double" },
-              "tok_s_avg":    { "type": "number", "format": "float", "nullable": true },
-              "sample_count": { "type": "integer", "format": "int64" }
+          "models": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "model": {
+                  "type": "string"
+                },
+                "hours_active": {
+                  "type": "number",
+                  "format": "double"
+                },
+                "avg_watts": {
+                  "type": "number",
+                  "format": "float",
+                  "nullable": true
+                },
+                "cost_usd": {
+                  "type": "number",
+                  "format": "double"
+                },
+                "tok_s_avg": {
+                  "type": "number",
+                  "format": "float",
+                  "nullable": true
+                },
+                "sample_count": {
+                  "type": "integer",
+                  "format": "int64"
+                }
+              }
             }
-          }},
-          "total_cost_usd": { "type": "number", "format": "double" }
+          },
+          "total_cost_usd": {
+            "type": "number",
+            "format": "double"
+          }
         }
       },
       "MetricsPayload": {
         "type": "object",
         "description": "Full telemetry payload. All fields optional (null when unavailable).",
         "properties": {
-          "node_id": { "type": "string" },
-          "hostname": { "type": "string" },
-          "inference_state": { "type": "string", "enum": ["live", "idle-spd", "busy", "idle"] },
-          "thermal_state": { "type": "string", "enum": ["Normal", "Fair", "Serious", "Critical"] },
-          "thermal_source": { "type": "string", "enum": ["nvml", "iokit", "coretemp", "clock_ratio", "sysfs", "wmi"] },
-          "penalty_avg": { "type": "number", "format": "float" },
-          "cpu_usage_percent": { "type": "number", "format": "float" },
-          "memory_pressure_percent": { "type": "number", "format": "float" },
-          "gpu_utilization_percent": { "type": "number", "format": "float" },
-          "apple_soc_power_w": { "type": "number", "format": "float" },
-          "nvidia_power_draw_w": { "type": "number", "format": "float" },
-          "nvidia_gpu_temp_c": { "type": "number", "format": "float" },
-          "ollama_running": { "type": "boolean" },
-          "ollama_active_model": { "type": "string" },
-          "ollama_tokens_per_second": { "type": "number", "format": "float" },
-          "ollama_ttft_ms": { "type": "number", "format": "float" },
-          "vllm_running": { "type": "boolean" },
-          "vllm_model_name": { "type": "string" },
-          "vllm_tokens_per_sec": { "type": "number", "format": "float" },
-          "vllm_avg_ttft_ms": { "type": "number", "format": "float" },
-          "vllm_requests_waiting": { "type": "integer" },
-          "runtime_config_available": { "type": "boolean", "description": "v0.9.0+ — true when the agent has at least one cached RuntimeConfig. Fetch via GET /api/runtime-config?model=<name>." },
-          "agent_version": { "type": "string" },
-          "timestamp_ms": { "type": "integer", "format": "int64" }
+          "node_id": {
+            "type": "string"
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "inference_state": {
+            "type": "string",
+            "enum": [
+              "live",
+              "idle-spd",
+              "busy",
+              "idle"
+            ]
+          },
+          "thermal_state": {
+            "type": "string",
+            "enum": [
+              "Normal",
+              "Fair",
+              "Serious",
+              "Critical"
+            ]
+          },
+          "thermal_source": {
+            "type": "string",
+            "enum": [
+              "nvml",
+              "iokit",
+              "coretemp",
+              "clock_ratio",
+              "sysfs",
+              "wmi"
+            ]
+          },
+          "penalty_avg": {
+            "type": "number",
+            "format": "float"
+          },
+          "cpu_usage_percent": {
+            "type": "number",
+            "format": "float"
+          },
+          "memory_pressure_percent": {
+            "type": "number",
+            "format": "float"
+          },
+          "gpu_utilization_percent": {
+            "type": "number",
+            "format": "float"
+          },
+          "apple_soc_power_w": {
+            "type": "number",
+            "format": "float"
+          },
+          "nvidia_power_draw_w": {
+            "type": "number",
+            "format": "float"
+          },
+          "nvidia_gpu_temp_c": {
+            "type": "number",
+            "format": "float"
+          },
+          "ollama_running": {
+            "type": "boolean"
+          },
+          "ollama_active_model": {
+            "type": "string"
+          },
+          "ollama_tokens_per_second": {
+            "type": "number",
+            "format": "float"
+          },
+          "ollama_ttft_ms": {
+            "type": "number",
+            "format": "float"
+          },
+          "vllm_running": {
+            "type": "boolean"
+          },
+          "vllm_model_name": {
+            "type": "string"
+          },
+          "vllm_tokens_per_sec": {
+            "type": "number",
+            "format": "float"
+          },
+          "vllm_avg_ttft_ms": {
+            "type": "number",
+            "format": "float"
+          },
+          "vllm_requests_waiting": {
+            "type": "integer"
+          },
+          "runtime_config_available": {
+            "type": "boolean",
+            "description": "v0.9.0+ \u2014 true when the agent has at least one cached RuntimeConfig. Fetch via GET /api/runtime-config?model=<name>."
+          },
+          "agent_version": {
+            "type": "string"
+          },
+          "timestamp_ms": {
+            "type": "integer",
+            "format": "int64"
+          }
         }
       }
     }

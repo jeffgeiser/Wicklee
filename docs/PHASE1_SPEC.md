@@ -1235,15 +1235,14 @@ thing and should not be started before it.
 - If a rule's assumption turns out to be false, change or drop the rule and record why, as `context_limit` was dropped in revision 2. Do not ship a rule that guesses, and do not ship one behind a flag to avoid deciding.
 - Silent context truncation is not a Phase 1 feature and must not appear in any example, README or site copy. V6 showed the signal does not exist.
 - Keep the `inspect` text output close to the example in this spec. That output is the product's first impression.
-- **The `/v1` routes are in none of the AI-discovery files.** `CLAUDE.md`
-  requires `public/llms.txt`, `llms-full.txt`, `api.md`, `openapi.json`,
-  `.well-known/ai-plugin.json` and `DocsPage.tsx` to be updated with every new
-  endpoint. Steps 3, 4 and 5 did not: those files document the cloud's
-  `/api/v1/*` and know nothing of `/v1/state`, `/v1/readiness`, `/v1/inspect`,
-  `/v1/findings` or `/v1/receipts`. Doing it per step would mean writing the
-  same six files three times while the surface is still growing, so it is one
-  job after step 7 adds the MCP tools and the surface is settled. Step 10
-  cannot be called done without it.
+- **The AI-discovery files were updated once, after step 7.** `public/llms.txt`,
+  `llms-full.txt`, `api.md`, `openapi.json` and `.well-known/ai-plugin.json`
+  now carry the whole `/v1` surface, the CLI, the evidence labels and the MCP
+  tool changes; `robots.txt` needed nothing. Doing it per step would have meant
+  writing the same files three times while the surface was still growing.
+  **One is still outstanding:** `src/site/DocsPage.tsx`, the user-facing
+  documentation page, which sits under `src/site/` and is off-limits under the
+  current standing instruction. Step 10 should cover it.
 
 ## Sources
 
