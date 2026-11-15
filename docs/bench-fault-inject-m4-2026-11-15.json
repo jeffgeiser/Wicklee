@@ -1,0 +1,706 @@
+{
+  "started_at": "2026-11-15T12:47:30.210Z",
+  "host": {
+    "label": "M4 Mac mini, 16 GB unified",
+    "accelerator_budget_gb": 11.6,
+    "notes": "iogpu.wired_limit_mb reads 0 on this M4, so the agent falls back to 75% of total RAM."
+  },
+  "ollama_base_url": "http://127.0.0.1:11999",
+  "agent_base_url": "http://127.0.0.1:7999",
+  "env": {
+    "agent_version": "0.14.0",
+    "store_healthy": true,
+    "ollama_version": "0.40.16"
+  },
+  "results": {
+    "cpu_split": {
+      "status": "not_inducible",
+      "detail": "the runtime reports size_vram (7961250364) equal to size (7961250364) at context 131072. On unified memory there is one pool, so no part of the footprint is outside the accelerator and cpu_split has nothing to see. Inducible on a discrete GPU",
+      "load_ms": 2553,
+      "took_s": 10.7,
+      "expects": "cpu_split"
+    },
+    "context_reset": {
+      "status": "fired",
+      "finding": {
+        "first_seen_ms": 1794746700896,
+        "id": "F-7fff93",
+        "last_seen_ms": 1794746875896,
+        "models": [
+          "qwen3.5:4b"
+        ],
+        "rule": "context_reset",
+        "severity": "warning",
+        "statements": [
+          {
+            "basis": [
+              {
+                "id": 32,
+                "kind": "transition",
+                "ts_ms": 1794746700896
+              },
+              {
+                "id": 36,
+                "kind": "transition",
+                "ts_ms": 1794746720901
+              },
+              {
+                "id": 40,
+                "kind": "transition",
+                "ts_ms": 1794746740897
+              },
+              {
+                "id": 46,
+                "kind": "transition",
+                "ts_ms": 1794746875896
+              }
+            ],
+            "label": "observed",
+            "subjects": [
+              "qwen3.5:4b"
+            ],
+            "text": "qwen3.5:4b was reloaded at the default 4096-token context 4 times in the last 3 minutes, dropping from as high as 8192 tokens. The load cost of each reload is not measured."
+          },
+          {
+            "basis": [
+              {
+                "id": 32,
+                "kind": "transition",
+                "ts_ms": 1794746700896
+              },
+              {
+                "id": 36,
+                "kind": "transition",
+                "ts_ms": 1794746720901
+              },
+              {
+                "id": 40,
+                "kind": "transition",
+                "ts_ms": 1794746740897
+              },
+              {
+                "id": 46,
+                "kind": "transition",
+                "ts_ms": 1794746875896
+              }
+            ],
+            "label": "inferred",
+            "subjects": [
+              "qwen3.5:4b"
+            ],
+            "text": "A caller is likely omitting num_ctx, so each such request silently reloads qwen3.5:4b at the default instead of reusing the resident copy."
+          }
+        ],
+        "title": "qwen3.5:4b is being reloaded at the default context"
+      },
+      "detail": "observed: qwen3.5:4b was reloaded at the default 4096-token context 4 times in the last 3 minutes, dropping from as high as 8192 tokens. The load cost of each reload is not measured. | inferred: A caller is likely omitting num_ctx, so each such request silently reloads qwen3.5:4b at the default instead of reusing the resident copy.",
+      "cycles": 1,
+      "took_s": 20.5,
+      "expects": "context_reset"
+    },
+    "eviction_churn": {
+      "status": "fired",
+      "finding": {
+        "first_seen_ms": 1794746595898,
+        "id": "F-46ab61",
+        "last_seen_ms": 1794746895897,
+        "models": [
+          "qwen3.5:9b",
+          "qwen3.5:4b"
+        ],
+        "rule": "eviction_churn",
+        "severity": "warning",
+        "statements": [
+          {
+            "basis": [
+              {
+                "id": 24,
+                "kind": "transition",
+                "ts_ms": 1794746595898
+              },
+              {
+                "id": 48,
+                "kind": "transition",
+                "ts_ms": 1794746885898
+              },
+              {
+                "id": 50,
+                "kind": "transition",
+                "ts_ms": 1794746895897
+              }
+            ],
+            "label": "observed",
+            "subjects": [
+              "qwen3.5:9b",
+              "qwen3.5:4b"
+            ],
+            "text": "2 models were cleared 3 times in the last 5 minutes within 10 seconds of another model loading, each before its own keep-alive expired: qwen3.5:4b, qwen3.5:9b."
+          },
+          {
+            "basis": [
+              {
+                "id": 24,
+                "kind": "transition",
+                "ts_ms": 1794746595898
+              },
+              {
+                "id": 48,
+                "kind": "transition",
+                "ts_ms": 1794746885898
+              },
+              {
+                "id": 50,
+                "kind": "transition",
+                "ts_ms": 1794746895897
+              }
+            ],
+            "label": "inferred",
+            "subjects": [
+              "qwen3.5:9b",
+              "qwen3.5:4b"
+            ],
+            "text": "Memory contention may be causing the reloads: a load that does not fit clears resident models rather than queueing."
+          }
+        ],
+        "title": "Models are being cleared to make room"
+      },
+      "detail": "observed: 2 models were cleared 3 times in the last 5 minutes within 10 seconds of another model loading, each before its own keep-alive expired: qwen3.5:4b, qwen3.5:9b. | inferred: Memory contention may be causing the reloads: a load that does not fit clears resident models rather than queueing.",
+      "cycles": 1,
+      "took_s": 25.7,
+      "expects": "eviction_churn"
+    },
+    "expiry_reload": {
+      "status": "fired",
+      "finding": {
+        "first_seen_ms": 1794746500896,
+        "id": "F-66e9e9",
+        "last_seen_ms": 1794746545898,
+        "models": [
+          "qwen3.5:4b"
+        ],
+        "rule": "expiry_reload",
+        "severity": "info",
+        "statements": [
+          {
+            "basis": [
+              {
+                "id": 12,
+                "kind": "transition",
+                "ts_ms": 1794746500896
+              },
+              {
+                "id": 14,
+                "kind": "transition",
+                "ts_ms": 1794746515897
+              },
+              {
+                "id": 16,
+                "kind": "transition",
+                "ts_ms": 1794746530897
+              },
+              {
+                "id": 18,
+                "kind": "transition",
+                "ts_ms": 1794746545898
+              }
+            ],
+            "label": "observed",
+            "subjects": [
+              "qwen3.5:4b"
+            ],
+            "text": "qwen3.5:4b expired and was loaded again within 10 minutes on 4 occasions in the last day — gaps from 5 seconds to 15 seconds. Neither the keep-alive duration nor the cold-load cost is reported by /api/ps, so neither is claimed here."
+          },
+          {
+            "basis": [
+              {
+                "id": 12,
+                "kind": "transition",
+                "ts_ms": 1794746500896
+              },
+              {
+                "id": 14,
+                "kind": "transition",
+                "ts_ms": 1794746515897
+              },
+              {
+                "id": 16,
+                "kind": "transition",
+                "ts_ms": 1794746530897
+              },
+              {
+                "id": 18,
+                "kind": "transition",
+                "ts_ms": 1794746545898
+              }
+            ],
+            "label": "inferred",
+            "subjects": [
+              "qwen3.5:4b"
+            ],
+            "text": "The keep-alive may be shorter than the pause between the steps using this model, so each step may be paying a cold load."
+          }
+        ],
+        "title": "qwen3.5:4b is reloading after every keep-alive expiry"
+      },
+      "detail": "observed: qwen3.5:4b expired and was loaded again within 10 minutes on 4 occasions in the last day — gaps from 5 seconds to 15 seconds. Neither the keep-alive duration nor the cold-load cost is reported by /api/ps, so neither is claimed here. | inferred: The keep-alive may be shorter than the pause between the steps using this model, so each step may be paying a cold load.",
+      "cycles": 1,
+      "took_s": 18,
+      "expects": "expiry_reload"
+    },
+    "baseline_regression": {
+      "status": "not_inducible",
+      "detail": "the rate moved -4.7%, under the 20% the rule requires. Co-loading qwen3.5:9b did not slow qwen3.5:4b enough on this hardware to count",
+      "rates": {
+        "baseline_tok_s": 24.04574966430664,
+        "after_tok_s": 25.178462982177734,
+        "refused": []
+      },
+      "took_s": 81.8,
+      "expects": "baseline_regression"
+    },
+    "healthy": {
+      "status": "quiet",
+      "detail": "raised nothing new. Still open from the injected faults: context_reset, eviction_churn, expiry_reload. A clean 24-hour control is a step 9 acceptance run",
+      "preexisting": [
+        "context_reset",
+        "eviction_churn",
+        "expiry_reload"
+      ],
+      "open": [
+        "context_reset",
+        "eviction_churn",
+        "expiry_reload"
+      ],
+      "took_s": 21.5,
+      "expects": null
+    }
+  },
+  "final_inspect": {
+    "activity_signal": true,
+    "findings": [
+      {
+        "first_seen_ms": 1794746700896,
+        "id": "F-7fff93",
+        "last_seen_ms": 1794746875896,
+        "models": [
+          "qwen3.5:4b"
+        ],
+        "rule": "context_reset",
+        "severity": "warning",
+        "statements": [
+          {
+            "basis": [
+              {
+                "id": 32,
+                "kind": "transition",
+                "ts_ms": 1794746700896
+              },
+              {
+                "id": 36,
+                "kind": "transition",
+                "ts_ms": 1794746720901
+              },
+              {
+                "id": 40,
+                "kind": "transition",
+                "ts_ms": 1794746740897
+              },
+              {
+                "id": 46,
+                "kind": "transition",
+                "ts_ms": 1794746875896
+              }
+            ],
+            "label": "observed",
+            "subjects": [
+              "qwen3.5:4b"
+            ],
+            "text": "qwen3.5:4b was reloaded at the default 4096-token context 4 times in the last 5 minutes, dropping from as high as 8192 tokens. The load cost of each reload is not measured."
+          },
+          {
+            "basis": [
+              {
+                "id": 32,
+                "kind": "transition",
+                "ts_ms": 1794746700896
+              },
+              {
+                "id": 36,
+                "kind": "transition",
+                "ts_ms": 1794746720901
+              },
+              {
+                "id": 40,
+                "kind": "transition",
+                "ts_ms": 1794746740897
+              },
+              {
+                "id": 46,
+                "kind": "transition",
+                "ts_ms": 1794746875896
+              }
+            ],
+            "label": "inferred",
+            "subjects": [
+              "qwen3.5:4b"
+            ],
+            "text": "A caller is likely omitting num_ctx, so each such request silently reloads qwen3.5:4b at the default instead of reusing the resident copy."
+          }
+        ],
+        "title": "qwen3.5:4b is being reloaded at the default context"
+      },
+      {
+        "first_seen_ms": 1794746595898,
+        "id": "F-e0438f",
+        "last_seen_ms": 1794746980895,
+        "models": [
+          "qwen3.5:9b",
+          "qwen3.5:4b",
+          "llama3.1:8b"
+        ],
+        "rule": "eviction_churn",
+        "severity": "warning",
+        "statements": [
+          {
+            "basis": [
+              {
+                "id": 24,
+                "kind": "transition",
+                "ts_ms": 1794746595898
+              },
+              {
+                "id": 48,
+                "kind": "transition",
+                "ts_ms": 1794746885898
+              },
+              {
+                "id": 50,
+                "kind": "transition",
+                "ts_ms": 1794746895897
+              },
+              {
+                "id": 52,
+                "kind": "transition",
+                "ts_ms": 1794746910897
+              },
+              {
+                "id": 63,
+                "kind": "transition",
+                "ts_ms": 1794746980895
+              }
+            ],
+            "label": "observed",
+            "subjects": [
+              "qwen3.5:9b",
+              "qwen3.5:4b",
+              "llama3.1:8b"
+            ],
+            "text": "3 models were cleared 5 times in the last 7 minutes within 10 seconds of another model loading, each before its own keep-alive expired: llama3.1:8b, qwen3.5:4b, qwen3.5:9b."
+          },
+          {
+            "basis": [
+              {
+                "id": 24,
+                "kind": "transition",
+                "ts_ms": 1794746595898
+              },
+              {
+                "id": 48,
+                "kind": "transition",
+                "ts_ms": 1794746885898
+              },
+              {
+                "id": 50,
+                "kind": "transition",
+                "ts_ms": 1794746895897
+              },
+              {
+                "id": 52,
+                "kind": "transition",
+                "ts_ms": 1794746910897
+              },
+              {
+                "id": 63,
+                "kind": "transition",
+                "ts_ms": 1794746980895
+              }
+            ],
+            "label": "inferred",
+            "subjects": [
+              "qwen3.5:9b",
+              "qwen3.5:4b",
+              "llama3.1:8b"
+            ],
+            "text": "Memory contention may be causing the reloads: a load that does not fit clears resident models rather than queueing."
+          }
+        ],
+        "title": "Models are being cleared to make room"
+      },
+      {
+        "first_seen_ms": 1794746500896,
+        "id": "F-66e9e9",
+        "last_seen_ms": 1794746920896,
+        "models": [
+          "qwen3.5:4b"
+        ],
+        "rule": "expiry_reload",
+        "severity": "info",
+        "statements": [
+          {
+            "basis": [
+              {
+                "id": 12,
+                "kind": "transition",
+                "ts_ms": 1794746500896
+              },
+              {
+                "id": 14,
+                "kind": "transition",
+                "ts_ms": 1794746515897
+              },
+              {
+                "id": 16,
+                "kind": "transition",
+                "ts_ms": 1794746530897
+              },
+              {
+                "id": 18,
+                "kind": "transition",
+                "ts_ms": 1794746545898
+              },
+              {
+                "id": 54,
+                "kind": "transition",
+                "ts_ms": 1794746920896
+              }
+            ],
+            "label": "observed",
+            "subjects": [
+              "qwen3.5:4b"
+            ],
+            "text": "qwen3.5:4b expired and was loaded again within 10 minutes on 5 occasions in the last day — gaps from 5 seconds to 15 seconds. Neither the keep-alive duration nor the cold-load cost is reported by /api/ps, so neither is claimed here."
+          },
+          {
+            "basis": [
+              {
+                "id": 12,
+                "kind": "transition",
+                "ts_ms": 1794746500896
+              },
+              {
+                "id": 14,
+                "kind": "transition",
+                "ts_ms": 1794746515897
+              },
+              {
+                "id": 16,
+                "kind": "transition",
+                "ts_ms": 1794746530897
+              },
+              {
+                "id": 18,
+                "kind": "transition",
+                "ts_ms": 1794746545898
+              },
+              {
+                "id": 54,
+                "kind": "transition",
+                "ts_ms": 1794746920896
+              }
+            ],
+            "label": "inferred",
+            "subjects": [
+              "qwen3.5:4b"
+            ],
+            "text": "The keep-alive may be shorter than the pause between the steps using this model, so each step may be paying a cold load."
+          }
+        ],
+        "title": "qwen3.5:4b is reloading after every keep-alive expiry"
+      },
+      {
+        "first_seen_ms": 1794747025983,
+        "id": "F-594b97",
+        "last_seen_ms": 1794747025983,
+        "models": [],
+        "rule": "memory_trajectory",
+        "severity": "warning",
+        "statements": [
+          {
+            "basis": [
+              {
+                "confidence_pct": 100,
+                "first_fired_ms": 1794747025983,
+                "kind": "pattern",
+                "pattern": "memory_trajectory"
+              }
+            ],
+            "label": "observed",
+            "subjects": [],
+            "text": "Critical in ~22m"
+          }
+        ],
+        "title": "Memory Pressure Trajectory"
+      },
+      {
+        "first_seen_ms": 1794747025984,
+        "id": "F-ba7188",
+        "last_seen_ms": 1794747025984,
+        "models": [],
+        "rule": "bandwidth_ceiling_reached",
+        "severity": "info",
+        "statements": [
+          {
+            "basis": [
+              {
+                "confidence_pct": 100,
+                "first_fired_ms": 1794747025984,
+                "kind": "pattern",
+                "pattern": "bandwidth_ceiling_reached"
+              }
+            ],
+            "label": "observed",
+            "subjects": [],
+            "text": "28.9 tok/s · above the 17.2 tok/s estimated ceiling"
+          }
+        ],
+        "title": "Memory-Bandwidth Ceiling Reached"
+      }
+    ],
+    "headroom": {
+      "free_bytes": 9511475611,
+      "source": "apple_wired_limit"
+    },
+    "history": {
+      "findings_persisted": true,
+      "persisted": true,
+      "scope": "stored",
+      "transitions": 69
+    },
+    "node_id": "WK-502B",
+    "not_checked": [],
+    "observed_at_ms": 1794747028435,
+    "readiness": [
+      {
+        "displacement": "likely",
+        "fit_basis": "measured",
+        "footprint": {
+          "basis": "measured",
+          "bytes": 9141328281,
+          "calibrated": true,
+          "context_length": 32768
+        },
+        "headroom": {
+          "free_bytes": 9511475611,
+          "source": "apple_wired_limit"
+        },
+        "in_use": false,
+        "last_activity_ms": 1794746900930,
+        "model": "llama3.1:8b",
+        "observed_at_ms": 1794747028435,
+        "readiness": "may_require_eviction",
+        "safety_margin_bytes": 536870912,
+        "statements": [
+          {
+            "basis": [
+              {
+                "id": 69,
+                "kind": "transition",
+                "ts_ms": 1794747020901
+              }
+            ],
+            "label": "observed",
+            "subjects": [
+              "qwen3.5:4b"
+            ],
+            "text": "qwen3.5:4b is resident. qwen3.5:4b had activity in the last minute."
+          },
+          {
+            "basis": [
+              {
+                "id": 69,
+                "kind": "transition",
+                "ts_ms": 1794747020901
+              }
+            ],
+            "label": "inferred",
+            "subjects": [
+              "qwen3.5:4b"
+            ],
+            "text": "llama3.1:8b needs about 8.5 GB, measured, and 8.9 GB is free, so loading it will likely clear qwen3.5:4b."
+          }
+        ],
+        "valid_for_s": 10,
+        "would_displace": [
+          {
+            "basis": "only_loaded_model",
+            "in_use": true,
+            "model": "qwen3.5:4b"
+          }
+        ]
+      },
+      {
+        "displacement": null,
+        "fit_basis": "measured",
+        "footprint": {
+          "basis": "measured",
+          "bytes": 3373426277,
+          "calibrated": true,
+          "context_length": 8192
+        },
+        "headroom": {
+          "free_bytes": 9511475611,
+          "source": "apple_wired_limit"
+        },
+        "in_use": true,
+        "last_activity_ms": 1794747020901,
+        "model": "qwen3.5:4b",
+        "observed_at_ms": 1794747028435,
+        "readiness": "ready_now",
+        "safety_margin_bytes": 536870912,
+        "statements": [
+          {
+            "basis": [
+              {
+                "id": 69,
+                "kind": "transition",
+                "ts_ms": 1794747020901
+              }
+            ],
+            "label": "observed",
+            "subjects": [
+              "qwen3.5:4b"
+            ],
+            "text": "qwen3.5:4b is resident, fully inside accelerator memory, running at context 8192."
+          }
+        ],
+        "valid_for_s": 10,
+        "would_displace": []
+      },
+      {
+        "displacement": null,
+        "fit_basis": "measured",
+        "footprint": {
+          "basis": "measured",
+          "bytes": 5653659646,
+          "calibrated": true,
+          "context_length": 8192
+        },
+        "headroom": {
+          "free_bytes": 9511475611,
+          "source": "apple_wired_limit"
+        },
+        "in_use": false,
+        "last_activity_ms": 1794746890908,
+        "model": "qwen3.5:9b",
+        "observed_at_ms": 1794747028435,
+        "readiness": "requires_loading",
+        "safety_margin_bytes": 536870912,
+        "statements": [],
+        "valid_for_s": 10,
+        "would_displace": []
+      }
+    ],
+    "since_ms": null
+  },
+  "finished_at": "2026-11-15T12:50:28.452Z"
+}

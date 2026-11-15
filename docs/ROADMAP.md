@@ -307,8 +307,32 @@ and `get_observations` are retired, answering with the name of their
 replacement rather than "unknown tool". `fingerprint` and `verify` stay off
 MCP on purpose: they are the only routes that load models.
 
-**Then:** step 8 fault injection and the reference controller, 9 acceptance
-runs, 10 README and this file.
+**Step 8 is in, on main, not yet tagged.** Two Node scripts in
+`scripts/bench/`, no dependencies, nothing shipped in the binary:
+`fault-inject.mjs` creates each condition the diagnostic rules are meant to
+catch and asks the agent whether it caught it; `reference-controller.mjs` runs
+three policies over randomised runs and writes a JSON transcript plus a
+Markdown summary with medians and ranges. Both refuse to run against :11434 or
+:7700, and both read a scenario file the operator fills in for their own
+hardware rather than guessing model sizes.
+
+On the M4: `context_reset`, `eviction_churn` and `expiry_reload` all fired with
+their expected statements, the healthy control stayed quiet, and two scenarios
+were not inducible on this hardware — `cpu_split` because unified memory has no
+accelerator boundary, and `baseline_regression` because 16 GB cannot hold two
+models resident with one of them busy.
+
+**The run found a real gap.** All three controller policies chose the same
+model and all fifteen runs displaced the in-use one. `wicklee` did not avoid it
+because readiness predicted a fit: 5.65 GB into 6.93 GB free. The runtime
+evicted anyway. Measured on this host, Ollama keeps two models at 9.26 GB and
+evicts at 11.60 GB, while the agent computes a budget of about 12.88 GB — so
+the headroom model is more generous than the runtime's own eviction policy.
+The arithmetic was right; the budget it was done against was not. That is the
+first thing step 9 should measure across machines, and it is recorded in
+`docs/PHASE1_SPEC.md` rather than patched from one host's evidence.
+
+**Then:** step 9 acceptance runs, 10 README and this file.
 
 *This entry is a status index, not the rewrite.* Commit `49e332d` left the
 ROADMAP alone on purpose — repositioning the whole document around

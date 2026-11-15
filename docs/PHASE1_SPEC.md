@@ -947,7 +947,7 @@ Steps are in dependency order. Each step ends with its tests passing and a short
 | 5 | **Done.** `receipts.rs` and the `receipts` table. `POST /v1/receipts` for callbacks, rejecting payloads carrying content. The proxy trace widened and proxy receipts emitted. `fingerprint.rs` with warm, cold and sequence tests, consent, restore. `POST /v1/fingerprint` and `wicklee fingerprint`. Four deviations, all recorded below | 1, 2 | Receipts match the mock's timings. A posted callback receipt is stored and counts as activity. A payload with a `prompt` field is rejected. Refuses without consent. Tracker shows test requests tagged |
 | 6 | **Done.** Verify runs and comparison, `POST /v1/verify` and `wicklee verify`. Rule `baseline_regression`. The `Verified` label, with `Receipt` and `VerifyRun` evidence references. Three deviations, all recorded below | 4, 5 | Two runs with a changed mock configuration report "improved." Unchanged runs report "no measurable change" |
 | 7 | **Done.** `wicklee_state`, `wicklee_readiness` and `wicklee_inspect`, each calling the same handler its route calls so the two cannot diverge. `get_model_fit` and `get_observations` retired, answering with a pointer to their replacement rather than "unknown tool" | 3, 4 | Tool output equals the HTTP JSON |
-| 8 | Fault-injection scenarios and the reference controller with three policies in `scripts/bench/` | 3, 4, 6 | Each scenario runs end to end on the maintainer's host |
+| 8 | **Done.** `scripts/bench/fault-inject.mjs` (six scenarios) and `scripts/bench/reference-controller.mjs` (three policies, randomised runs, JSON plus a Markdown summary), with `scenarios.example.json` for the operator's own hardware. Results and what they exposed are below | 3, 4, 6 | Each scenario runs end to end on the maintainer's host |
 | 9 | Acceptance runs on the maintainer's machines, then three outside machines. Overhead measurement | 8 | Both demonstrations pass, or the write-up states plainly what did not |
 | 10 | Update the README and `docs/ROADMAP.md`. Publish results with method and raw data | 9 | A new user can install, run `wicklee inspect`, and understand the output from the README alone |
 
@@ -979,6 +979,8 @@ The remote-access rule moved from step 3 to step 1, because V8 showed the existi
 | Step 6 shipped in | Commits straight to main on 2026-11-14, not yet tagged |
 | Tests, after step 7 | 257 passing, clippy clean at every commit |
 | Step 7 shipped in | Commits straight to main on 2026-11-15, not yet tagged |
+| Tests, after step 8 | 258 passing, clippy clean at every commit |
+| Step 8 shipped in | Commits straight to main on 2026-11-15, not yet tagged |
 
 The pristine and step 1 figures were measured on the same toolchain, which is the only way that comparison means anything. The step 4 figure is on rustc 1.94.1 and its toolchain match to step 1 is unverified, so the +0.81% is indicative.
 
@@ -1178,6 +1180,71 @@ One deviation and one fix in step 7:
 A retired tool answers `-32601` with the name of its replacement and why,
 rather than "unknown tool". An agent that called `get_model_fit` yesterday
 deserves to be told where the answer moved.
+
+### Step 8 results, on the maintainer's M4 (2026-11-15)
+
+`scripts/bench/fault-inject.mjs` and `scripts/bench/reference-controller.mjs`,
+both run against a private `ollama serve` on :11999 with an agent pinned to it
+on :7999 under `--no-cloud` and `WICKLEE_DATA_DIR`. Each script refuses to run
+against :11434 or :7700.
+
+**Fault injection: three fired, one quiet, two not inducible, none missed.**
+
+| Scenario | Result |
+| --- | --- |
+| `context_reset` | **fired.** "qwen3.5:4b was reloaded at the default 4096-token context 4 times in the last 3 minutes, dropping from as high as 8192 tokens" |
+| `eviction_churn` | **fired** at context 32768. "2 models were cleared 3 times in the last 5 minutes within 10 seconds of another model loading, each before its own keep-alive expired" |
+| `expiry_reload` | **fired.** "expired and was loaded again within 10 minutes on 4 occasions in the last day — gaps from 5 seconds to 15 seconds" |
+| `healthy` | **quiet** on a store with nothing open |
+| `cpu_split` | **not inducible.** `size_vram` equals `size` at 7,961,250,364 bytes even at context 131072. One memory pool, so there is no boundary to fall outside of |
+| `baseline_regression` | **not inducible on 16 GB.** Co-loading the larger model idle moved the measured rate **+4.7%** — a second set of weights competes for nothing while it is not decoding. Co-loading it busy evicted the model being measured, so the warm test had nothing to run on. A host with room for both resident and both decoding can induce this |
+
+Each fired finding pairs an observed measurement with a hedged inference and
+never states a cause as fact, which is what the evidence rules are for.
+
+**The agent demonstration is a tie, and the reason is a real gap rather than
+an absence of signal.** All three policies chose `qwen3.5:9b` on all five runs
+and all fifteen runs displaced the in-use model. `wicklee` did not avoid it
+because readiness predicted the load would fit:
+
+| | bytes | basis |
+| --- | --- | --- |
+| `llama3.1:8b`, held by workflow A | 5.95 GB | measured |
+| `qwen3.5:9b`, workflow B's preferred option | 5.65 GB | measured |
+| headroom reported free | 6.93 GB | `apple_wired_limit` |
+
+5.65 into 6.93 with a 0.5 GB safety margin leaves 0.78 GB, so readiness
+answered `requires_loading` and listed nothing it would displace. Then the
+runtime evicted anyway, every time.
+
+Measured bound on where Ollama actually evicts, on this host:
+
+| Pair | Total | Outcome |
+| --- | --- | --- |
+| `llama3.1:8b` + `qwen3.5:4b` | 9.26 GB | both stayed resident |
+| `llama3.1:8b` + `qwen3.5:9b` | 11.60 GB | the in-use model was evicted |
+
+So the runtime's threshold sits somewhere at or below 11.60 GB while Wicklee
+computes a budget of about 12.88 GB — 75% of 16 GB plus change, because
+`iogpu.wired_limit_mb` reads 0 on this M4 and the agent falls back. **The
+headroom model is more generous than the runtime's own eviction policy, and
+that is what made the prediction optimistic.** The arithmetic was right; the
+budget it was done against was not.
+
+Worth noting how this hid itself: with the 9B still only *estimated*, readiness
+answered `may_require_eviction` and named the in-use victim — correctly. Once
+the 9B had been measured at its real 5.65 GB the estimate went **down** and the
+answer flipped to "fits". A conservative estimate was cancelling out a
+generous budget; an accurate measurement exposed it. Measuring made the
+prediction worse, which is the kind of thing only a run on real hardware
+finds.
+
+The right choice in this scenario existed: `qwen3.5:4b` coexists with the held
+model at 9.26 GB. A readiness answer calibrated to the runtime's real
+threshold would have picked it, and the `wicklee` policy would have followed.
+Nothing here is a reason to adjust the margin on one host's evidence — that is
+a step 9 question across several machines — but it is the first thing step 9
+should measure.
 
 ### Open verification: `inspect` against the installed daemon
 

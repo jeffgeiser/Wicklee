@@ -103,9 +103,25 @@ async function generate(name, { num_ctx = CTX, keep_alive = "900s", num_predict 
 const ps = async () => (await j(`${OLLAMA}/api/ps`)).body.models ?? [];
 const nameOf = (m) => m.name ?? m.model;
 
+/// Every model's readiness answer.
+///
+/// The all-models form answers under `models`; only `?model=` answers under
+/// `readiness`. The first version of this read `readiness` for both, got an
+/// empty list for the form it actually calls, and concluded that readiness had
+/// no answer for any option — so the wicklee policy deferred its full 30 s on
+/// every run and then fell back to the preferred model anyway. Fifteen runs
+/// reported a tie that was entirely this bug. Both keys are accepted now, and
+/// an empty list is treated as a transport failure rather than as an answer.
 async function readiness() {
   const { body } = await j(`${AGENT}/v1/readiness`);
-  const rows = Array.isArray(body.readiness) ? body.readiness : [body.readiness].filter(Boolean);
+  const rows = Array.isArray(body.models)
+    ? body.models
+    : Array.isArray(body.readiness)
+      ? body.readiness
+      : [body.readiness].filter(Boolean);
+  if (!rows.length) {
+    throw new Error("/v1/readiness returned no model rows — wrong shape or no models known");
+  }
   return rows;
 }
 
@@ -200,9 +216,15 @@ const policies = {
         reason: `no acceptable option is safe: ${unsafe.map((u) => `${u.model.name} ${u.why}`).join("; ")}`,
       };
     }
+    // Nothing safe and deferring is forbidden. The preferred option is an
+    // arbitrary choice here; the smallest footprint is the one least likely to
+    // evict anything, which is the only thing left to optimise for.
+    const smallest = [...ACCEPTABLE].sort((a, b) => (a.resident_gb ?? 0) - (b.resident_gb ?? 0))[0];
     return {
-      choice: ACCEPTABLE[0],
-      reason: `nothing safe and the scenario forbids deferring, so the preferred option anyway`,
+      choice: smallest,
+      reason:
+        `nothing is safe and the scenario forbids deferring, so ${smallest.name} — the smallest ` +
+        `footprint, which displaces the least`,
       considered: { safe: [], unsafe: unsafe.map((u) => `${u.model.name} (${u.why})`) },
     };
   },
@@ -246,13 +268,17 @@ async function runOnce(policyName) {
       if (retry.choice) {
         deferred_ms = Date.now() - (until - DEFER_TIMEOUT_S * 1000);
         decision.choice = retry.choice;
+        decision.considered = retry.considered ?? decision.considered;
         decision.reason = `deferred ${Math.round(deferred_ms / 1000)}s, then ${retry.reason}`;
         break;
       }
       if (Date.now() > until) {
+        // Same reasoning as the forbidden-deferral branch: once waiting has
+        // not helped, the smallest footprint displaces the least.
+        const smallest = [...ACCEPTABLE].sort((a, b) => (a.resident_gb ?? 0) - (b.resident_gb ?? 0))[0];
         deferred_ms = DEFER_TIMEOUT_S * 1000;
-        decision.choice = ACCEPTABLE[0];
-        decision.reason = `deferred ${DEFER_TIMEOUT_S}s, nothing became safe, ran the preferred option`;
+        decision.choice = smallest;
+        decision.reason = `deferred ${DEFER_TIMEOUT_S}s, nothing became safe, ran ${smallest.name} as the least displacing`;
         break;
       }
     }

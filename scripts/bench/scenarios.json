@@ -6,7 +6,7 @@
     "that assumed them would induce the wrong condition and report a pass.",
     "",
     "Sizes are the resident footprint in GB, which is weights plus KV cache at",
-    "the context you run them at — not the file size /api/tags reports. Read",
+    "the context you run them at, not the file size /api/tags reports. Read",
     "them off `ollama ps` while the model is loaded.",
     "",
     "Run the harness against a runtime you control. Both scripts load and",
@@ -29,9 +29,17 @@
   },
 
   "contexts": {
+    "_comment": [
+      "resident_gb above is measured at `fits`. The footprint is weights plus",
+      "KV cache and the second grows fast — the 4B model measured 3.4 GB at",
+      "8192 and 7.96 GB at 131072 on this host — so a pair that fits at a",
+      "small context stops fitting at a large one. That is what makes",
+      "eviction inducible on a machine with room for both models."
+    ],
     "fits": 8192,
     "runtime_default": 4096,
-    "too_large_for_accelerator": 131072
+    "too_large_for_accelerator": 131072,
+    "eviction_context": 32768
   },
 
   "workflow": {
