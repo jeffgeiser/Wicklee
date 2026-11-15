@@ -419,10 +419,7 @@ const COLD_LOAD_NS: u64 = 100_000_000;
 /// a mean hides that while a range shows it. The fourth evidence rule then
 /// compares two ranges and calls a difference real only when they do not
 /// overlap.
-///
-/// That comparison is not here yet, deliberately: nothing in step 5 has two
-/// runs to compare, and `verify` in step 6 is what gains it. A method with no
-/// caller reads as a capability that exists.
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub(crate) struct Stats {
     pub(crate) median: f64,
@@ -432,6 +429,12 @@ pub(crate) struct Stats {
 }
 
 impl Stats {
+    /// Whether two ranges overlap. The fourth evidence rule: a
+    /// before-and-after claim is verified only when they do not.
+    pub(crate) fn overlaps(&self, other: &Self) -> bool {
+        self.low <= other.high && other.low <= self.high
+    }
+
     /// `None` on an empty set: a range over nothing is not zero.
     pub(crate) fn of(values: &[f64]) -> Option<Self> {
         if values.is_empty() {

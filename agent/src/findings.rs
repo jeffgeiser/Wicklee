@@ -32,10 +32,21 @@ pub(crate) enum Evidence {
     Observed,
     /// A likely cause or effect, built on something observed. Always hedged.
     Inferred,
+    /// Confirmed by measurement: exact receipts from a fingerprint or a verify
+    /// run. States the measured number and its range, because a median with no
+    /// range invites a reader to treat three runs as one answer.
+    ///
+    /// Arrives in step 6, with the runs that can produce one. Steps 3 to 5
+    /// shipped without it on purpose — a label nothing can construct reads as
+    /// a capability that exists.
+    Verified,
 }
 
 /// A pointer to the evidence behind a statement.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+///
+/// Not `Copy` since step 6: a receipt and a verify run are cited by their
+/// string ids, which are the only durable keys either one has.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum EvidenceRef {
     /// A transition in the residency log.
@@ -66,6 +77,12 @@ pub(crate) enum EvidenceRef {
         first_fired_ms: i64,
         confidence_pct: u8,
     },
+    /// One exact measurement, by its content-derived id. Durable across a
+    /// restart, which is the whole reason a receipt's id is not a counter.
+    Receipt { id: String, ts_ms: i64 },
+    /// A verify run: a set of receipts taken together, with the configuration
+    /// they were taken under.
+    VerifyRun { id: String, ts_ms: i64 },
 }
 
 /// Why a statement could not be built.
@@ -79,6 +96,13 @@ pub(crate) enum EvidenceError {
     NotHedged,
     /// A statement naming a model that none of its evidence mentions.
     UnnamedModel(String),
+    /// A verified statement with no receipts behind it. The fourth evidence
+    /// rule: measurement is what the label means, so there is no verified
+    /// claim without one.
+    NoReceipts,
+    /// A before-and-after claim with fewer than three receipts on a side.
+    /// Two runs cannot show a range, and the rule compares ranges.
+    TooFewReceipts { side: &'static str, had: usize },
 }
 
 impl std::fmt::Display for EvidenceError {
@@ -94,6 +118,13 @@ impl std::fmt::Display for EvidenceError {
             Self::UnnamedModel(m) => {
                 write!(f, "no evidence in the basis names {m}")
             }
+            Self::NoReceipts => {
+                write!(f, "a verified statement needs at least one exact receipt")
+            }
+            Self::TooFewReceipts { side, had } => write!(
+                f,
+                "a before-and-after claim needs three receipts a side; the {side} run has {had}"
+            ),
         }
     }
 }
@@ -202,7 +233,14 @@ impl Statement {
         text: impl Into<String>,
         supports: &[&Statement],
     ) -> Result<Self, EvidenceError> {
-        if !supports.iter().any(|s| s.label == Evidence::Observed) {
+        // Observed or verified, for the reason `Finding::new` gives: the rule
+        // forbids inference resting on inference, and a measurement is not
+        // inference. `baseline_regression` offers a cause for a drop its only
+        // hard evidence measured.
+        if !supports
+            .iter()
+            .any(|s| matches!(s.label, Evidence::Observed | Evidence::Verified))
+        {
             return Err(EvidenceError::NoObservedSupport);
         }
         let text = text.into();
@@ -214,7 +252,7 @@ impl Statement {
         for s in supports {
             for r in &s.basis {
                 if !basis.contains(r) {
-                    basis.push(*r);
+                    basis.push(r.clone());
                 }
             }
             for m in &s.subjects {
@@ -224,6 +262,68 @@ impl Statement {
             }
         }
         Ok(Self { label: Evidence::Inferred, text, basis, subjects })
+    }
+
+    /// A measured claim, from exact receipts.
+    ///
+    /// The one label that may state a number as fact. It requires receipts
+    /// rather than transitions, because a transition says a model moved and a
+    /// receipt says how fast it ran — and only the second is a measurement.
+    ///
+    /// Subjects come from the receipts, so the fifth evidence rule holds the
+    /// same way it does for `observed`: a verified statement cannot name a
+    /// model its own receipts do not.
+    pub(crate) fn verified(
+        text: impl Into<String>,
+        basis: &[&crate::receipts::Receipt],
+    ) -> Result<Self, EvidenceError> {
+        if basis.is_empty() {
+            return Err(EvidenceError::NoReceipts);
+        }
+        let mut subjects: Vec<String> = Vec::new();
+        for r in basis {
+            if !subjects.iter().any(|s| s == &r.model) {
+                subjects.push(r.model.clone());
+            }
+        }
+        Ok(Self {
+            label: Evidence::Verified,
+            text: text.into(),
+            basis: basis
+                .iter()
+                .map(|r| EvidenceRef::Receipt { id: r.id.clone(), ts_ms: r.ts_ms })
+                .collect(),
+            subjects,
+        })
+    }
+
+    /// A measured before-and-after claim, from two verify runs.
+    ///
+    /// The fourth evidence rule in one place: both runs must exist, each must
+    /// have at least three receipts, and their ranges must not overlap. A
+    /// caller that cannot satisfy that does not get a hedged version of this
+    /// statement — it gets an error, and reports "no measurable change"
+    /// instead. That is the whole point of the rule: the honest answer to a
+    /// change too small to measure is that it was too small to measure.
+    pub(crate) fn verified_change(
+        text: impl Into<String>,
+        baseline: &crate::fingerprint::VerifyRun,
+        current: &crate::fingerprint::VerifyRun,
+    ) -> Result<Self, EvidenceError> {
+        for (side, run) in [("baseline", baseline), ("current", current)] {
+            if run.receipts.len() < MIN_RECEIPTS_PER_SIDE {
+                return Err(EvidenceError::TooFewReceipts { side, had: run.receipts.len() });
+            }
+        }
+        Ok(Self {
+            label: Evidence::Verified,
+            text: text.into(),
+            basis: vec![
+                EvidenceRef::VerifyRun { id: baseline.id.clone(), ts_ms: baseline.ts_ms },
+                EvidenceRef::VerifyRun { id: current.id.clone(), ts_ms: current.ts_ms },
+            ],
+            subjects: current.models.clone(),
+        })
     }
 }
 
@@ -266,6 +366,15 @@ pub(crate) const RUNTIME_DEFAULT_CONTEXT: u64 = 4096;
 /// the crossing rather than every poll, so this is that interval expressed as
 /// elapsed time since the crossing.
 const SPLIT_SETTLE_MS: i64 = 15_000;
+
+/// Receipts a side of a before-and-after claim needs, from the fourth evidence
+/// rule. Three is also a fingerprint's default run count, which is not a
+/// coincidence: the rule is what fixed the default.
+pub(crate) const MIN_RECEIPTS_PER_SIDE: usize = 3;
+
+/// How far below its own baseline a model's generation rate has to fall before
+/// `baseline_regression` fires. A starting value, defined here only.
+const BASELINE_REGRESSION_PCT: f64 = 20.0;
 
 /// Resets `context_reset` needs before it is a pattern rather than an event.
 const CONTEXT_RESET_MIN: usize = 2;
@@ -314,7 +423,17 @@ impl Finding {
         first_seen_ms: i64,
         last_seen_ms: i64,
     ) -> Option<Self> {
-        if !statements.iter().any(|s| s.label == Evidence::Observed) {
+        // The second evidence rule: a finding with only inferred statements is
+        // not shown. Verified counts as well as observed — the rule exists to
+        // keep a finding from resting on inference alone, and a measurement is
+        // not inference. `baseline_regression` is the case: its evidence is
+        // six receipts and no transition, so requiring specifically `Observed`
+        // would reject a finding for having better evidence than the rule asks
+        // for.
+        if !statements
+            .iter()
+            .any(|s| matches!(s.label, Evidence::Observed | Evidence::Verified))
+        {
             return None;
         }
         let mut models: Vec<String> = Vec::new();
@@ -411,6 +530,15 @@ pub(crate) struct RuleInputs<'a> {
     /// Whether this runtime reports `expires_at`. Without it `expiry_reload`
     /// cannot tell an expiry from an eviction.
     pub(crate) ps_expires_at: bool,
+    /// Stored receipts, oldest first. Only `baseline_regression` reads them,
+    /// and only the fingerprint ones: a callback or proxy receipt measured
+    /// whatever prompt a caller sent, so two of them are not comparable.
+    #[cfg(not(target_env = "musl"))]
+    pub(crate) receipts: &'a [crate::receipts::Receipt],
+    /// Stored verify runs, oldest first. Read once, after the rules, to attach
+    /// a measured before-and-after statement to whichever findings have two.
+    #[cfg(not(target_env = "musl"))]
+    pub(crate) verify_runs: &'a [crate::fingerprint::VerifyRun],
     pub(crate) now_ms: i64,
 }
 
@@ -456,14 +584,237 @@ pub(crate) fn evaluate(inputs: &RuleInputs) -> Inspection {
         });
     }
 
-    // Step 6 builds verify runs and the baseline they compare against. Until
-    // then the rule has no input, and saying so is the honest answer.
+    // Receipts, not transitions: this is the one rule that compares
+    // measurements rather than counting events.
+    #[cfg(not(target_env = "musl"))]
+    {
+        let (found, skipped) = baseline_regression(inputs);
+        findings.extend(found);
+        not_checked.extend(skipped);
+    }
+    #[cfg(target_env = "musl")]
     not_checked.push(NotChecked {
         rule: "baseline_regression",
-        reason: "no fingerprint baseline yet".into(),
+        reason: "this build has no local store, so it keeps no receipts to compare".into(),
     });
 
+    // After the rules, because a verified change is about a finding rather
+    // than about the log the finding came from.
+    #[cfg(not(target_env = "musl"))]
+    attach_verified_changes(&mut findings, inputs.verify_runs);
+
     Inspection { findings, not_checked }
+}
+
+/// Attach a measured before-and-after statement to any finding that has been
+/// verified twice.
+///
+/// One pass over every finding rather than a branch inside each rule: the
+/// question "did the operator's change help" is the same whatever rule fired,
+/// and a rule that forgot to look would silently never show its own
+/// verification.
+///
+/// It attaches only when `compare` returns a measurable verdict. An
+/// overlapping pair is not a finding about a change — it is two measurements
+/// of the same thing — and the fourth evidence rule says so.
+#[cfg(not(target_env = "musl"))]
+fn attach_verified_changes(findings: &mut [Finding], runs: &[crate::fingerprint::VerifyRun]) {
+    for f in findings.iter_mut() {
+        let mine: Vec<&crate::fingerprint::VerifyRun> =
+            runs.iter().filter(|r| r.finding_id == f.id).collect();
+        let (Some(baseline), Some(current)) = (mine.first(), mine.last()) else {
+            continue;
+        };
+        if baseline.id == current.id {
+            continue;
+        }
+        let c = crate::fingerprint::compare(baseline, current);
+        if c.verdict == crate::fingerprint::Verdict::NoMeasurableChange {
+            continue;
+        }
+        let direction = if c.verdict == crate::fingerprint::Verdict::Improved { "faster" } else { "slower" };
+        let mut text = format!(
+            "since the baseline run, {} is {:.0}% {direction}: {:.1} tok/s ({:.1}-{:.1}) against {:.1} tok/s ({:.1}-{:.1})",
+            current.models.join(", "),
+            c.change_pct.abs(),
+            current.median,
+            current.low,
+            current.high,
+            baseline.median,
+            baseline.low,
+            baseline.high,
+        );
+        if !c.config_changes.is_empty() {
+            text.push_str(&format!(". Configuration changed: {}", c.config_changes.join("; ")));
+        }
+        if let Ok(s) = Statement::verified_change(text, baseline, current) {
+            f.statements.push(s);
+        }
+    }
+}
+
+/// The generation rate for a fingerprinted model has fallen below its own
+/// baseline, at the same digest and the same context.
+///
+/// The hard test: this needs a stored baseline and a configuration
+/// comparison. Nothing in the runtime keeps either. `/api/ps` shows what is
+/// loaded now, and a status command cannot tell a model that has always been
+/// this slow from one that was faster last week.
+///
+/// Only fingerprint receipts count. A callback or proxy receipt measures
+/// whatever prompt a caller happened to send, so two of them are not
+/// comparable with each other, let alone across a week — the whole reason the
+/// fingerprint sends a fixed prompt at a fixed length with temperature zero.
+///
+/// Grouped by model, digest and context because all three change the rate.
+/// Comparing a model against its own figure from a different context is the
+/// easiest way to manufacture a regression that is really a configuration
+/// change someone made on purpose.
+#[cfg(not(target_env = "musl"))]
+fn baseline_regression(inputs: &RuleInputs) -> (Vec<Finding>, Option<NotChecked>) {
+    use std::collections::BTreeMap;
+
+    // (model, digest, context) → receipts with a rate, oldest first.
+    let mut groups: BTreeMap<(&str, &str, u64), Vec<&crate::receipts::Receipt>> = BTreeMap::new();
+    for r in inputs.receipts {
+        if r.source != crate::receipts::ReceiptSource::Fingerprint {
+            continue;
+        }
+        let (Some(digest), Some(ctx)) = (r.digest.as_deref(), r.context_length) else {
+            // A receipt that does not say which weights or which context it
+            // measured cannot be compared against anything.
+            continue;
+        };
+        if r.decode_tps().is_some() {
+            groups.entry((r.model.as_str(), digest, ctx)).or_default().push(r);
+        }
+    }
+
+    let mut out = Vec::new();
+    let mut comparable = 0_usize;
+
+    for ((model, _digest, ctx), mut rs) in groups {
+        rs.sort_by_key(|r| r.ts_ms);
+        // Two sides of three, which is the fourth evidence rule's minimum and
+        // the fingerprint's default run count.
+        if rs.len() < MIN_RECEIPTS_PER_SIDE * 2 {
+            continue;
+        }
+        comparable += 1;
+
+        let base: Vec<&crate::receipts::Receipt> = rs[..MIN_RECEIPTS_PER_SIDE].to_vec();
+        let now: Vec<&crate::receipts::Receipt> = rs[rs.len() - MIN_RECEIPTS_PER_SIDE..].to_vec();
+        let rate = |set: &[&crate::receipts::Receipt]| {
+            crate::receipts::Stats::of(
+                &set.iter().filter_map(|r| r.decode_tps()).collect::<Vec<f64>>(),
+            )
+        };
+        let (Some(b), Some(c)) = (rate(&base), rate(&now)) else {
+            continue;
+        };
+        if b.median <= 0.0 {
+            continue;
+        }
+
+        let drop_pct = (b.median - c.median) / b.median * 100.0;
+        if drop_pct < BASELINE_REGRESSION_PCT {
+            continue;
+        }
+        // Overlapping ranges mean the two sets are one measurement with
+        // scatter, not a before and an after. The fourth evidence rule again,
+        // and the reason this rule cannot fire on a noisy host.
+        if b.overlaps(&c) {
+            continue;
+        }
+
+        let mut statements = Vec::new();
+        let basis: Vec<&crate::receipts::Receipt> =
+            base.iter().chain(now.iter()).copied().collect();
+        if let Ok(s) = Statement::verified(
+            format!(
+                "{model} generates {:.1} tok/s ({:.1}-{:.1}) at context {ctx}, \
+                 {drop_pct:.0}% below its baseline of {:.1} tok/s ({:.1}-{:.1})",
+                c.median, c.low, c.high, b.median, b.low, b.high,
+            ),
+            &basis,
+        ) {
+            statements.push(s);
+        }
+
+        // What differed, from what the receipts themselves carry. Not a
+        // ModelState diff: a receipt records the host as it was when the
+        // measurement was taken, which is the only snapshot that belongs in
+        // this comparison.
+        let changes = receipt_config_diff(&base, &now);
+        if let Some(observed) = statements.first().cloned()
+            && !changes.is_empty()
+            && let Ok(s) = Statement::inferred(
+                format!("the host differed between the two sets: {}. That may explain it", changes.join("; ")),
+                &[&observed],
+            )
+        {
+            statements.push(s);
+        }
+
+        out.extend(Finding::new(
+            "baseline_regression",
+            "warning",
+            format!("{model} is slower than its own baseline"),
+            statements,
+            base[0].ts_ms,
+            now[now.len() - 1].ts_ms,
+        ));
+    }
+
+    // The honest "not checked" reason, which is different from "no baseline":
+    // a host may have fingerprinted once and have nothing to compare yet.
+    let not_checked = (comparable == 0).then(|| NotChecked {
+        rule: "baseline_regression",
+        reason: "no model has six fingerprint runs at one digest and context yet, \
+                 which is two sets of three to compare"
+            .into(),
+    });
+    (out, not_checked)
+}
+
+/// What differed between two sets of receipts, from the fields a receipt
+/// carries: what else was loaded, and how hot the host was.
+#[cfg(not(target_env = "musl"))]
+fn receipt_config_diff(
+    base: &[&crate::receipts::Receipt],
+    now: &[&crate::receipts::Receipt],
+) -> Vec<String> {
+    let mut out = Vec::new();
+
+    fn co<'a>(set: &[&'a crate::receipts::Receipt]) -> Vec<&'a str> {
+        let mut v: Vec<&str> = set
+            .iter()
+            .flat_map(|r| r.co_resident.iter().map(String::as_str))
+            .collect();
+        v.sort_unstable();
+        v.dedup();
+        v
+    }
+    let (b_co, n_co) = (co(base), co(now));
+    let arrived: Vec<&str> = n_co.iter().copied().filter(|m| !b_co.contains(m)).collect();
+    let gone: Vec<&str> = b_co.iter().copied().filter(|m| !n_co.contains(m)).collect();
+    if !arrived.is_empty() {
+        out.push(format!("{} is now loaded alongside it", arrived.join(", ")));
+    }
+    if !gone.is_empty() {
+        out.push(format!("{} is no longer loaded alongside it", gone.join(", ")));
+    }
+
+    let thermal = |set: &[&crate::receipts::Receipt]| -> Option<String> {
+        set.iter().rev().find_map(|r| r.thermal_state.clone())
+    };
+    if let (Some(b), Some(n)) = (thermal(base), thermal(now))
+        && b != n
+    {
+        out.push(format!("thermal state {b} to {n}"));
+    }
+
+    out
 }
 
 /// Part of a loaded model's footprint is outside accelerator memory.
@@ -933,6 +1284,184 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_env = "musl"))]
+    fn fp_receipt(
+        id: &str,
+        ts_ms: i64,
+        eval_ns: u64,
+        ctx: u64,
+        co: &[&str],
+    ) -> crate::receipts::Receipt {
+        crate::receipts::Receipt {
+            id: id.into(),
+            ts_ms,
+            source: crate::receipts::ReceiptSource::Fingerprint,
+            model: "coder:14b".into(),
+            digest: Some("sha256:aaa".into()),
+            context_length: Some(ctx),
+            size_bytes: None,
+            size_vram_bytes: None,
+            start_state: crate::receipts::StartState::Loaded,
+            load_ns: None,
+            prompt_eval_count: None,
+            prompt_eval_cached_count: None,
+            prompt_eval_ns: None,
+            // 100 tokens, so the rate is 100 / (eval_ns / 1e9).
+            eval_count: Some(100),
+            eval_ns: Some(eval_ns),
+            total_ns: None,
+            wall_ms: None,
+            co_resident: co.iter().map(|s| (*s).to_string()).collect(),
+            thermal_state: Some("Normal".into()),
+            test_id: Some("T-1".into()),
+            finding_id: None,
+        }
+    }
+
+    #[cfg(not(target_env = "musl"))]
+    #[test]
+    fn baseline_regression_fires_on_a_measured_drop_and_names_what_changed() {
+        // Three runs at 25 tok/s, then three at 12.5 — a 50% drop with no
+        // overlap, and a model loaded alongside it the second time.
+        let fast = [4_000_000_000_u64, 4_040_000_000, 3_960_000_000];
+        let slow = [8_000_000_000_u64, 8_080_000_000, 7_920_000_000];
+        let mut receipts = Vec::new();
+        for (i, ns) in fast.iter().enumerate() {
+            receipts.push(fp_receipt(&format!("R-f{i}"), T0 + i as i64, *ns, 8192, &[]));
+        }
+        for (i, ns) in slow.iter().enumerate() {
+            receipts.push(fp_receipt(
+                &format!("R-s{i}"),
+                T0 + 100_000 + i as i64,
+                *ns,
+                8192,
+                &["helper:3b"],
+            ));
+        }
+
+        let i = RuleInputs { receipts: &receipts, ..inputs(&[], &[], T0 + 200_000) };
+        let (found, not_checked) = baseline_regression(&i);
+        assert!(not_checked.is_none(), "there was a pair to compare");
+        assert_eq!(found.len(), 1);
+        let f = &found[0];
+        assert_eq!(f.rule, "baseline_regression");
+        assert_eq!(f.models, vec!["coder:14b".to_string()]);
+
+        let verified = f.statements.iter().find(|s| s.label == Evidence::Verified).expect("a measured statement");
+        assert!(verified.text.contains("12.5 tok/s"), "{}", verified.text);
+        assert!(verified.text.contains("50% below"), "{}", verified.text);
+        assert!(verified.text.contains("25.0 tok/s"), "{}", verified.text);
+        assert!(verified.text.contains("context 8192"), "{}", verified.text);
+        // Six receipts cited, three a side.
+        assert_eq!(verified.basis.len(), 6);
+
+        let inferred = f.statements.iter().find(|s| s.label == Evidence::Inferred).expect("a cause offered");
+        assert!(inferred.text.contains("helper:3b is now loaded alongside it"), "{}", inferred.text);
+        assert!(inferred.text.contains("may"), "an inferred statement hedges");
+    }
+
+    #[cfg(not(target_env = "musl"))]
+    #[test]
+    fn baseline_regression_holds_back_on_everything_it_cannot_prove() {
+        let steady = [4_000_000_000_u64, 4_040_000_000, 3_960_000_000];
+
+        // Fewer than two sets of three: nothing to compare, and it says so.
+        let few: Vec<_> = steady
+            .iter()
+            .enumerate()
+            .map(|(i, ns)| fp_receipt(&format!("R-{i}"), T0 + i as i64, *ns, 8192, &[]))
+            .collect();
+        let i = RuleInputs { receipts: &few, ..inputs(&[], &[], T0) };
+        let (found, not_checked) = baseline_regression(&i);
+        assert!(found.is_empty());
+        assert!(not_checked.expect("a reason").reason.contains("six fingerprint runs"));
+
+        // A drop measured at a different context is a configuration change
+        // someone made, not a regression: the groups never meet.
+        let mut mixed = few.clone();
+        for (i, ns) in [8_000_000_000_u64, 8_080_000_000, 7_920_000_000].iter().enumerate() {
+            mixed.push(fp_receipt(&format!("R-c{i}"), T0 + 100_000 + i as i64, *ns, 4096, &[]));
+        }
+        let i = RuleInputs { receipts: &mixed, ..inputs(&[], &[], T0 + 200_000) };
+        assert!(baseline_regression(&i).0.is_empty(), "different context, different group");
+
+        // A drop under the threshold does not fire. 25 to 21.7 tok/s is 13%.
+        let mut small = few.clone();
+        for (i, ns) in [4_600_000_000_u64, 4_620_000_000, 4_580_000_000].iter().enumerate() {
+            small.push(fp_receipt(&format!("R-m{i}"), T0 + 100_000 + i as i64, *ns, 8192, &[]));
+        }
+        let i = RuleInputs { receipts: &small, ..inputs(&[], &[], T0 + 200_000) };
+        assert!(baseline_regression(&i).0.is_empty(), "13% is under the 20% threshold");
+
+        // Callback receipts are never compared, however many there are: each
+        // measured whatever prompt a caller happened to send.
+        let callbacks: Vec<_> = (0..8)
+            .map(|i| {
+                let mut r = fp_receipt(&format!("R-cb{i}"), T0 + i, if i < 4 { 4_000_000_000 } else { 9_000_000_000 }, 8192, &[]);
+                r.source = crate::receipts::ReceiptSource::Callback;
+                r
+            })
+            .collect();
+        let i = RuleInputs { receipts: &callbacks, ..inputs(&[], &[], T0 + 200_000) };
+        let (found, not_checked) = baseline_regression(&i);
+        assert!(found.is_empty());
+        assert!(not_checked.is_some(), "no comparable set at all");
+    }
+
+    #[cfg(not(target_env = "musl"))]
+    #[test]
+    fn a_finding_gains_a_measured_change_once_it_has_two_runs() {
+        use crate::fingerprint::VerifyRun;
+
+        let mut findings = vec![
+            Finding::new(
+                "cpu_split",
+                "warning",
+                "coder:14b is split",
+                vec![Statement::observed_pattern("split", "cpu_split", T0, 1.0).unwrap()],
+                T0,
+                T0,
+            )
+            .unwrap(),
+        ];
+        let id = findings[0].id.clone();
+        let mk = |ts: i64, median: f64, low: f64, high: f64| VerifyRun {
+            id: format!("V-{ts}"),
+            finding_id: id.clone(),
+            ts_ms: ts,
+            config: Vec::new(),
+            models: vec!["coder:14b".into()],
+            receipts: vec!["R-1".into(), "R-2".into(), "R-3".into()],
+            median,
+            low,
+            high,
+        };
+
+        // One run is a baseline and says nothing.
+        attach_verified_changes(&mut findings, &[mk(T0, 20.0, 19.9, 20.1)]);
+        assert_eq!(findings[0].statements.len(), 1, "a baseline is not a change");
+
+        // Two with separated ranges is a measured change.
+        attach_verified_changes(
+            &mut findings,
+            &[mk(T0, 20.0, 19.9, 20.1), mk(T0 + 1, 27.5, 27.4, 27.6)],
+        );
+        let s = findings[0].statements.last().unwrap();
+        assert_eq!(s.label, Evidence::Verified);
+        assert!(s.text.contains("38% faster"), "{}", s.text);
+        assert!(s.text.contains("coder:14b"), "{}", s.text);
+        assert_eq!(s.basis.len(), 2, "both runs cited");
+
+        // Two that overlap attaches nothing: that is not a change.
+        let mut other = findings.clone();
+        other[0].statements.truncate(1);
+        attach_verified_changes(
+            &mut other,
+            &[mk(T0, 20.0, 18.0, 22.0), mk(T0 + 1, 21.5, 20.0, 23.0)],
+        );
+        assert_eq!(other[0].statements.len(), 1);
+    }
+
     #[test]
     fn an_observed_statement_needs_evidence() {
         assert_eq!(
@@ -1082,6 +1611,10 @@ mod tests {
             transitions,
             ps_context_length: true,
             ps_expires_at: true,
+            #[cfg(not(target_env = "musl"))]
+            receipts: &[],
+            #[cfg(not(target_env = "musl"))]
+            verify_runs: &[],
             now_ms,
         }
     }
@@ -1355,6 +1888,10 @@ mod tests {
             transitions: &[],
             ps_context_length: false,
             ps_expires_at: false,
+            #[cfg(not(target_env = "musl"))]
+            receipts: &[],
+            #[cfg(not(target_env = "musl"))]
+            verify_runs: &[],
             now_ms: T0,
         };
         let got = evaluate(&i);

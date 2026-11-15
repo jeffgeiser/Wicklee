@@ -634,6 +634,31 @@ impl Store {
                 PRIMARY KEY (node_id, id)
             );
 
+            -- A stored run of a finding's test. Step 6's `verify` compares
+            -- two of these.
+            --
+            -- config holds the serialised Vec<ModelState> from when the run
+            -- started, for the same reason findings.statements is JSON: the
+            -- only consumer is a diff between two snapshots, and a column per
+            -- field would need a migration every time ModelState grows.
+            --
+            -- Kept as long as a resolved finding, 30 days. A baseline that
+            -- expires before the operator changes the thing it measured is
+            -- not a baseline.
+            CREATE TABLE IF NOT EXISTS verify_runs (
+                node_id    TEXT   NOT NULL,
+                id         TEXT   NOT NULL,
+                finding_id TEXT   NOT NULL,
+                ts_ms      BIGINT NOT NULL,
+                config     TEXT,
+                models     TEXT   NOT NULL DEFAULT '',
+                receipts   TEXT   NOT NULL DEFAULT '',
+                median     DOUBLE NOT NULL,
+                low        DOUBLE NOT NULL,
+                high       DOUBLE NOT NULL,
+                PRIMARY KEY (node_id, id)
+            );
+
             CREATE TABLE IF NOT EXISTS findings (
                 node_id        TEXT   NOT NULL,
                 id             TEXT   NOT NULL,
@@ -889,6 +914,7 @@ impl Store {
             DELETE FROM findings
              WHERE resolved_at_ms IS NOT NULL AND resolved_at_ms < {finding_cutoff};
             DELETE FROM receipts WHERE ts_ms < {receipt_cutoff};
+            DELETE FROM verify_runs WHERE ts_ms < {receipt_cutoff};
         "))?;
 
         // Fold the WAL into the main file after the hourly prune so deleted
@@ -2738,6 +2764,114 @@ impl Store {
             ],
         )?;
         Ok(())
+    }
+
+    /// Store one verify run. Replaced rather than duplicated on the same id,
+    /// which is derived from the finding and the run's start.
+    pub fn write_verify_run(
+        &self,
+        node_id: &str,
+        v: &crate::fingerprint::VerifyRun,
+    ) -> Result<(), duckdb::Error> {
+        let config = serde_json::to_string(&v.config).ok();
+        let conn = self.0.lock().unwrap();
+        conn.execute(
+            "DELETE FROM verify_runs WHERE node_id = ? AND id = ?",
+            params![node_id, v.id.as_str()],
+        )?;
+        conn.execute(
+            "INSERT INTO verify_runs
+               (node_id, id, finding_id, ts_ms, config, models, receipts, median, low, high)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            params![
+                node_id,
+                v.id.as_str(),
+                v.finding_id.as_str(),
+                v.ts_ms,
+                config,
+                v.models.join(",").as_str(),
+                v.receipts.join(",").as_str(),
+                v.median,
+                v.low,
+                v.high,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Every verify run on this node, oldest first.
+    ///
+    /// One query for the whole set rather than one per finding: a host has a
+    /// handful of findings with a few runs each, and `evaluate` wants them all.
+    pub fn query_all_verify_runs(
+        &self,
+        node_id: &str,
+    ) -> Result<Vec<crate::fingerprint::VerifyRun>, duckdb::Error> {
+        self.verify_runs_where(node_id, None)
+    }
+
+    /// Runs for one finding, oldest first.
+    ///
+    /// Oldest first, unlike every other read here, because the first run is
+    /// the baseline by definition and a caller comparing two wants them in the
+    /// order they happened.
+    pub fn query_verify_runs(
+        &self,
+        node_id: &str,
+        finding_id: &str,
+    ) -> Result<Vec<crate::fingerprint::VerifyRun>, duckdb::Error> {
+        self.verify_runs_where(node_id, Some(finding_id))
+    }
+
+    /// Both reads above, with the one clause that differs.
+    fn verify_runs_where(
+        &self,
+        node_id: &str,
+        finding_id: Option<&str>,
+    ) -> Result<Vec<crate::fingerprint::VerifyRun>, duckdb::Error> {
+        const COLS: &str = "id, finding_id, ts_ms, config, models, receipts, median, low, high";
+        let conn = self.0.lock().unwrap();
+        let sql = match finding_id {
+            Some(_) => format!(
+                "SELECT {COLS} FROM verify_runs WHERE node_id = ? AND finding_id = ?
+                  ORDER BY ts_ms ASC"
+            ),
+            None => format!(
+                "SELECT {COLS} FROM verify_runs WHERE node_id = ? ORDER BY ts_ms ASC"
+            ),
+        };
+        let mut stmt = conn.prepare(&sql)?;
+        let csv = |s: String| -> Vec<String> {
+            s.split(',').filter(|x| !x.is_empty()).map(str::to_string).collect()
+        };
+        let build = |r: &duckdb::Row| -> Result<crate::fingerprint::VerifyRun, duckdb::Error> {
+            let config: Option<String> = r.get(3)?;
+            let models: String = r.get(4)?;
+            let receipts: String = r.get(5)?;
+            Ok(crate::fingerprint::VerifyRun {
+                id: r.get(0)?,
+                finding_id: r.get(1)?,
+                ts_ms: r.get(2)?,
+                // An unreadable config costs the diff, not the comparison:
+                // the medians and ranges are still the measurement.
+                config: config.and_then(|c| serde_json::from_str(&c).ok()).unwrap_or_default(),
+                models: csv(models),
+                receipts: csv(receipts),
+                median: r.get(6)?,
+                low: r.get(7)?,
+                high: r.get(8)?,
+            })
+        };
+        match finding_id {
+            Some(f) => {
+                let rows = stmt.query_map(params![node_id, f], build)?;
+                Ok(rows.filter_map(Result::ok).collect())
+            }
+            None => {
+                let rows = stmt.query_map(params![node_id], build)?;
+                Ok(rows.filter_map(Result::ok).collect())
+            }
+        }
     }
 
     /// Receipts for this node, newest first, optionally for one model.

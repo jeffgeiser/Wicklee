@@ -285,9 +285,24 @@ code that earns its space, which clippy at `-D warnings` already enforces
 mechanically: a function with no caller fails the build. See *Measured* in the
 spec for the per-module split.
 
-**Then:** step 6 verify, 7 MCP tools, 8 fault injection and the reference
-controller, 9 acceptance runs, 10 README and this file. The `/v1` routes are
-still in none of the AI-discovery files; that is one job after step 7.
+**Step 6 is in, on main, not yet tagged.** `wicklee verify F-xxxxxx` re-runs a
+finding's own test, stores the result with a snapshot of what was loaded, and
+compares it against the first run: medians, ranges, what differed in the
+configuration, and one of three verdicts. The `Verified` evidence label
+arrives with the runs that can produce one, and `baseline_regression` fires
+when a fingerprinted model's generation rate falls more than 20% below its own
+baseline at the same digest and context.
+
+The live runs changed a rule. Two runs of the same test on an idle host,
+nothing altered between them, reported "worse" at 1.5% — two tight ranges that
+happen not to touch. A non-overlap alone is not a measurement, so a verdict
+now also needs the medians to differ by at least 5%, set from that measured
+noise floor. Everything else is "no measurable change", with the reason
+printed beside the delta so it does not read as a bug.
+
+**Then:** step 7 MCP tools, 8 fault injection and the reference controller, 9
+acceptance runs, 10 README and this file. The `/v1` routes are still in none
+of the AI-discovery files; that is one job after step 7.
 
 *This entry is a status index, not the rewrite.* Commit `49e332d` left the
 ROADMAP alone on purpose — repositioning the whole document around

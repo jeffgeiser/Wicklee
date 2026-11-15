@@ -945,7 +945,7 @@ Steps are in dependency order. Each step ends with its tests passing and a short
 | 3 | **Done.** `readiness.rs`, `GET /v1/state`, `GET /v1/readiness`, `cli.rs` with `wicklee ready` | 2 | Unit tests cover every classification branch and displacement level |
 | 4 | **Done.** `findings.rs`: types, evidence constructors, content-derived IDs, the `findings` table with resolution and reopen. Rules `cpu_split`, `context_reset`, `eviction_churn`, `expiry_reload`. The observations adapter. `GET /v1/inspect`, `GET /v1/findings`, `wicklee inspect`, `wicklee findings`. Three deviations, all recorded below | 2, 3 | Each rule passes positive and negative synthetic cases. A healthy log yields no findings. `context_reset` fires on a scripted context drop and ignores probe-caused transitions |
 | 5 | **Done.** `receipts.rs` and the `receipts` table. `POST /v1/receipts` for callbacks, rejecting payloads carrying content. The proxy trace widened and proxy receipts emitted. `fingerprint.rs` with warm, cold and sequence tests, consent, restore. `POST /v1/fingerprint` and `wicklee fingerprint`. Four deviations, all recorded below | 1, 2 | Receipts match the mock's timings. A posted callback receipt is stored and counts as activity. A payload with a `prompt` field is rejected. Refuses without consent. Tracker shows test requests tagged |
-| 6 | Verify runs and comparison. `wicklee verify`. Rule `baseline_regression`. Verified statements | 4, 5 | Two runs with a changed mock configuration report "improved." Unchanged runs report "no measurable change" |
+| 6 | **Done.** Verify runs and comparison, `POST /v1/verify` and `wicklee verify`. Rule `baseline_regression`. The `Verified` label, with `Receipt` and `VerifyRun` evidence references. Three deviations, all recorded below | 4, 5 | Two runs with a changed mock configuration report "improved." Unchanged runs report "no measurable change" |
 | 7 | MCP: add three tools, retire two | 3, 4 | Tool output equals the HTTP JSON |
 | 8 | Fault-injection scenarios and the reference controller with three policies in `scripts/bench/` | 3, 4, 6 | Each scenario runs end to end on the maintainer's host |
 | 9 | Acceptance runs on the maintainer's machines, then three outside machines. Overhead measurement | 8 | Both demonstrations pass, or the write-up states plainly what did not |
@@ -974,6 +974,9 @@ The remote-access rule moved from step 3 to step 1, because V8 showed the existi
 | Tests, after step 5 | 245 passing, clippy clean at every commit |
 | Step 4 shipped in | PR #104, merged 2026-11-14, tagged v0.14.0 |
 | Step 5 shipped in | Commits straight to main on 2026-11-14, not yet tagged |
+| Agent lines, after step 6 | 28,460, of which the eight new modules hold 3,848 lines of code and 1,479 of comment |
+| Tests, after step 6 | 256 passing, clippy clean at every commit |
+| Step 6 shipped in | Commits straight to main on 2026-11-14, not yet tagged |
 
 The pristine and step 1 figures were measured on the same toolchain, which is the only way that comparison means anything. The step 4 figure is on rustc 1.94.1 and its toolchain match to step 1 is unverified, so the +0.81% is indicative.
 
@@ -988,20 +991,20 @@ count was separated into code and prose, which is where it should have started.
 prose.** The line count includes doc comments and blank lines. Separated, after
 step 5, excluding `auth.rs`:
 
-| Module | Code | Comment | Blank | Total |
-| --- | --- | --- | --- | --- |
-| `findings.rs` | 651 | 215 | 51 | 917 |
-| `cli.rs` | 611 | 92 | 46 | 749 |
-| `residency.rs` | 588 | 216 | 62 | 866 |
-| `fingerprint.rs` | 504 | 247 | 51 | 802 |
-| `readiness.rs` | 408 | 151 | 36 | 595 |
-| `receipts.rs` | 267 | 162 | 30 | 459 |
-| `ollama_client.rs` | 230 | 152 | 36 | 418 |
-| `caps.rs` | 79 | 50 | 13 | 142 |
-| **Total** | **3,338** | **1,285** | **325** | **4,948** |
+| Module | Code | Comment | After step 5 (code) |
+| --- | --- | --- | --- |
+| `findings.rs` | 879 | 318 | 651 |
+| `cli.rs` | 702 | 105 | 611 |
+| `fingerprint.rs` | 692 | 327 | 504 |
+| `residency.rs` | 588 | 216 | 588 |
+| `readiness.rs` | 408 | 151 | 408 |
+| `receipts.rs` | 270 | 160 | 267 |
+| `ollama_client.rs` | 230 | 152 | 230 |
+| `caps.rs` | 79 | 50 | 79 |
+| **Total** | **3,848** | **1,479** | **3,338** |
 
-**3,338 lines of code**, against the original ~3,500. Under it, with step 5
-finished. The two overruns recorded earlier in this session — 3,762 against
+**3,848 lines of code** after step 6, against an original ~3,500 estimate.
+Step 5 ended at 3,338, under it. The two overruns recorded earlier in this session — 3,762 against
 ~3,500, then 4,990 against ~4,500 — were counting the comments that explain
 why each rule holds, which is the part of this codebase most worth keeping.
 
@@ -1105,6 +1108,49 @@ were in execution rather than in the pure core, and all three are now tests:
   of two measured a warm hit at 1.2 ms against run one's 2865.8 ms and called
   both cold loads. The run now polls `/api/ps` until the model is gone and
   records a skipped run rather than a number if it never is.
+
+Three deviations from a literal reading of step 6, all accepted:
+
+- **A non-overlap is not enough on its own, and the live runs proved it.** The
+  fourth evidence rule says improved or worse only when the two ranges do not
+  overlap. The first live pair — same host, same model, nothing changed
+  between them — reported **"worse" at 1.5%**: 27.7-27.9 tok/s against
+  26.6-27.5, two adjacent bands that happen not to touch. Three tight runs
+  land in disjoint narrow bands easily, and a 1.5% verdict sends someone
+  looking for a cause that is not there. `compare` now also requires the
+  medians to differ by at least 5%, a starting value set from that one
+  measured noise floor with roughly threefold headroom, named once in
+  `MIN_MEASURABLE_PCT`.
+- **A verified statement satisfies the second evidence rule, and supports an
+  inferred one.** The rule says a finding must contain an observed statement,
+  and the code checked for exactly `Evidence::Observed`. `baseline_regression`
+  has no transitions at all — its evidence is six receipts — so the first
+  version of it built a finding and had it silently rejected for having better
+  evidence than the rule asked for. `Finding::new` and `Statement::inferred`
+  now accept observed *or* verified. The intent of the rule is that nothing
+  rests on inference alone, and a measurement is not inference.
+- **The test a finding verifies is derived, not stored.** The spec gives
+  `Finding` a `test: Option<TestSpec>` field. Every Phase 1 rule would set it
+  to the same thing — a warm decode-rate run on the models the finding names —
+  so the field would carry no information and every new rule would have to
+  remember to fill it in. `fingerprint::test_for` is a function instead, which
+  cannot be forgotten.
+
+**What was verified live, and what was not.** On the maintainer's M4: a real
+`context_reset` finding produced by two scripted reloads at the 4096 default;
+`wicklee verify` recording a baseline, then comparing a second run and
+reporting the overlap that makes it no measurable change; a context change
+from 4096 to 8192 appearing in the configuration diff; and
+`baseline_regression` moving out of "not checked" once twelve fingerprint
+receipts existed at one digest and context, then correctly finding nothing
+because the rate never moved.
+
+The `improved` and `worse` verdicts are covered by unit tests rather than a
+live run. The spec's acceptance line asks for "two runs with a changed **mock**
+configuration", which is what those tests are; manufacturing a real 5%
+regression on an idle host means loading a second model to contend for
+memory, and that is a step 8 fault-injection scenario rather than something to
+improvise here.
 
 ### Open verification: `inspect` against the installed daemon
 

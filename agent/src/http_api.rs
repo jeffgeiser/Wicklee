@@ -958,11 +958,20 @@ pub(crate) async fn handle_v1_inspect(
         .map(|c| (c.ps_context_length, c.ps_expires_at))
         .unwrap_or((false, false));
 
+    #[cfg(not(target_env = "musl"))]
+    let stored_receipts = receipts_for_rules(&store, &node_id_ext.0).await;
+    #[cfg(not(target_env = "musl"))]
+    let stored_verify_runs = verify_runs_for_rules(&store, &node_id_ext.0).await;
+
     let mut inspection = crate::findings::evaluate(&crate::findings::RuleInputs {
         states: &refs,
         transitions: &transitions,
         ps_context_length,
         ps_expires_at,
+        #[cfg(not(target_env = "musl"))]
+        receipts: &stored_receipts,
+        #[cfg(not(target_env = "musl"))]
+        verify_runs: &stored_verify_runs,
         now_ms,
     });
 
@@ -1162,11 +1171,20 @@ pub(crate) async fn handle_v1_findings(
         .unwrap_or((false, false));
     let now_ms = crate::residency::now_ms();
 
+    #[cfg(not(target_env = "musl"))]
+    let stored_receipts = receipts_for_rules(&store, &node_id_ext.0).await;
+    #[cfg(not(target_env = "musl"))]
+    let stored_verify_runs = verify_runs_for_rules(&store, &node_id_ext.0).await;
+
     let mut inspection = crate::findings::evaluate(&crate::findings::RuleInputs {
         states: &refs,
         transitions: &transitions,
         ps_context_length,
         ps_expires_at,
+        #[cfg(not(target_env = "musl"))]
+        receipts: &stored_receipts,
+        #[cfg(not(target_env = "musl"))]
+        verify_runs: &stored_verify_runs,
         now_ms,
     });
     // Same set as /v1/inspect, so the two routes cannot disagree about what is
@@ -1576,6 +1594,48 @@ pub(crate) async fn handle_v1_receipts_post(
         .into_response()
 }
 
+/// The receipts `baseline_regression` compares, read before the rules run.
+///
+/// Bounded at 500: the rule wants two sets of three per model, digest and
+/// context, and an unbounded read of thirty days of proxy receipts would hold
+/// the store mutex long enough to stall the writer.
+#[cfg(not(target_env = "musl"))]
+async fn receipts_for_rules(store: &MaybeStore, node_id: &str) -> Vec<crate::receipts::Receipt> {
+    let Some(axum::extract::Extension(s)) = store else {
+        return Vec::new();
+    };
+    let s = s.clone();
+    let node_id = node_id.to_string();
+    // store.rs's rule: blocking database calls run off the async thread.
+    tokio::task::spawn_blocking(move || s.query_receipts(&node_id, None, 500))
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or_default()
+}
+
+/// Every verify run on this node, oldest first, so `evaluate` can attach a
+/// measured change to the findings that have two.
+///
+/// Reads them all rather than per finding: a host has a handful of findings
+/// and at most a few runs each, and one query beats one per finding.
+#[cfg(not(target_env = "musl"))]
+async fn verify_runs_for_rules(
+    store: &MaybeStore,
+    node_id: &str,
+) -> Vec<crate::fingerprint::VerifyRun> {
+    let Some(axum::extract::Extension(s)) = store else {
+        return Vec::new();
+    };
+    let s = s.clone();
+    let node_id = node_id.to_string();
+    tokio::task::spawn_blocking(move || s.query_all_verify_runs(&node_id))
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or_default()
+}
+
 /// GET /v1/receipts — stored receipts, newest first. `?model=` narrows,
 /// `?limit=` bounds (default 100).
 #[cfg(not(target_env = "musl"))]
@@ -1825,6 +1885,208 @@ pub(crate) async fn handle_v1_fingerprint(
         // the baseline will not be there next time.
         "receipts_stored": stored,
         "receipts_persisted": stored == receipts.len() && !receipts.is_empty(),
+    }))
+    .into_response()
+}
+
+/// POST /v1/verify — run a finding's test and compare it with the first run.
+///
+/// The workflow the spec describes: run it once to get a baseline, change
+/// something, run it again. Wicklee prints both sides with medians and
+/// ranges, says what differed in the configuration, and gives one of three
+/// verdicts. Improved or worse only when the two ranges do not overlap —
+/// otherwise no measurable change, with the reason said out loud.
+///
+/// Same consent gate as `/v1/fingerprint`, because it is the same kind of
+/// run: a body without `"consent": true` gets the plan and the sentence
+/// describing it, and nothing is sent to the runtime.
+#[cfg(not(target_env = "musl"))]
+pub(crate) async fn handle_v1_verify(
+    axum::extract::Extension(OllamaPortRx(port_rx)): axum::extract::Extension<OllamaPortRx>,
+    axum::extract::Extension(residency): axum::extract::Extension<crate::residency::SharedTracker>,
+    axum::extract::Extension(ollama_metrics): axum::extract::Extension<
+        std::sync::Arc<std::sync::Mutex<crate::metrics::OllamaMetrics>>,
+    >,
+    axum::extract::Extension(node_id_ext): axum::extract::Extension<NodeId>,
+    axum::extract::Extension(frame): axum::extract::Extension<crate::metrics::LatestFrame>,
+    store: MaybeStore,
+    axum::extract::Json(body): axum::extract::Json<serde_json::Value>,
+) -> axum::response::Response {
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+
+    let Some(finding_id) = body.get("finding_id").and_then(|f| f.as_str()).map(str::to_string) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            axum::Json(serde_json::json!({
+                "error": "\"finding_id\" is required. `wicklee findings` lists them",
+            })),
+        )
+            .into_response();
+    };
+
+    let Some(axum::extract::Extension(store)) = store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            axum::Json(serde_json::json!({
+                "error": "this agent has no local store, so it cannot keep a baseline to compare against",
+            })),
+        )
+            .into_response();
+    };
+
+    // The models come from the stored finding rather than the request: verify
+    // re-runs a finding's own test, and letting a caller name the models would
+    // make two runs of "the same" test measure different things.
+    let lookup = {
+        let s = store.clone();
+        let node_id = node_id_ext.0.to_string();
+        tokio::task::spawn_blocking(move || s.query_findings(&node_id, true))
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .unwrap_or_default()
+    };
+    let Some(row) = lookup.into_iter().find(|f| f.id == finding_id) else {
+        return (
+            StatusCode::NOT_FOUND,
+            axum::Json(serde_json::json!({
+                "error": format!("no finding {finding_id} on this node"),
+                "hint": "GET /v1/findings?all=true lists every finding recorded here",
+            })),
+        )
+            .into_response();
+    };
+    if row.models.is_empty() {
+        return (
+            StatusCode::CONFLICT,
+            axum::Json(serde_json::json!({
+                "error": format!(
+                    "{finding_id} names no model, so there is nothing to measure. \
+                     Adapted hardware findings are like this: their evidence is a \
+                     pattern over samples rather than a model's own transitions"
+                ),
+            })),
+        )
+            .into_response();
+    }
+
+    let spec = crate::fingerprint::test_for(&row.models);
+    let force = body.get("force").and_then(|f| f.as_bool()).unwrap_or(false);
+    let states = match residency.lock() {
+        Ok(t) => t.states().cloned().collect::<Vec<_>>(),
+        Err(_) => Vec::new(),
+    };
+    let refs: Vec<&crate::residency::ModelState> = states.iter().collect();
+    let now_ms = crate::residency::now_ms();
+
+    let plan = match crate::fingerprint::plan(&spec, &refs, now_ms, force) {
+        Ok(p) => p,
+        Err(refusal) => {
+            return (
+                StatusCode::CONFLICT,
+                axum::Json(serde_json::json!({ "error": refusal.message(), "refused": true })),
+            )
+                .into_response();
+        }
+    };
+
+    let previous = {
+        let s = store.clone();
+        let node_id = node_id_ext.0.to_string();
+        let fid = finding_id.clone();
+        tokio::task::spawn_blocking(move || s.query_verify_runs(&node_id, &fid))
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .unwrap_or_default()
+    };
+
+    if body.get("consent").and_then(|c| c.as_bool()) != Some(true) {
+        return (
+            StatusCode::BAD_REQUEST,
+            axum::Json(serde_json::json!({
+                "error": "this run sends inference requests and needs consent. \
+                          Post the same body with \"consent\": true",
+                "finding": { "id": row.id, "rule": row.rule, "title": row.title, "models": row.models },
+                "plan": plan,
+                "consent_text": plan.consent_text(),
+                // Said before the run, because it changes what the result
+                // means: the first run is a baseline and nothing else.
+                "is_baseline": previous.is_empty(),
+                "previous_runs": previous.len(),
+            })),
+        )
+            .into_response();
+    }
+
+    let Some(port) = *port_rx.borrow() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            axum::Json(serde_json::json!({
+                "error": "no Ollama runtime found on this host, so there is nothing to measure",
+            })),
+        )
+            .into_response();
+    };
+
+    let thermal = frame
+        .0
+        .read()
+        .ok()
+        .and_then(|f| f.clone())
+        .and_then(|j| serde_json::from_str::<serde_json::Value>(&j).ok())
+        .and_then(|v| v.get("thermal_state").and_then(|t| t.as_str()).map(str::to_string));
+
+    if let Ok(mut m) = ollama_metrics.lock() {
+        m.fingerprint_active = true;
+    }
+    let metrics_guard = ollama_metrics.clone();
+    let cleared = scopeguard::guard((), move |()| {
+        if let Ok(mut m) = metrics_guard.lock() {
+            m.fingerprint_active = false;
+            m.fingerprint_caused_next_reset = true;
+        }
+    });
+    let (outcome, receipts) =
+        crate::fingerprint::run(&plan, port, &states, thermal, now_ms).await;
+    drop(cleared);
+
+    // The configuration snapshot is the one taken before the first request,
+    // which is what the diff between two runs is about.
+    let run = crate::fingerprint::verify_run_from(&finding_id, &outcome, &receipts, states);
+
+    {
+        let s = store.clone();
+        let node_id = node_id_ext.0.to_string();
+        let to_store = run.clone();
+        let rs = receipts.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            for r in &rs {
+                if let Err(e) = s.write_receipt(&node_id, r) {
+                    eprintln!("[verify] receipt not stored: {e}");
+                }
+            }
+            if let Err(e) = s.write_verify_run(&node_id, &to_store) {
+                eprintln!("[verify] run not stored: {e}");
+            }
+        })
+        .await;
+    }
+
+    // Compare against the first run, not the previous one: the baseline is
+    // the configuration the operator started from, and a chain of
+    // run-against-last would let three small regressions pass as three
+    // unmeasurable ones.
+    let comparison = previous.first().map(|baseline| crate::fingerprint::compare(baseline, &run));
+
+    axum::Json(serde_json::json!({
+        "finding": { "id": row.id, "rule": row.rule, "title": row.title, "models": row.models },
+        "run": run,
+        "outcome": outcome,
+        "is_baseline": previous.is_empty(),
+        "comparison": comparison,
+        "verdict": comparison.as_ref().map(|c| c.verdict.as_str()),
     }))
     .into_response()
 }

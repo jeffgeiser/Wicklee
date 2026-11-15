@@ -1218,6 +1218,7 @@ async fn main() {
             // The only route that sends inference requests. Needs consent in
             // the body, and is absent from the MCP tool list on purpose.
             .route("/v1/fingerprint", post(handle_v1_fingerprint))
+            .route("/v1/verify", post(handle_v1_verify))
             .route("/api/events/recent",  get(handle_events_recent))
             .route("/api/metrics",        get(handle_metrics))       // SSE fallback (1 Hz)
             .route("/api/metrics/snapshot", get(handle_metrics_snapshot)) // one-shot JSON of latest frame

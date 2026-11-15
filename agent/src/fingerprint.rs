@@ -133,6 +133,29 @@ impl TestSpec {
     }
 }
 
+/// The test a finding's `verify` runs.
+///
+/// A warm decode-rate run on the models the finding names. Derived rather
+/// than stored: the spec gives `Finding` a `test: Option<TestSpec>` field,
+/// and every Phase 1 rule would set it to exactly this, so the field would
+/// carry no information and every new rule would have to remember to fill it
+/// in. A function cannot be forgotten.
+///
+/// Decode rate for every rule, including the ones about loading and
+/// unloading, because the question `verify` answers is always the same one:
+/// the operator changed something, and does inference actually run faster
+/// now. A cold test would measure the load rather than the change.
+pub(crate) fn test_for(models: &[String]) -> TestSpec {
+    TestSpec {
+        kind: TestKind::DecodeRate,
+        models: models.to_vec(),
+        // Never pinned: a verify run measures the model as the host has it,
+        // and pinning a context would either reload the model or refuse.
+        num_ctx: None,
+        runs: DEFAULT_RUNS,
+    }
+}
+
 /// The synthetic prompt, at `tokens` tokens.
 ///
 /// One word repeated, because the content is irrelevant and sameness is not:
@@ -793,6 +816,267 @@ pub(crate) async fn run(
     )
 }
 
+// ── Verify ────────────────────────────────────────────────────────────────────
+//
+// Verify is a workflow over fingerprint and receipts, not a second test
+// engine. It runs the test attached to a finding, stores the result with a
+// snapshot of the configuration it ran under, and compares two of those.
+//
+// The reason it is a workflow and not an engine: the question "did my change
+// help" is the same measurement twice with something altered in between. A
+// separate engine would be a second place for the protocol to drift.
+
+/// One stored run of a finding's test.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub(crate) struct VerifyRun {
+    pub(crate) id: String,
+    pub(crate) finding_id: String,
+    pub(crate) ts_ms: i64,
+    /// Every model's state when the run started. The whole snapshot, not the
+    /// tested model's: the point of verify is to explain a difference, and the
+    /// explanation is usually something else that was loaded.
+    pub(crate) config: Vec<ModelState>,
+    pub(crate) models: Vec<String>,
+    pub(crate) receipts: Vec<String>,
+    pub(crate) median: f64,
+    pub(crate) low: f64,
+    pub(crate) high: f64,
+}
+
+/// What two runs say.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Verdict {
+    Improved,
+    /// The honest answer when the ranges overlap, or when a side has fewer
+    /// than three receipts. Not "unchanged": the change may be real and too
+    /// small for three runs to resolve, which is a different claim.
+    NoMeasurableChange,
+    Worse,
+}
+
+impl Verdict {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Improved => "improved",
+            Self::NoMeasurableChange => "no measurable change",
+            Self::Worse => "worse",
+        }
+    }
+}
+
+/// Two runs, side by side.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub(crate) struct Comparison {
+    pub(crate) verdict: Verdict,
+    pub(crate) baseline_id: String,
+    pub(crate) current_id: String,
+    pub(crate) baseline_median: f64,
+    pub(crate) current_median: f64,
+    /// Signed, as a percentage of the baseline. Reported alongside the ranges
+    /// rather than instead of them: a 30% figure between two overlapping
+    /// ranges is not a 30% improvement, and the verdict says so.
+    pub(crate) change_pct: f64,
+    /// What differed in the configuration between the two runs. Empty means
+    /// nothing Wicklee can see differed, which is itself worth printing — a
+    /// difference with no visible cause is where someone should look next.
+    pub(crate) config_changes: Vec<String>,
+    /// Why the verdict is `NoMeasurableChange`, when it is. `None` for a
+    /// verdict that was measurable.
+    pub(crate) not_measurable_because: Option<String>,
+}
+
+/// How far apart two medians must be before a non-overlap means anything.
+///
+/// **The fourth evidence rule is necessary and was not sufficient.** It says
+/// improved or worse only when the ranges do not overlap, and the first live
+/// pair of runs — same host, same model, nothing changed between them —
+/// reported "worse" at 1.5%: 27.7-27.9 tok/s against 26.6-27.5, adjacent
+/// bands that happen not to touch. Three tight runs land in two disjoint
+/// narrow bands easily, and a 1.5% verdict sends someone looking for a cause
+/// that is not there.
+///
+/// Five percent, which is a starting value like the spec's other thresholds.
+/// It is set from that one observation with room over it: the measured noise
+/// floor for three runs on an idle host was 1.5%, and this leaves roughly
+/// threefold headroom. If a quieter or busier host shows a different floor,
+/// this is the one place to change.
+const MIN_MEASURABLE_PCT: f64 = 5.0;
+
+/// Compare two runs of the same test.
+///
+/// Pure, and the fourth evidence rule lives here, plus the floor the live runs
+/// showed it needs: improved or worse only when both sides have at least three
+/// receipts, the ranges do not overlap, and the medians differ by at least
+/// [`MIN_MEASURABLE_PCT`]. Everything else is no measurable change, with the
+/// reason said out loud.
+pub(crate) fn compare(baseline: &VerifyRun, current: &VerifyRun) -> Comparison {
+    let change_pct = if baseline.median > 0.0 {
+        (current.median - baseline.median) / baseline.median * 100.0
+    } else {
+        0.0
+    };
+
+    let thin = [("baseline", baseline), ("current", current)]
+        .into_iter()
+        .find(|(_, r)| r.receipts.len() < crate::findings::MIN_RECEIPTS_PER_SIDE);
+
+    let (verdict, why) = if let Some((side, run)) = thin {
+        (
+            Verdict::NoMeasurableChange,
+            Some(format!(
+                "the {side} run has {} receipt{}, and a range needs three",
+                run.receipts.len(),
+                if run.receipts.len() == 1 { "" } else { "s" },
+            )),
+        )
+    } else {
+        let b = Stats {
+            median: baseline.median,
+            low: baseline.low,
+            high: baseline.high,
+            n: baseline.receipts.len(),
+        };
+        let c = Stats {
+            median: current.median,
+            low: current.low,
+            high: current.high,
+            n: current.receipts.len(),
+        };
+        if b.overlaps(&c) {
+            (
+                Verdict::NoMeasurableChange,
+                Some(format!(
+                    "the ranges overlap: {:.1}-{:.1} against {:.1}-{:.1} tok/s",
+                    b.low, b.high, c.low, c.high,
+                )),
+            )
+        } else if change_pct.abs() < MIN_MEASURABLE_PCT {
+            (
+                Verdict::NoMeasurableChange,
+                Some(format!(
+                    "{:.1}% is under the {MIN_MEASURABLE_PCT:.0}% a run of three can resolve, even though the ranges happen not to overlap",
+                    change_pct.abs(),
+                )),
+            )
+        } else if current.median > baseline.median {
+            (Verdict::Improved, None)
+        } else {
+            (Verdict::Worse, None)
+        }
+    };
+
+    Comparison {
+        verdict,
+        baseline_id: baseline.id.clone(),
+        current_id: current.id.clone(),
+        baseline_median: baseline.median,
+        current_median: current.median,
+        change_pct,
+        config_changes: config_diff(&baseline.config, &current.config),
+        not_measurable_because: why,
+    }
+}
+
+/// What changed between two configuration snapshots.
+///
+/// Three things, because they are what the spec names as explanations for a
+/// regression and what `/api/ps` can actually report: the context a model is
+/// running at, whether its footprint is split outside accelerator memory, and
+/// what else was loaded alongside it.
+///
+/// Written as sentences rather than a diff structure because the only consumer
+/// is a person reading two runs side by side, and a structured diff of
+/// `ModelState` would mostly be fields that always differ, such as
+/// `observed_at_ms`.
+pub(crate) fn config_diff(before: &[ModelState], after: &[ModelState]) -> Vec<String> {
+    let mut out = Vec::new();
+    fn loaded_names(v: &[ModelState]) -> Vec<&str> {
+        let mut n: Vec<&str> = v
+            .iter()
+            .filter(|s| s.context_length.is_some() || s.size_vram_bytes.is_some())
+            .map(|s| s.model.as_str())
+            .collect();
+        n.sort_unstable();
+        n
+    }
+    let is_split = |s: &ModelState| {
+        matches!((s.size_bytes, s.size_vram_bytes), (Some(t), Some(v)) if v < t)
+    };
+
+    for a in after {
+        let Some(b) = before.iter().find(|b| b.model == a.model) else {
+            continue;
+        };
+        if let (Some(x), Some(y)) = (b.context_length, a.context_length)
+            && x != y
+        {
+            out.push(format!("{}: context {x} to {y}", a.model));
+        }
+        if is_split(b) != is_split(a) {
+            out.push(format!(
+                "{}: {} accelerator memory",
+                a.model,
+                if is_split(a) { "part of it moved outside" } else { "all of it moved into" },
+            ));
+        }
+    }
+
+    let (b_names, a_names) = (loaded_names(before), loaded_names(after));
+    let gone: Vec<&str> = b_names.iter().copied().filter(|m| !a_names.contains(m)).collect();
+    let arrived: Vec<&str> = a_names.iter().copied().filter(|m| !b_names.contains(m)).collect();
+    if !gone.is_empty() {
+        out.push(format!("no longer loaded: {}", gone.join(", ")));
+    }
+    if !arrived.is_empty() {
+        out.push(format!("also loaded: {}", arrived.join(", ")));
+    }
+    out
+}
+
+/// A verify run's id.
+pub(crate) fn verify_run_id(finding_id: &str, ts_ms: i64) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for part in [finding_id.as_bytes(), &ts_ms.to_le_bytes()[..]] {
+        for b in part.iter().chain(std::iter::once(&0x1f_u8)) {
+            h ^= u64::from(*b);
+            h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+    format!("V-{:08x}", h & 0xffff_ffff)
+}
+
+/// Turn a finished run into a stored verify run.
+///
+/// The median and range are the generation rate, which is what every rule with
+/// a test attached measures. A run whose receipts carry no rate — a cold test —
+/// has nothing to compare, and gets zeros with no receipts rather than a
+/// fabricated number. `compare` then reports no measurable change and says so.
+pub(crate) fn verify_run_from(
+    finding_id: &str,
+    outcome: &Outcome,
+    receipts: &[Receipt],
+    config: Vec<ModelState>,
+) -> VerifyRun {
+    let rates: Vec<f64> = receipts.iter().filter_map(Receipt::decode_tps).collect();
+    let stats = Stats::of(&rates);
+    VerifyRun {
+        id: verify_run_id(finding_id, outcome.started_ms),
+        finding_id: finding_id.to_string(),
+        ts_ms: outcome.started_ms,
+        config,
+        models: outcome.results.iter().map(|r| r.model.clone()).collect(),
+        receipts: receipts
+            .iter()
+            .filter(|r| r.decode_tps().is_some())
+            .map(|r| r.id.clone())
+            .collect(),
+        median: stats.map_or(0.0, |s| s.median),
+        low: stats.map_or(0.0, |s| s.low),
+        high: stats.map_or(0.0, |s| s.high),
+    }
+}
+
 /// The sentence that goes with every restore. Stated once, here, because it
 /// is the one thing a fingerprint cannot put back.
 pub(crate) const RESTORE_NOTE: &str =
@@ -803,6 +1087,7 @@ pub(crate) const RESTORE_NOTE: &str =
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::receipts::{ReceiptSource, StartState};
     use crate::residency::{ModelState, Residency};
 
     const T0: i64 = 1_700_000_000_000;
@@ -834,6 +1119,197 @@ mod tests {
 
     fn not_loaded(model: &str) -> ModelState {
         state(model, Residency::NotLoaded)
+    }
+
+    fn run(id_suffix: i64, receipts: usize, median: f64, low: f64, high: f64) -> VerifyRun {
+        VerifyRun {
+            id: format!("V-{id_suffix:08x}"),
+            finding_id: "F-abc123".into(),
+            ts_ms: T0 + id_suffix,
+            config: Vec::new(),
+            models: vec!["coder:14b".into()],
+            receipts: (0..receipts).map(|i| format!("R-{i}")).collect(),
+            median,
+            low,
+            high,
+        }
+    }
+
+    #[test]
+    fn two_runs_whose_ranges_do_not_overlap_are_improved_or_worse() {
+        let baseline = run(1, 3, 20.0, 19.8, 20.2);
+        let faster = run(2, 3, 27.5, 27.4, 27.6);
+        let c = compare(&baseline, &faster);
+        assert_eq!(c.verdict, Verdict::Improved);
+        assert!(c.not_measurable_because.is_none());
+        assert!((c.change_pct - 37.5).abs() < 0.1, "{}", c.change_pct);
+
+        let slower = run(3, 3, 14.0, 13.9, 14.1);
+        assert_eq!(compare(&baseline, &slower).verdict, Verdict::Worse);
+    }
+
+    #[test]
+    fn a_tiny_difference_is_no_measurable_change_even_without_an_overlap() {
+        // The live case: two runs of the same test on an idle host, nothing
+        // changed, adjacent bands that happen not to touch. The fourth
+        // evidence rule alone called this "worse".
+        let baseline = run(1, 3, 27.9, 27.7, 27.9);
+        let current = run(2, 3, 27.4, 26.6, 27.5);
+        let c = compare(&baseline, &current);
+        assert_eq!(c.verdict, Verdict::NoMeasurableChange);
+        let why = c.not_measurable_because.expect("a reason");
+        // 1.8% of these medians; the live run printed its own rounded 1.5%.
+        assert!(why.contains("1.8%"), "{why}");
+        assert!(why.contains("not to overlap"), "{why}");
+
+        // Over the floor, and still separated, is a verdict.
+        let clear = run(3, 3, 24.0, 23.8, 24.2);
+        assert_eq!(compare(&baseline, &clear).verdict, Verdict::Worse);
+    }
+
+    #[test]
+    fn overlapping_ranges_are_no_measurable_change_and_say_why() {
+        // A 12% median difference that three runs cannot resolve. The honest
+        // answer is not "unchanged" — the change may be real and too small to
+        // see — so the verdict names the overlap.
+        let baseline = run(1, 3, 20.0, 18.0, 22.0);
+        let current = run(2, 3, 22.4, 21.0, 24.0);
+        let c = compare(&baseline, &current);
+        assert_eq!(c.verdict, Verdict::NoMeasurableChange);
+        assert!((c.change_pct - 12.0).abs() < 0.1, "the delta is still reported");
+        let why = c.not_measurable_because.expect("a reason");
+        assert!(why.contains("overlap"), "{why}");
+        assert!(why.contains("18.0-22.0"), "{why}");
+    }
+
+    #[test]
+    fn fewer_than_three_receipts_a_side_is_never_a_verdict() {
+        // The fourth evidence rule. Two runs cannot show a range, so a
+        // difference between two pairs is not a measurement.
+        let thin = run(1, 2, 20.0, 19.9, 20.1);
+        let full = run(2, 3, 40.0, 39.0, 41.0);
+        let c = compare(&thin, &full);
+        assert_eq!(c.verdict, Verdict::NoMeasurableChange, "even at double the rate");
+        assert!(c.not_measurable_because.unwrap().contains("baseline run has 2 receipts"));
+
+        let c = compare(&full, &thin);
+        assert!(c.not_measurable_because.unwrap().contains("current run has 2 receipts"));
+
+        // And the statement constructor refuses the same pair.
+        assert_eq!(
+            crate::findings::Statement::verified_change("faster", &thin, &full),
+            Err(crate::findings::EvidenceError::TooFewReceipts { side: "baseline", had: 2 }),
+        );
+        assert!(crate::findings::Statement::verified_change("faster", &full, &run(3, 3, 1.0, 1.0, 1.0)).is_ok());
+    }
+
+    #[test]
+    fn a_config_diff_names_the_three_things_ps_can_report() {
+        let before = vec![
+            loaded("coder:14b", Some(8192), None),
+            loaded("helper:3b", Some(4096), None),
+        ];
+        let mut after_model = loaded("coder:14b", Some(4096), None);
+        // Part of the footprint moved outside accelerator memory.
+        after_model.size_bytes = Some(8_000_000_000);
+        after_model.size_vram_bytes = Some(4_000_000_000);
+        let after = vec![after_model, loaded("other:7b", Some(2048), None)];
+
+        let d = config_diff(&before, &after);
+        assert!(d.iter().any(|s| s == "coder:14b: context 8192 to 4096"), "{d:?}");
+        assert!(
+            d.iter().any(|s| s.contains("part of it moved outside")),
+            "{d:?}",
+        );
+        assert!(d.iter().any(|s| s == "no longer loaded: helper:3b"), "{d:?}");
+        assert!(d.iter().any(|s| s == "also loaded: other:7b"), "{d:?}");
+
+        // Two identical snapshots differ in nothing, which is itself an
+        // answer: a change with no visible cause is where to look next.
+        assert!(config_diff(&before, &before).is_empty());
+    }
+
+    #[test]
+    fn a_verify_run_takes_its_rate_from_the_receipts_that_have_one() {
+        let outcome = Outcome {
+            test_id: "T-1".into(),
+            kind: TestKind::DecodeRate,
+            results: vec![ModelResult {
+                model: "coder:14b".into(),
+                num_ctx: 8192,
+                decode_tps: None,
+                prompt_tps: None,
+                load_ms: None,
+                wall_ms: None,
+                receipts: Vec::new(),
+                failures: Vec::new(),
+            }],
+            restored: Vec::new(),
+            restore_note: None,
+            total_wall_ms: None,
+            loads_observed: None,
+            started_ms: T0,
+            finished_ms: T0 + 15_000,
+        };
+        let rate = |eval_ns: u64| crate::receipts::Receipt {
+            id: format!("R-{eval_ns}"),
+            ts_ms: T0,
+            source: ReceiptSource::Fingerprint,
+            model: "coder:14b".into(),
+            digest: None,
+            context_length: Some(8192),
+            size_bytes: None,
+            size_vram_bytes: None,
+            start_state: StartState::Loaded,
+            load_ns: None,
+            prompt_eval_count: None,
+            prompt_eval_cached_count: None,
+            prompt_eval_ns: None,
+            eval_count: Some(100),
+            eval_ns: Some(eval_ns),
+            total_ns: None,
+            wall_ms: None,
+            co_resident: Vec::new(),
+            thermal_state: None,
+            test_id: Some("T-1".into()),
+            finding_id: None,
+        };
+        // 100 tokens in 4 s, 5 s and 10 s: 25, 20 and 10 tok/s.
+        let mut rateless = rate(0);
+        rateless.id = "R-none".into();
+        rateless.eval_ns = None;
+        let receipts = vec![rate(4_000_000_000), rate(5_000_000_000), rate(10_000_000_000), rateless.clone()];
+
+        let v = verify_run_from("F-abc123", &outcome, &receipts, Vec::new());
+        assert_eq!(v.finding_id, "F-abc123");
+        assert_eq!(v.ts_ms, T0, "the run's start, not its end");
+        assert_eq!(v.receipts.len(), 3, "the rateless one is not cited");
+        assert!((v.median - 20.0).abs() < 1e-9);
+        assert!((v.low - 10.0).abs() < 1e-9);
+        assert!((v.high - 25.0).abs() < 1e-9);
+
+        // A run with nothing measurable gets zeros and no receipts rather
+        // than a fabricated rate; compare() then says no measurable change.
+        let empty = verify_run_from("F-abc123", &outcome, &[rateless], Vec::new());
+        assert!(empty.receipts.is_empty());
+        assert_eq!(empty.median, 0.0);
+        assert_eq!(compare(&empty, &v).verdict, Verdict::NoMeasurableChange);
+    }
+
+    #[test]
+    fn the_test_a_finding_verifies_is_warm_and_unpinned() {
+        let spec = test_for(&["coder:14b".to_string(), "helper:3b".to_string()]);
+        assert_eq!(spec.kind, TestKind::DecodeRate, "a cold test would measure the load");
+        assert_eq!(spec.runs, DEFAULT_RUNS);
+        assert_eq!(spec.num_ctx, None, "measured as the host has it");
+        assert_eq!(spec.models.len(), 2);
+    }
+
+    #[test]
+    fn a_verify_run_id_is_stable_per_finding_and_start() {
+        assert_eq!(verify_run_id("F-abc123", T0), verify_run_id("F-abc123", T0));
+        assert_ne!(verify_run_id("F-abc123", T0), verify_run_id("F-abc123", T0 + 1));
+        assert_ne!(verify_run_id("F-abc123", T0), verify_run_id("F-def456", T0));
     }
 
     #[test]
