@@ -210,12 +210,35 @@ pub(crate) fn legacy_config_path() -> Option<PathBuf> {
 /// Parent directory of config_path() — the Wicklee system config dir.
 /// Used for the metrics DB and any future agent-local state files. The DB is
 /// its only caller today, so it compiles out with the store.
+///
+/// `WICKLEE_DATA_DIR` overrides it, for an agent started by hand on a host
+/// where the service owns that directory. On macOS it is `root:wheel`, so a
+/// user-run agent could not create the DB there and ran with no store at
+/// all — and with no store there is no `model_transitions` table, so every
+/// readiness and findings rule reads an empty window and reports nothing.
+/// That made the step 4 rules untestable without the maintainer's password.
+///
+/// It moves state only. `config_path()` stays where it is, deliberately: the
+/// node identity and session token are shared on purpose (see its doc
+/// comment), and a second identity is the problem that path exists to
+/// prevent. Pair this with `--no-cloud`, which stops the hand-started agent
+/// pushing telemetry under the installed node's id.
 #[cfg(not(target_env = "musl"))]
 pub(crate) fn wicklee_dir() -> PathBuf {
-    config_path()
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .to_path_buf()
+    data_dir_from(std::env::var("WICKLEE_DATA_DIR").ok().as_deref())
+}
+
+/// `wicklee_dir()` with the environment passed in, so it can be tested
+/// without mutating process-global state from a parallel test run.
+#[cfg(not(target_env = "musl"))]
+fn data_dir_from(override_dir: Option<&str>) -> PathBuf {
+    match override_dir.map(str::trim).filter(|d| !d.is_empty()) {
+        Some(dir) => PathBuf::from(dir),
+        None => config_path()
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf(),
+    }
 }
 
 
@@ -407,6 +430,26 @@ pub(crate) fn update_config(mutate: impl FnOnce(&mut WickleeConfig)) {
     let mut cfg = load_or_create_config();
     mutate(&mut cfg);
     save_config(&cfg);
+}
+
+#[cfg(all(test, not(target_env = "musl")))]
+mod data_dir_tests {
+    use super::*;
+
+    #[test]
+    fn override_wins_and_is_taken_verbatim() {
+        assert_eq!(data_dir_from(Some("/tmp/wk-test")), PathBuf::from("/tmp/wk-test"));
+    }
+
+    #[test]
+    fn absent_or_blank_falls_back_to_the_config_dir() {
+        let default = config_path().parent().unwrap().to_path_buf();
+        assert_eq!(data_dir_from(None), default);
+        // An exported-but-empty var is a shell accident, not a request to
+        // write the DB to the process's working directory.
+        assert_eq!(data_dir_from(Some("")), default);
+        assert_eq!(data_dir_from(Some("   ")), default);
+    }
 }
 
 #[cfg(test)]

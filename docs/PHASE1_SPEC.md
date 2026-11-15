@@ -1037,6 +1037,54 @@ Three deviations from a literal reading of step 4, all accepted:
   and the sorted model list, rendered `F-xxxxxx`. A counter would renumber on
   every restart, and step 6's `verify` compares two runs by id.
 
+### Open verification: `inspect` against the installed daemon
+
+`wicklee inspect` has never run against the service daemon with a store that
+has accumulated real data. Everything verified so far ran against a
+hand-started agent, and until `WICKLEE_DATA_DIR` existed that agent had no
+store at all: the metrics DB sits beside `config.toml` in
+`/Library/Application Support/Wicklee`, which is `root:wheel`, so
+`create_dir_all` failed, `Store::open` failed, and the agent carried on with
+`metrics_store = None`. It says so on stderr, which is easy to miss in a
+backgrounded run. No store means no `model_transitions`, which means every
+rule in step 4 reads an empty window.
+
+`WICKLEE_DATA_DIR` closes the code path. On 2026-11-14 a hand-started agent
+on the maintainer's M4 ran with its own store against a private Ollama on
+:11999, and `/v1/state`, `/v1/readiness`, `/v1/inspect` and `/v1/findings`
+answered from stored transitions for the first time: `transitions: 5`,
+`persisted: true`, measured footprints, and an evidence-linked observed
+statement naming the running context. `lsof` confirmed the process spoke only
+to :7999 and :11999, and the installed daemon's store and the shared runtime
+on :11434 were unchanged afterwards.
+
+What it does not close is data over time. A fresh store proves the query, the
+rule and the output render; it cannot produce an `eviction_churn` finding that
+needs hours of a real caller's traffic, or show what `inspect` looks like on a
+host that has been serving requests for a week. The daemon's own store on that
+host is 2.3 GB and has been collecting since March.
+
+That check needs the daemon restarted onto a current binary, which needs the
+maintainer's password. The daemon there is **v0.11.1**, which predates the
+0.12.0 baseline this plan measures against, and launchd runs it straight out
+of `~/.wicklee/bin/wicklee` as root with no `/usr/local/bin/wicklee` present
+at all, so the upgrade path `install.sh` describes does not match that host:
+
+```bash
+curl -fsSL https://wicklee.dev/install.sh | bash   # prompts for sudo at the service step
+wicklee inspect
+```
+
+**Do not check a route by status code on this agent.** The embedded frontend's
+SPA fallback answers unknown paths with 200 and `index.html`, so `/v1/state`
+and `/v1/inspect` both return 200 on that 0.11.1 daemon, which has neither
+route. A check that trusts the code passes against an agent that cannot do the
+thing. Assert on the body.
+
+Until the restart is done, treat the step 4 acceptance line as met on
+synthetic and self-collected data only. Step 9's acceptance runs need the same
+thing and should not be started before it.
+
 ### Notes for the implementer
 
 - Read `harvester.rs`, `store.rs` and `main.rs` fully before step 1. The harvester's probe logic and the store's threading rule both constrain the design.
