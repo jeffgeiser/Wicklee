@@ -572,8 +572,11 @@ pub(crate) async fn handle_mcp(
                         axum::extract::Extension(Arc::clone(&apple_metrics)),
                         axum::extract::Extension(Arc::clone(&nvidia_metrics)),
                         axum::extract::Extension(node_id.clone()),
-                        store.clone(),
-                        observations.clone(),
+                        // Moved, not cloned: this is their only use, and on a
+                        // build with no store both are the unit type, where a
+                        // clone of a Copy value is a clippy error.
+                        store,
+                        observations,
                     )
                     .await;
                     Json(JsonRpcResponse::success(id, serde_json::json!({

@@ -23,6 +23,14 @@
 //! loudly the first time rather than quietly succeeding for months. That
 //! promise is the reason this type has no field such text could land in.
 
+// Every item here exists for one of the two configurations. A build with no
+// local store has no verify route and no stored-receipt rules, so the verify
+// comparison, the `Verified` evidence path and the row conversions the store
+// needs have no caller there — present and compiled, but unreached. Allowed
+// for that target only: the default build still fails on genuinely dead code
+// in this file, and every other module keeps its dead-code check on musl too.
+#![cfg_attr(target_env = "musl", allow(dead_code))]
+
 use serde::Serialize;
 
 /// Where a receipt came from. Not a quality ranking: all three are exact.
