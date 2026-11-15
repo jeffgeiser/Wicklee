@@ -21,12 +21,15 @@ pub(crate) fn update_asset_name(platform: &str) -> Option<&'static str> {
         "darwin-aarch64"      => Some("wicklee-agent-darwin-aarch64"),
         "linux-x86_64"        => Some("wicklee-agent-linux-x86_64"),
         "linux-aarch64"       => Some("wicklee-agent-linux-aarch64"),
-        // Legacy aliases. Releases up to v0.14.0 shipped a second Linux asset
-        // per arch under a `-nvidia` name; they were the same build, so both
-        // names resolve to the one asset that ships now. A binary from one of
-        // those releases still reports the old name, so without these it would
-        // ask for an asset that no longer exists and never update again. After
-        // one update it reports the plain name and these stop being used.
+        // Retired names, kept deliberately — and NOT a rescue path for old
+        // binaries, which is what an earlier draft of this comment claimed.
+        // This function is only ever called with `agent_platform()`'s output
+        // (see the call below), so a binary that contains these arms never
+        // reports a `-nvidia` name and never reaches them; a binary that does
+        // report one is an older release using its own baked-in map, not this
+        // one. They are here so the name a release published stays resolvable
+        // in this table rather than becoming an unexplained `None`, and so the
+        // integrity test's platform list keeps documenting what shipped.
         "linux-x86_64-nvidia"  => Some("wicklee-agent-linux-x86_64"),
         "linux-aarch64-nvidia" => Some("wicklee-agent-linux-aarch64"),
         "windows-x86_64"      => Some("wicklee-agent-windows-x86_64.exe"),

@@ -859,11 +859,17 @@ async fn handle_agent_version(
         "linux-x86_64"        => "wicklee-agent-linux-x86_64",
         "linux-aarch64"       => "wicklee-agent-linux-aarch64",
         // Mirrors agent/src/update.rs `update_asset_name`, including its
-        // legacy aliases. Releases up to v0.14.0 shipped a second Linux asset
+        // retired names. Releases up to v0.14.0 shipped a second Linux asset
         // per arch under a `-nvidia` name, built from the same source with a
-        // cfg that stripped nothing. One asset per arch ships now, so both
-        // names map to it. Agents from those releases still report the old
-        // name and would otherwise get a 400 here and never update again.
+        // cfg that stripped nothing; one asset per arch ships now, so both
+        // names map to it.
+        //
+        // What this does and does not do: an agent from one of those releases
+        // gets 200 here instead of 400, so the endpoint stays truthful about
+        // names it published. It does not get that agent updated — the agent
+        // ignores our `download_url` and builds its own from its own map, so
+        // it will still ask for the `-nvidia` asset and fail the SHA256SUMS
+        // check. Such a binary needs a reinstall, not a better response here.
         "linux-x86_64-nvidia"  => "wicklee-agent-linux-x86_64",
         "linux-aarch64-nvidia" => "wicklee-agent-linux-aarch64",
         "windows-x86_64"      => "wicklee-agent-windows-x86_64.exe",
