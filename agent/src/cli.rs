@@ -141,51 +141,7 @@ pub(crate) async fn run(cmd: Command, port: u16) -> i32 {
                 url.push_str("?model=");
                 url.push_str(&urlencode(m));
             }
-            match reqwest::get(&url).await {
-                Ok(resp) => {
-                    let status = resp.status();
-                    let parsed: Option<serde_json::Value> = resp.json().await.ok();
-                    // An agent without /v1 falls through to the SPA handler,
-                    // which answers 200 with HTML. Rendering that as an empty
-                    // table would read as "nothing is loaded" when the truth
-                    // is "this build cannot answer the question".
-                    let Some(body) = parsed.filter(|b| {
-                        !status.is_success() || is_readiness_answer(b)
-                    }) else {
-                        eprintln!(
-                            "wicklee: the agent on 127.0.0.1:{port} did not return a readiness answer."
-                        );
-                        eprintln!(
-                            "         It is probably an older build that does not serve /v1 yet. \
-                             Check which one is running with: wicklee --status"
-                        );
-                        return 1;
-                    };
-                    if !status.is_success() {
-                        // A model this host has never seen is a 404, and saying
-                        // so is more useful than printing an empty table.
-                        eprintln!(
-                            "wicklee: {}",
-                            body["error"].as_str().unwrap_or("the agent returned an error")
-                        );
-                        if let Some(hint) = body["hint"].as_str() {
-                            eprintln!("         {hint}");
-                        }
-                        return 1;
-                    }
-                    if json {
-                        println!("{}", serde_json::to_string_pretty(&body).unwrap_or_default());
-                    } else {
-                        print!("{}", render_ready(&body));
-                    }
-                    0
-                }
-                Err(_) => {
-                    eprintln!("wicklee: the agent is not responding on 127.0.0.1:{port}.");
-                    eprintln!("{}", start_hint());
-                    1
-                }
-            }
+            fetch_and_render(&url, port, json, "a readiness answer", is_readiness_answer, render_ready).await
         }
         Command::Inspect { since, json } => {
             let mut url = format!("http://127.0.0.1:{port}/v1/inspect");
@@ -193,7 +149,7 @@ pub(crate) async fn run(cmd: Command, port: u16) -> i32 {
                 url.push_str("?since=");
                 url.push_str(&urlencode(w));
             }
-            fetch_and_render(&url, port, json, is_inspect_answer, render_inspect).await
+            fetch_and_render(&url, port, json, "an inspection", is_inspect_answer, render_inspect).await
         }
         Command::Fingerprint { models, kind, runs, num_ctx, force, yes, json } => {
             run_fingerprint(port, models, kind, runs, num_ctx, force, yes, json).await
@@ -203,7 +159,7 @@ pub(crate) async fn run(cmd: Command, port: u16) -> i32 {
             if all {
                 url.push_str("?all=true");
             }
-            fetch_and_render(&url, port, json, is_findings_answer, render_findings).await
+            fetch_and_render(&url, port, json, "a list of findings", is_findings_answer, render_findings).await
         }
     }
 }
@@ -397,13 +353,18 @@ fn render_fingerprint(body: &serde_json::Value) -> String {
 
 /// Fetch a `/v1` route and render it, or explain why it could not.
 ///
-/// Shared by `inspect` and `findings`: the same three failure modes — no agent,
-/// an older agent whose SPA handler answers 200 with HTML, and a 4xx with a
-/// message worth printing — and one place that gets them right.
+/// Shared by `ready`, `inspect` and `findings`: the same three failure modes —
+/// no agent, an older agent whose SPA handler answers 200 with HTML, and a 4xx
+/// with a message worth printing — and one place that gets them right.
 async fn fetch_and_render(
     url: &str,
     port: u16,
     json: bool,
+    // What this route was asked for, for the message when it answers with
+    // something else. It is the only thing the three callers differed by —
+    // `ready` carried its own copy of this whole function until that was the
+    // only difference left.
+    wanted: &str,
     looks_right: fn(&serde_json::Value) -> bool,
     render: fn(&serde_json::Value) -> String,
 ) -> i32 {
@@ -415,10 +376,7 @@ async fn fetch_and_render(
     let status = resp.status();
     let parsed: Option<serde_json::Value> = resp.json().await.ok();
     let Some(body) = parsed.filter(|b| !status.is_success() || looks_right(b)) else {
-        eprintln!(
-            "wicklee: the agent on 127.0.0.1:{port} did not return an answer this \
-             command understands."
-        );
+        eprintln!("wicklee: the agent on 127.0.0.1:{port} did not return {wanted}.");
         eprintln!(
             "         It is probably an older build that does not serve this route \
              yet. Check which one is running with: wicklee --status"
