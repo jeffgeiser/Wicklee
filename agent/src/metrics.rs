@@ -103,6 +103,20 @@ pub(crate) struct OllamaMetrics {
     /// This replaces the 10s time-based blackout that caused the Dead Zone.
     #[serde(skip)]
     pub(crate) probe_caused_next_reset: bool,
+    /// True while a consented fingerprint or verify run is sending requests.
+    ///
+    /// Same job as the probe's two flags and set the same way, because the
+    /// problem is the same: Wicklee's own requests reset `expires_at`, and a
+    /// reset attributed to a user invents activity that never happened. The
+    /// run holds this for its whole duration — unlike a probe it is many
+    /// requests over many polls — and then sets the one-shot below for the
+    /// reset that lands after the last one.
+    #[serde(skip)]
+    pub(crate) fingerprint_active: bool,
+    /// The fingerprint equivalent of `probe_caused_next_reset`. Consumed by
+    /// the harvester on the first `expires_at` change after a run ends.
+    #[serde(skip)]
+    pub(crate) fingerprint_caused_next_reset: bool,
     /// API-validated port set by the main harvester after health-checking.
     /// The probe task reads this instead of port_rx to avoid hitting worker sockets
     /// that don't serve the Ollama HTTP API (e.g. ollama_llama_server on :34111).

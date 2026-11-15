@@ -416,14 +416,19 @@ pub(crate) struct RuleInputs<'a> {
 
 /// Run every rule.
 ///
-/// Transitions caused by the agent's own probe are excluded here, once, rather
-/// than in each rule — the spec requires it of every count, and a rule that
-/// forgot would be a silent bug.
+/// Transitions Wicklee caused itself are excluded here, once, rather than in
+/// each rule — the spec requires it of every count, and a rule that forgot
+/// would be a silent bug.
+///
+/// Both of Wicklee's own causes, not just the probe. A fingerprint run loads
+/// models, unloads them for a cold test and loads them again to restore what
+/// was there; counted as real, one consented run would manufacture an
+/// `eviction_churn` finding out of the measurement taken to check for one.
 pub(crate) fn evaluate(inputs: &RuleInputs) -> Inspection {
     let real: Vec<&Transition> = inputs
         .transitions
         .iter()
-        .filter(|t| t.cause != Cause::Probe)
+        .filter(|t| !matches!(t.cause, Cause::Probe | Cause::Fingerprint))
         .collect();
 
     let mut findings = Vec::new();

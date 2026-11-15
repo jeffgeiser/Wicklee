@@ -944,7 +944,7 @@ Steps are in dependency order. Each step ends with its tests passing and a short
 | 2 | **Done.** `residency.rs` and the `model_transitions` table. The harvester forwards each poll. Per-model expiry and activity. Probe and test requests tagged by cause. In-memory log for musl | 1 | Scripted poll sequences produce the expected transitions. `query_model_switches` reads the new table |
 | 3 | **Done.** `readiness.rs`, `GET /v1/state`, `GET /v1/readiness`, `cli.rs` with `wicklee ready` | 2 | Unit tests cover every classification branch and displacement level |
 | 4 | **Done.** `findings.rs`: types, evidence constructors, content-derived IDs, the `findings` table with resolution and reopen. Rules `cpu_split`, `context_reset`, `eviction_churn`, `expiry_reload`. The observations adapter. `GET /v1/inspect`, `GET /v1/findings`, `wicklee inspect`, `wicklee findings`. Three deviations, all recorded below | 2, 3 | Each rule passes positive and negative synthetic cases. A healthy log yields no findings. `context_reset` fires on a scripted context drop and ignores probe-caused transitions |
-| 5 | `receipts.rs` and the `receipts` table. `POST /v1/receipts` for callbacks, rejecting payloads carrying content. Widen the proxy trace and emit proxy receipts. `fingerprint.rs` with warm and cold tests, consent, restore. `wicklee fingerprint` | 1, 2 | Receipts match the mock's timings. A posted callback receipt is stored and counts as activity. A payload with a `prompt` field is rejected. Refuses without consent. Tracker shows test requests tagged |
+| 5 | **Done.** `receipts.rs` and the `receipts` table. `POST /v1/receipts` for callbacks, rejecting payloads carrying content. The proxy trace widened and proxy receipts emitted. `fingerprint.rs` with warm, cold and sequence tests, consent, restore. `POST /v1/fingerprint` and `wicklee fingerprint`. Four deviations, all recorded below | 1, 2 | Receipts match the mock's timings. A posted callback receipt is stored and counts as activity. A payload with a `prompt` field is rejected. Refuses without consent. Tracker shows test requests tagged |
 | 6 | Verify runs and comparison. `wicklee verify`. Rule `baseline_regression`. Verified statements | 4, 5 | Two runs with a changed mock configuration report "improved." Unchanged runs report "no measurable change" |
 | 7 | MCP: add three tools, retire two | 3, 4 | Tool output equals the HTTP JSON |
 | 8 | Fault-injection scenarios and the reference controller with three policies in `scripts/bench/` | 3, 4, 6 | Each scenario runs end to end on the maintainer's host |
@@ -969,7 +969,11 @@ The remote-access rule moved from step 3 to step 1, because V8 showed the existi
 | Tests, after step 3 | 183 passing, clippy clean at every commit |
 | Tests, after step 4 | 218 passing, clippy clean at every commit |
 | Steps 0 to 3 shipped in | v0.13.0, all on 2026-11-13 |
-| Step 4 shipped in | PR #104, merged 2026-11-14, not yet tagged |
+| Agent lines, after step 5 | 28,372, of which 4,990 are production code in the eight new modules, plus 401 in `http_api.rs` and `store.rs` from step 4 and about 560 more from step 5's four routes and two tables |
+| Release binary, after step 5 | 24,777,072 bytes, +1.50% on pristine and +0.40% on step 4. Same machine, rustc 1.94.1, which is also step 4's toolchain, so this delta is exact rather than indicative |
+| Tests, after step 5 | 245 passing, clippy clean at every commit |
+| Step 4 shipped in | PR #104, merged 2026-11-14, tagged v0.14.0 |
+| Step 5 shipped in | Commits straight to main on 2026-11-14, not yet tagged |
 
 The pristine and step 1 figures were measured on the same toolchain, which is the only way that comparison means anything. The step 4 figure is on rustc 1.94.1 and its toolchain match to step 1 is unverified, so the +0.81% is indicative.
 
@@ -1003,12 +1007,37 @@ anyone had read the code it was estimating. The alternative, cutting receipts
 or the fingerprint to fit an estimate that predates the evidence, trades a
 real capability for a number.
 
-Against the new budget: **3,445 of ~4,500 spent**, 1,055 left for
-`receipts.rs` and `fingerprint.rs`. The 401 lines in `http_api.rs` and
-`store.rs` stay outside it, as they were outside the old one; if steps 5 and 6
-add routes and tables at step 4's rate that is another ~400 nobody is
-counting, which is worth saying out loud now rather than discovering at step
-6.
+**The re-cut budget is also blown, and this is the second time.** After step
+5: **4,990 of ~4,500**, 490 over, excluding `auth.rs` as agreed. Where it
+went:
+
+| Module | After step 5 | After step 4 |
+| --- | --- | --- |
+| `findings.rs` | 917 | 912 |
+| `residency.rs` | 866 | 830 |
+| `fingerprint.rs` | 802 | — |
+| `cli.rs` | 791 | 548 |
+| `readiness.rs` | 595 | 595 |
+| `receipts.rs` | 459 | — |
+| `ollama_client.rs` | 418 | 418 |
+| `caps.rs` | 142 | 142 |
+
+`fingerprint.rs` at 802 is the overrun. It was estimated at about 500, and
+roughly 300 of the excess is the executor: unload, poll until the runtime
+stops listing the model, request, build the receipt, restore. None of that is
+in the pure planning core the estimate was made against, and the live run
+showed why it cannot be thinner — the three bugs it exposed were all in the
+execution path, not the plan. `cli.rs` grew 243 lines, almost all of it the
+two-step consent handshake and the result renderer.
+
+The honest reading: the ~3,500 and the ~4,500 were both estimated before the
+code existed, and the second estimate was made with four steps still to build
+rather than one. A third number guessed the same way would be worth no more
+than the first two. So the recommendation this time is not a new ceiling but a
+different question for steps 6 and 7 — whether any module is carrying code
+that belongs elsewhere or nowhere. `findings.rs` at 917 and `cli.rs` at 791
+are the two worth reading with that in mind before step 6 adds `verify` to
+both.
 
 **The probe fix is verified against a real runtime, not only unit tests.** The old request body took a model loaded at `num_ctx` 8192 down to 4096 with a 2,626 ms reload. The new body holds 8192 and returns in 3 ms. That is the V3 bug reproduced and then closed, with a measurement on each side.
 
@@ -1042,6 +1071,54 @@ Three deviations from a literal reading of step 4, all accepted:
 - **Finding IDs are content-derived, not sequential.** FNV-1a over the rule name
   and the sorted model list, rendered `F-xxxxxx`. A counter would renumber on
   every restart, and step 6's `verify` compares two runs by id.
+
+Four deviations from a literal reading of step 5, all accepted:
+
+- **The cold test sends one token, not no prompt.** The protocol says to load
+  the model with no prompt and record `load_duration` and wall time. Ollama
+  0.40.16 answers a bare load with `{"done": true, "done_reason": "load"}` and
+  no durations at all, so a no-prompt cold test can report nothing but its own
+  wall clock, and wall time alone cannot separate the load from the request
+  around it. Measured on the M4, same model, back to back: a bare load gave
+  2862 ms of wall time and nothing else; a one-token request gave
+  `load_duration` 2304 ms and 2307 ms with totals of 2401 ms and 2404 ms. One
+  token costs about 100 ms of a 2.3 s load, separable as `total - load`, and
+  buys a figure repeatable to 3 ms where the wall clock is not.
+- **A sequence run does not refuse on a model in use.** The spec refuses a run
+  that would displace a model in use. Only the cold test unloads anything, so
+  only the cold test refuses. The first draft refused a replay of a busy model
+  and told the operator it "will be unloaded anyway", which was not true. A
+  replay can still displace a model it does not name, by loading something
+  that does not fit alongside it; that is a headroom question `readiness`
+  already answers and the plan does not ask yet. It belongs with step 6, which
+  wires the two together.
+- **A cold run reports no token rates.** One token divided by its own duration
+  is not a rate. The first live cold run printed "1000000.0 tok/s" — a
+  microsecond of eval time presented as a measurement. The receipt keeps the
+  raw counts; the derived rate is suppressed for that kind, because the rate
+  is the part that reads as a claim.
+- **`TraceRow` gained five fields, not three.** The spec adds
+  `load_duration_ns`, `prompt_eval_count` and `prompt_eval_cached_count`. The
+  row also gained `prompt_eval_duration_ns` and `total_duration_ns`, because
+  the existing `latency_ms` and `ttft_ms` are those same numbers rounded, and
+  a receipt built from a rounded figure is not the exact artifact a receipt
+  claims to be.
+
+**Three bugs the first live runs found that the unit tests did not.** All three
+were in execution rather than in the pure core, and all three are now tests:
+
+- The receipt id was hashed over the arrival time, so a retried POST stored two
+  rows while the comment beside it claimed one. The test reused one `Ambient`;
+  the route builds a fresh one per request. The id is now derived from the
+  payload alone.
+- The fingerprint ran on the shared `local_http_client`, which has a 5 s total
+  timeout. A warm run on a 4B model takes 4.7 s, so the first of three was cut
+  off and reported as a transport failure of the test's own making. Test runs
+  now use their own client with no total timeout.
+- A cold run's unload had not taken effect when its load went out, so run two
+  of two measured a warm hit at 1.2 ms against run one's 2865.8 ms and called
+  both cold loads. The run now polls `/api/ps` until the model is gone and
+  records a skipped run rather than a number if it never is.
 
 ### Open verification: `inspect` against the installed daemon
 

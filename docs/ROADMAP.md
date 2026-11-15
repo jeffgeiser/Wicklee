@@ -264,9 +264,30 @@ than trading a capability for an estimate. Spent after step 4: 3,445 inside
 the new budget, plus 401 lines in `http_api.rs` and `store.rs` that no budget
 counted. See *Measured* in `docs/PHASE1_SPEC.md`.
 
-**Then:** step 5 receipts and fingerprint, 6 verify, 7 MCP tools, 8 fault
-injection and the reference controller, 9 acceptance runs, 10 README and this
-file.
+**Step 5 is in, on main, not yet tagged.** Receipts from all three sources —
+a caller's callback, the proxy's done packet, and Wicklee's own consented test
+runs — stored in DuckDB with 30-day retention. `POST /v1/receipts` refuses a
+payload carrying `prompt`, `response`, `messages` or `context` with a 400 that
+names the field, rather than storing it minus the content. `wicklee
+fingerprint` runs warm, cold and sequence tests behind a two-step consent
+handshake, tags every request it sends so the rules ignore it, and reloads
+what it unloaded while saying plainly that the original keep-alive expiry
+cannot be restored.
+
+Verified against a real runtime on the maintainer's M4, not only the mock: a
+posted receipt matched the runtime's own tok/s to the digit, three warm runs
+measured 27.5 tok/s with a 27.4–27.6 range, three cold loads measured 2556 ms
+with a 2300–2853 range, and a second fingerprint run left `last_activity_ms`
+untouched, which is the tagging working. Four deviations and three
+live-only bugs are recorded in `docs/PHASE1_SPEC.md`.
+
+**The re-cut budget is over too:** 4,990 production lines against ~4,500,
+with `fingerprint.rs` at 802 the bulk of it. See *Measured* in the spec for
+where it went and what to do instead of guessing a third number.
+
+**Then:** step 6 verify, 7 MCP tools, 8 fault injection and the reference
+controller, 9 acceptance runs, 10 README and this file. The `/v1` routes are
+still in none of the AI-discovery files; that is one job after step 7.
 
 *This entry is a status index, not the rewrite.* Commit `49e332d` left the
 ROADMAP alone on purpose — repositioning the whole document around

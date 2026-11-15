@@ -760,6 +760,9 @@ pub(crate) fn start_ollama_harvester(
                     let probe_active =
                         probe_active_harvester.load(std::sync::atomic::Ordering::Acquire);
                     m.probe_caused_next_reset = g.probe_caused_next_reset;
+                    // Kept so the fingerprint branch below can undo a
+                    // user-activity stamp the probe attribution set.
+                    let last_user_request_before = m.last_user_request_ts;
                     let mut probe_caused_this_tick = false;
                     if expires_changed {
                         let result =
@@ -777,6 +780,24 @@ pub(crate) fn start_ollama_harvester(
                     // request a reset was.
                     if probe_active || probe_caused_this_tick {
                         poll_actor = crate::residency::Actor::Probe;
+                    }
+
+                    // A fingerprint outranks the probe here. The two should
+                    // not overlap, but if they do, the run the operator
+                    // consented to is the more specific and more useful
+                    // attribution — it is the one they can look up.
+                    m.fingerprint_active = g.fingerprint_active;
+                    m.fingerprint_caused_next_reset = g.fingerprint_caused_next_reset;
+                    let mut fingerprint_caused_this_tick = false;
+                    if expires_changed && !g.fingerprint_active && g.fingerprint_caused_next_reset {
+                        m.fingerprint_caused_next_reset = false;
+                        fingerprint_caused_this_tick = true;
+                    }
+                    if g.fingerprint_active || fingerprint_caused_this_tick {
+                        poll_actor = crate::residency::Actor::Fingerprint;
+                        // A reset Wicklee caused is not user activity, whatever
+                        // the probe attribution concluded a few lines up.
+                        m.last_user_request_ts = last_user_request_before;
                     }
 
                     *g = m;

@@ -62,6 +62,7 @@ mod caps;
 mod residency;
 mod findings;
 mod receipts;
+mod fingerprint;
 mod readiness;
 mod cli;
 #[cfg(any(all(target_os = "linux", not(target_env = "musl")), target_os = "windows"))]
@@ -1214,6 +1215,9 @@ async fn main() {
                 "/v1/receipts",
                 get(handle_v1_receipts_get).post(handle_v1_receipts_post),
             )
+            // The only route that sends inference requests. Needs consent in
+            // the body, and is absent from the MCP tool list on purpose.
+            .route("/v1/fingerprint", post(handle_v1_fingerprint))
             .route("/api/events/recent",  get(handle_events_recent))
             .route("/api/metrics",        get(handle_metrics))       // SSE fallback (1 Hz)
             .route("/api/metrics/snapshot", get(handle_metrics_snapshot)) // one-shot JSON of latest frame

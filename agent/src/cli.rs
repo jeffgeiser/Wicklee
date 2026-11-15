@@ -25,6 +25,17 @@ pub(crate) enum Command {
     Inspect { since: Option<String>, json: bool },
     /// `wicklee findings [--all] [--json]`
     Findings { all: bool, json: bool },
+    /// `wicklee fingerprint MODEL[,MODEL...] [--cold] [--sequence] [--runs N]
+    /// [--num-ctx N] [--force] [--yes] [--json]`
+    Fingerprint {
+        models: Vec<String>,
+        kind: &'static str,
+        runs: Option<u64>,
+        num_ctx: Option<u64>,
+        force: bool,
+        yes: bool,
+        json: bool,
+    },
 }
 
 /// Column the description starts in, and the width text wraps at.
@@ -65,6 +76,47 @@ pub(crate) fn parse(args: &[String]) -> Invocation {
                 });
             Invocation::Run(Command::Inspect { since, json })
         }
+        "fingerprint" => {
+            let flag = |name: &str| args.iter().any(|a| a == name);
+            let value = |name: &str| -> Option<u64> {
+                let eq = format!("{name}=");
+                args.iter()
+                    .position(|a| a == name)
+                    .and_then(|i| args.get(i + 1))
+                    .or_else(|| args.iter().find(|a| a.starts_with(&eq)))
+                    .and_then(|v| v.trim_start_matches(&eq[..]).parse().ok())
+            };
+            // A comma-separated list is a sequence, so `--sequence` is only
+            // needed to replay one model against itself.
+            let models: Vec<String> = args
+                .iter()
+                .skip(1)
+                .find(|a| !a.starts_with('-'))
+                .map(|m| {
+                    m.split(',')
+                        .map(str::trim)
+                        .filter(|m| !m.is_empty())
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let kind = if flag("--cold") {
+                "cold_load"
+            } else if flag("--sequence") || models.len() > 1 {
+                "workflow_replay"
+            } else {
+                "decode_rate"
+            };
+            Invocation::Run(Command::Fingerprint {
+                models,
+                kind,
+                runs: value("--runs"),
+                num_ctx: value("--num-ctx"),
+                force: flag("--force"),
+                yes: flag("--yes") || flag("-y"),
+                json: flag("--json"),
+            })
+        }
         "findings" => Invocation::Run(Command::Findings {
             all: args.iter().any(|a| a == "--all"),
             json: args.iter().any(|a| a == "--json"),
@@ -73,7 +125,8 @@ pub(crate) fn parse(args: &[String]) -> Invocation {
             "wicklee: unknown subcommand {other:?}\n\nAvailable:\n  \
              wicklee inspect [--since 24h] [--json]   what is happening\n  \
              wicklee ready [MODEL] [--json]           which models can run now\n  \
-             wicklee findings [--all] [--json]        findings, open or resolved\n\n\
+             wicklee findings [--all] [--json]        findings, open or resolved\n  \
+             wicklee fingerprint MODEL [--cold]       measure it, with consent\n\n\
              Run `wicklee` with no arguments to start the agent in the foreground."
         )),
     }
@@ -142,6 +195,9 @@ pub(crate) async fn run(cmd: Command, port: u16) -> i32 {
             }
             fetch_and_render(&url, port, json, is_inspect_answer, render_inspect).await
         }
+        Command::Fingerprint { models, kind, runs, num_ctx, force, yes, json } => {
+            run_fingerprint(port, models, kind, runs, num_ctx, force, yes, json).await
+        }
         Command::Findings { all, json } => {
             let mut url = format!("http://127.0.0.1:{port}/v1/findings");
             if all {
@@ -150,6 +206,193 @@ pub(crate) async fn run(cmd: Command, port: u16) -> i32 {
             fetch_and_render(&url, port, json, is_findings_answer, render_findings).await
         }
     }
+}
+
+/// `wicklee fingerprint` — the two-step consent handshake, then the run.
+///
+/// The first POST carries no consent, so the agent answers 400 with the plan
+/// and the sentence describing it. That is deliberate rather than a round trip
+/// wasted: the agent is the only party that knows what is loaded and at what
+/// context, so it is the only one that can say what the run would disturb. The
+/// CLI prints that sentence and asks.
+#[allow(clippy::too_many_arguments)]
+async fn run_fingerprint(
+    port: u16,
+    models: Vec<String>,
+    kind: &'static str,
+    runs: Option<u64>,
+    num_ctx: Option<u64>,
+    force: bool,
+    yes: bool,
+    json: bool,
+) -> i32 {
+    if models.is_empty() {
+        eprintln!("wicklee: name a model. `wicklee fingerprint qwen3:8b`");
+        eprintln!("         A comma-separated list runs them as a sequence.");
+        return 2;
+    }
+
+    let url = format!("http://127.0.0.1:{port}/v1/fingerprint");
+    let mut body = serde_json::json!({ "kind": kind, "models": models, "force": force });
+    if let Some(r) = runs {
+        body["runs"] = serde_json::json!(r);
+    }
+    if let Some(c) = num_ctx {
+        body["num_ctx"] = serde_json::json!(c);
+    }
+
+    let client = reqwest::Client::new();
+    let post = |b: serde_json::Value| {
+        let client = client.clone();
+        let url = url.clone();
+        async move { client.post(&url).json(&b).send().await }
+    };
+
+    // Step one: ask what it would do.
+    let Ok(resp) = post(body.clone()).await else {
+        eprintln!("wicklee: the agent is not responding on 127.0.0.1:{port}.");
+        eprintln!("{}", start_hint());
+        return 1;
+    };
+    let status = resp.status();
+    let Some(answer) = resp.json::<serde_json::Value>().await.ok().filter(|b| {
+        // The SPA-fallback trap again: an older agent answers 200 with HTML,
+        // which parses as nothing useful.
+        b.get("plan").is_some() || b.get("error").is_some() || b.get("outcome").is_some()
+    }) else {
+        eprintln!(
+            "wicklee: the agent on 127.0.0.1:{port} does not serve /v1/fingerprint."
+        );
+        eprintln!("         Check which build is running with: wicklee --status");
+        return 1;
+    };
+
+    // A refusal, or a host that cannot run it. Printed as the reason, not as a
+    // failure: most of these are "wait a minute" rather than "something broke".
+    if answer.get("plan").is_none() && answer.get("outcome").is_none() {
+        eprintln!(
+            "wicklee: {}",
+            answer["error"].as_str().unwrap_or("the run was refused")
+        );
+        return 1;
+    }
+    if !status.is_success() && answer.get("plan").is_some() {
+        let text = answer["consent_text"].as_str().unwrap_or_default();
+        print!("{text}");
+        if !yes {
+            use std::io::Write;
+            print!("\nRun it? [y/N] ");
+            let _ = std::io::stdout().flush();
+            let mut reply = String::new();
+            if std::io::stdin().read_line(&mut reply).is_err()
+                || !matches!(reply.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+            {
+                println!("Not run.");
+                return 1;
+            }
+        }
+    }
+
+    // Step two: with consent.
+    body["consent"] = serde_json::json!(true);
+    let Ok(resp) = post(body).await else {
+        eprintln!("wicklee: the agent stopped responding partway through the run.");
+        return 1;
+    };
+    let status = resp.status();
+    let Ok(result) = resp.json::<serde_json::Value>().await else {
+        eprintln!("wicklee: the run did not return a result this command understands.");
+        return 1;
+    };
+    if !status.is_success() {
+        eprintln!(
+            "wicklee: {}",
+            result["error"].as_str().unwrap_or("the run was refused")
+        );
+        return 1;
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
+    } else {
+        print!("{}", render_fingerprint(&result));
+    }
+    0
+}
+
+/// A finished run, as text.
+fn render_fingerprint(body: &serde_json::Value) -> String {
+    let o = &body["outcome"];
+    let mut out = String::new();
+    out.push_str(&format!(
+        "{} · {}\n",
+        o["kind"].as_str().unwrap_or("test"),
+        o["test_id"].as_str().unwrap_or("?"),
+    ));
+
+    for r in o["results"].as_array().into_iter().flatten() {
+        out.push_str(&format!(
+            "\n  {} at context {}\n",
+            r["model"].as_str().unwrap_or("?"),
+            r["num_ctx"],
+        ));
+        for (label, key, unit) in [
+            ("generation", "decode_tps", "tok/s"),
+            ("prefill", "prompt_tps", "tok/s"),
+            ("load", "load_ms", "ms"),
+            ("wall", "wall_ms", "ms"),
+        ] {
+            let s = &r[key];
+            if s.is_null() {
+                continue;
+            }
+            // Median and range, never a mean: three inference runs are not
+            // normally distributed, and the range is the part that shows it.
+            out.push_str(&format!(
+                "    {label:<12}{:.1} {unit}   ({:.1} to {:.1}, n={})\n",
+                s["median"].as_f64().unwrap_or_default(),
+                s["low"].as_f64().unwrap_or_default(),
+                s["high"].as_f64().unwrap_or_default(),
+                s["n"].as_u64().unwrap_or_default(),
+            ));
+        }
+        for f in r["failures"].as_array().into_iter().flatten() {
+            out.push_str(&format!("    failed      {}\n", f.as_str().unwrap_or("?")));
+        }
+    }
+
+    if let Some(total) = o["total_wall_ms"].as_u64() {
+        out.push_str(&format!(
+            "\n  sequence    {:.1}s total, {} load{}\n",
+            total as f64 / 1000.0,
+            o["loads_observed"].as_u64().unwrap_or_default(),
+            if o["loads_observed"].as_u64() == Some(1) { "" } else { "s" },
+        ));
+    }
+
+    if let Some(note) = o["restore_note"].as_str() {
+        out.push_str(&format!(
+            "\n  restored    {}\n              {}\n",
+            o["restored"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|m| m.as_str()).collect::<Vec<_>>().join(", "))
+                .unwrap_or_default(),
+            note,
+        ));
+    }
+
+    // Said plainly: a run whose receipts were not kept measured something, but
+    // it is not a baseline anything can be compared against later.
+    if body["receipts_persisted"] == serde_json::json!(false) {
+        out.push_str(&format!(
+            "\n  warning     {} of {} receipts stored. Without them this run is not a baseline.\n",
+            body["receipts_stored"],
+            o["results"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|r| r["receipts"].as_array().map(Vec::len)).sum::<usize>())
+                .unwrap_or_default(),
+        ));
+    }
+    out
 }
 
 /// Fetch a `/v1` route and render it, or explain why it could not.

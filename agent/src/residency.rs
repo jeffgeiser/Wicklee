@@ -161,6 +161,12 @@ pub(crate) enum Cause {
     User,
     /// The agent's own idle probe.
     Probe,
+    /// Wicklee's own test run. Separate from `Probe` because the two are
+    /// answerable to different people: the probe is scheduled and the
+    /// operator may not know it ran, while a fingerprint happens because
+    /// someone consented to it. A rule has to ignore both, and an operator
+    /// reading the log has to be able to tell which one moved their model.
+    Fingerprint,
     /// The model's keep-alive ran out.
     ExpiryReached,
     /// Nothing observed explains it. An unload while the expiry was still in
@@ -206,13 +212,14 @@ impl Cause {
         match self {
             Self::User => "user",
             Self::Probe => "probe",
+            Self::Fingerprint => "fingerprint",
             Self::ExpiryReached => "expiry_reached",
             Self::Unknown => "unknown",
         }
     }
 
     pub(crate) fn from_name(s: &str) -> Option<Self> {
-        [Self::User, Self::Probe, Self::ExpiryReached, Self::Unknown]
+        [Self::User, Self::Probe, Self::Fingerprint, Self::ExpiryReached, Self::Unknown]
             .into_iter()
             .find(|c| c.as_str() == s)
     }
@@ -229,6 +236,8 @@ impl Cause {
 pub(crate) enum Actor {
     User,
     Probe,
+    /// A consented `wicklee fingerprint` or `wicklee verify` run.
+    Fingerprint,
 }
 
 impl From<Actor> for Cause {
@@ -236,6 +245,7 @@ impl From<Actor> for Cause {
         match a {
             Actor::User => Cause::User,
             Actor::Probe => Cause::Probe,
+            Actor::Fingerprint => Cause::Fingerprint,
         }
     }
 }
@@ -1193,7 +1203,7 @@ mod tests {
             assert_eq!(serde_json::to_value(k).unwrap(), serde_json::json!(k.as_str()));
             assert_eq!(TransitionKind::from_name(k.as_str()), Some(k));
         }
-        for c in [Cause::User, Cause::Probe, Cause::ExpiryReached, Cause::Unknown] {
+        for c in [Cause::User, Cause::Probe, Cause::Fingerprint, Cause::ExpiryReached, Cause::Unknown] {
             assert_eq!(serde_json::to_value(c).unwrap(), serde_json::json!(c.as_str()));
             assert_eq!(Cause::from_name(c.as_str()), Some(c));
         }

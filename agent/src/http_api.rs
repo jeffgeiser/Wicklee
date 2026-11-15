@@ -1655,6 +1655,180 @@ pub(crate) async fn handle_v1_receipts_get(
     }
 }
 
+// ── /v1/fingerprint ───────────────────────────────────────────────────────────
+
+/// POST /v1/fingerprint — a consented test run.
+///
+/// Two steps by design. A request without `"consent": true` is answered 400
+/// with the plan and the sentence the operator would be agreeing to, so a
+/// caller can show it and ask. Only a request that carries consent sends
+/// anything to the runtime.
+///
+/// Not exposed over MCP, deliberately. This is the one route that loads
+/// models, and an agent that could trigger it would be able to move a
+/// colleague's model out of memory while answering a question about it.
+#[cfg(not(target_env = "musl"))]
+pub(crate) async fn handle_v1_fingerprint(
+    axum::extract::Extension(OllamaPortRx(port_rx)): axum::extract::Extension<OllamaPortRx>,
+    axum::extract::Extension(residency): axum::extract::Extension<crate::residency::SharedTracker>,
+    axum::extract::Extension(ollama_metrics): axum::extract::Extension<
+        std::sync::Arc<std::sync::Mutex<crate::metrics::OllamaMetrics>>,
+    >,
+    axum::extract::Extension(node_id_ext): axum::extract::Extension<NodeId>,
+    axum::extract::Extension(frame): axum::extract::Extension<crate::metrics::LatestFrame>,
+    store: MaybeStore,
+    axum::extract::Json(body): axum::extract::Json<serde_json::Value>,
+) -> axum::response::Response {
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+    use crate::fingerprint::{TestKind, TestSpec};
+
+    let kind = body
+        .get("kind")
+        .and_then(|k| k.as_str())
+        .map_or(Some(TestKind::DecodeRate), TestKind::from_name);
+    let Some(kind) = kind else {
+        return (
+            StatusCode::BAD_REQUEST,
+            axum::Json(serde_json::json!({
+                "error": "unknown test kind",
+                "kinds": ["decode_rate", "cold_load", "workflow_replay"],
+            })),
+        )
+            .into_response();
+    };
+
+    let models: Vec<String> = match body.get("models") {
+        Some(serde_json::Value::Array(a)) => {
+            a.iter().filter_map(|m| m.as_str()).map(str::to_string).collect()
+        }
+        Some(serde_json::Value::String(one)) => vec![one.clone()],
+        _ => Vec::new(),
+    };
+    let spec = TestSpec {
+        kind,
+        models,
+        num_ctx: body.get("num_ctx").and_then(|c| c.as_u64()),
+        runs: body
+            .get("runs")
+            .and_then(|r| r.as_u64())
+            .map_or(crate::fingerprint::DEFAULT_RUNS, |r| r.clamp(1, 10) as u8),
+    };
+    let force = body.get("force").and_then(|f| f.as_bool()).unwrap_or(false);
+
+    let states = match residency.lock() {
+        Ok(t) => t.states().cloned().collect::<Vec<_>>(),
+        Err(_) => Vec::new(),
+    };
+    let refs: Vec<&crate::residency::ModelState> = states.iter().collect();
+    let now_ms = crate::residency::now_ms();
+
+    let plan = match crate::fingerprint::plan(&spec, &refs, now_ms, force) {
+        Ok(p) => p,
+        Err(refusal) => {
+            // 409 rather than 400: the request is well formed and the host is
+            // the reason it cannot run, which is a state a caller can wait out.
+            return (
+                StatusCode::CONFLICT,
+                axum::Json(serde_json::json!({
+                    "error": refusal.message(),
+                    "refused": true,
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    if body.get("consent").and_then(|c| c.as_bool()) != Some(true) {
+        return (
+            StatusCode::BAD_REQUEST,
+            axum::Json(serde_json::json!({
+                "error": "this run sends inference requests and needs consent.                           Post the same body with \"consent\": true",
+                "plan": plan,
+                "consent_text": plan.consent_text(),
+            })),
+        )
+            .into_response();
+    }
+
+    // No port means no runtime was found, which is a different answer from a
+    // run that failed.
+    let Some(port) = *port_rx.borrow() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            axum::Json(serde_json::json!({
+                "error": "no Ollama runtime found on this host, so there is nothing to measure",
+            })),
+        )
+            .into_response();
+    };
+
+    let thermal = frame
+        .0
+        .read()
+        .ok()
+        .and_then(|f| f.clone())
+        .and_then(|j| serde_json::from_str::<serde_json::Value>(&j).ok())
+        .and_then(|v| v.get("thermal_state").and_then(|t| t.as_str()).map(str::to_string));
+
+    // Tag every transition this run causes. Set before the first request and
+    // cleared on every exit path, including a panic — a flag left true would
+    // make the tracker attribute real user requests to a run that had ended.
+    if let Ok(mut m) = ollama_metrics.lock() {
+        m.fingerprint_active = true;
+    }
+    let metrics_guard = ollama_metrics.clone();
+    let cleared = scopeguard::guard((), move |()| {
+        if let Ok(mut m) = metrics_guard.lock() {
+            m.fingerprint_active = false;
+            // And claim the reset that lands after the last request, the way
+            // the probe claims its own.
+            m.fingerprint_caused_next_reset = true;
+        }
+    });
+
+    let (outcome, receipts) = crate::fingerprint::run(
+        &plan,
+        port,
+        &states,
+        thermal,
+        now_ms,
+    )
+    .await;
+    drop(cleared);
+
+    let mut stored = 0_usize;
+    if let Some(axum::extract::Extension(store)) = store {
+        let node_id = node_id_ext.0.to_string();
+        let to_write = receipts.clone();
+        if let Ok(n) = tokio::task::spawn_blocking(move || {
+            let mut ok = 0;
+            for r in &to_write {
+                match store.write_receipt(&node_id, r) {
+                    Ok(()) => ok += 1,
+                    Err(e) => eprintln!("[fingerprint] receipt not stored: {e}"),
+                }
+            }
+            ok
+        })
+        .await
+        {
+            stored = n;
+        }
+    }
+
+    axum::Json(serde_json::json!({
+        "outcome": outcome,
+        "receipts": receipts,
+        // Said plainly rather than implied by a count: a run whose receipts
+        // were not kept still measured something, and the operator should know
+        // the baseline will not be there next time.
+        "receipts_stored": stored,
+        "receipts_persisted": stored == receipts.len() && !receipts.is_empty(),
+    }))
+    .into_response()
+}
+
 #[cfg(test)]
 mod metrics_sse_tests {
     use super::*;
