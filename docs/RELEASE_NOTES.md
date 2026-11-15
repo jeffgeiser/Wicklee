@@ -4,18 +4,18 @@ Paste the section for a release into its GitHub release body. The install block
 at the top of each section is what `.github/workflows/release.yml` writes by
 default, so a pasted body keeps it rather than replacing it.
 
-Releases before v0.14.0 carry only that install block. These are the first
+Releases up to v0.14.0 carry only that install block. These are the first
 written notes.
 
-> **Tag note.** The `v0.14.0` tag in this repository points at the step 4 merge
-> of 2026-11-14 and predates Phase 1 steps 5 to 10, which are on `main`.
-> `agent/Cargo.toml` also still reads `0.14.0`. Whichever tag carries the
-> content below has to be cut from `main`; these notes describe Phase 1 as it
-> stands there, not the commit the existing tag names.
+> **On v0.14.0.** That tag was cut on 2026-11-14 at the step 4 merge and
+> contains Phase 1 steps 0 to 4 only: readiness, the findings rules and the
+> first four routes. Receipts, fingerprint, verify, the MCP tools and the
+> benchmark harness all came after it. Nothing below describes that tag, and
+> no tag is created or moved by these notes.
 
 ---
 
-## v0.14.0 — Phase 1: `wicklee inspect`
+## v0.15.0 — Phase 1 complete: `wicklee inspect`
 
 **Install:**
 ```powershell
