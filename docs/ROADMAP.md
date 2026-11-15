@@ -300,9 +300,15 @@ now also needs the medians to differ by at least 5%, set from that measured
 noise floor. Everything else is "no measurable change", with the reason
 printed beside the delta so it does not read as a bug.
 
-**Then:** step 7 MCP tools, 8 fault injection and the reference controller, 9
-acceptance runs, 10 README and this file. The `/v1` routes are still in none
-of the AI-discovery files; that is one job after step 7.
+**Step 7 is in, on main, not yet tagged.** Three MCP tools — `wicklee_state`,
+`wicklee_readiness`, `wicklee_inspect` — each calling the same handler its HTTP
+route calls, so tool output and route output cannot diverge. `get_model_fit`
+and `get_observations` are retired, answering with the name of their
+replacement rather than "unknown tool". `fingerprint` and `verify` stay off
+MCP on purpose: they are the only routes that load models.
+
+**Then:** step 8 fault injection and the reference controller, 9 acceptance
+runs, 10 README and this file.
 
 *This entry is a status index, not the rewrite.* Commit `49e332d` left the
 ROADMAP alone on purpose — repositioning the whole document around

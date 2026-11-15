@@ -946,7 +946,7 @@ Steps are in dependency order. Each step ends with its tests passing and a short
 | 4 | **Done.** `findings.rs`: types, evidence constructors, content-derived IDs, the `findings` table with resolution and reopen. Rules `cpu_split`, `context_reset`, `eviction_churn`, `expiry_reload`. The observations adapter. `GET /v1/inspect`, `GET /v1/findings`, `wicklee inspect`, `wicklee findings`. Three deviations, all recorded below | 2, 3 | Each rule passes positive and negative synthetic cases. A healthy log yields no findings. `context_reset` fires on a scripted context drop and ignores probe-caused transitions |
 | 5 | **Done.** `receipts.rs` and the `receipts` table. `POST /v1/receipts` for callbacks, rejecting payloads carrying content. The proxy trace widened and proxy receipts emitted. `fingerprint.rs` with warm, cold and sequence tests, consent, restore. `POST /v1/fingerprint` and `wicklee fingerprint`. Four deviations, all recorded below | 1, 2 | Receipts match the mock's timings. A posted callback receipt is stored and counts as activity. A payload with a `prompt` field is rejected. Refuses without consent. Tracker shows test requests tagged |
 | 6 | **Done.** Verify runs and comparison, `POST /v1/verify` and `wicklee verify`. Rule `baseline_regression`. The `Verified` label, with `Receipt` and `VerifyRun` evidence references. Three deviations, all recorded below | 4, 5 | Two runs with a changed mock configuration report "improved." Unchanged runs report "no measurable change" |
-| 7 | MCP: add three tools, retire two | 3, 4 | Tool output equals the HTTP JSON |
+| 7 | **Done.** `wicklee_state`, `wicklee_readiness` and `wicklee_inspect`, each calling the same handler its route calls so the two cannot diverge. `get_model_fit` and `get_observations` retired, answering with a pointer to their replacement rather than "unknown tool" | 3, 4 | Tool output equals the HTTP JSON |
 | 8 | Fault-injection scenarios and the reference controller with three policies in `scripts/bench/` | 3, 4, 6 | Each scenario runs end to end on the maintainer's host |
 | 9 | Acceptance runs on the maintainer's machines, then three outside machines. Overhead measurement | 8 | Both demonstrations pass, or the write-up states plainly what did not |
 | 10 | Update the README and `docs/ROADMAP.md`. Publish results with method and raw data | 9 | A new user can install, run `wicklee inspect`, and understand the output from the README alone |
@@ -977,6 +977,8 @@ The remote-access rule moved from step 3 to step 1, because V8 showed the existi
 | Agent lines, after step 6 | 28,460, of which the eight new modules hold 3,848 lines of code and 1,479 of comment |
 | Tests, after step 6 | 256 passing, clippy clean at every commit |
 | Step 6 shipped in | Commits straight to main on 2026-11-14, not yet tagged |
+| Tests, after step 7 | 257 passing, clippy clean at every commit |
+| Step 7 shipped in | Commits straight to main on 2026-11-15, not yet tagged |
 
 The pristine and step 1 figures were measured on the same toolchain, which is the only way that comparison means anything. The step 4 figure is on rustc 1.94.1 and its toolchain match to step 1 is unverified, so the +0.81% is indicative.
 
@@ -1151,6 +1153,31 @@ configuration", which is what those tests are; manufacturing a real 5%
 regression on an idle host means loading a second model to contend for
 memory, and that is a step 8 fault-injection scenario rather than something to
 improvise here.
+
+One deviation and one fix in step 7:
+
+- **The tools call the handlers, not the routes.** The spec says the three
+  return the same JSON as the HTTP routes. The older MCP tools achieve that by
+  fetching over loopback, and two of them do it against a hardcoded
+  `127.0.0.1:7700` — so on an agent started with `PORT=7999` they answer from
+  whatever is on 7700, which on a paired host is the installed service. The
+  three new tools call the same handler functions the routes call and pass the
+  body through, which makes the equality structural rather than a coincidence
+  of two implementations agreeing, and leaves no port to get wrong. Verified
+  live: the three tool outputs are byte-identical to `/v1/state`,
+  `/v1/readiness` and `/v1/inspect` once the clock fields that differ between
+  two calls a moment apart are set aside, and a bad `since=` produces the same
+  refusal through both doors.
+- **`/mcp` now answers a malformed body as JSON-RPC.** Adding the three tools
+  pushed `handle_mcp` past axum's sixteen-extractor limit, so it takes the
+  request itself. That also meant parsing the body by hand, which fixed
+  something: `Json<T>` rejected a malformed body with a 400 and a plain-text
+  reason that a JSON-RPC client has no way to read. A parse error is -32700
+  and belongs in the envelope.
+
+A retired tool answers `-32601` with the name of its replacement and why,
+rather than "unknown tool". An agent that called `get_model_fit` yesterday
+deserves to be told where the answer moved.
 
 ### Open verification: `inspect` against the installed daemon
 

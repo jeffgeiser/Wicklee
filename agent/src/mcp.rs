@@ -52,13 +52,41 @@ pub(crate) async fn handle_mcp_manifest() -> Json<serde_json::Value> {
         "schema_version": "2024-11-05",
         "name": "wicklee-agent",
         "version": env!("CARGO_PKG_VERSION"),
-        "description": "Sovereign GPU fleet monitor — hardware telemetry, inference state, WES efficiency scores, and observation patterns for local AI inference nodes.",
+        "description": "Sovereign GPU fleet monitor for local AI inference. Hardware telemetry and inference state, plus what is loaded on this host, whether a model can run without displacing another, and findings about slow or unstable inference with the evidence behind each one.",
         "transport": { "type": "http", "url": "/mcp" },
         "capabilities": {
             "tools": true,
             "resources": true,
         }
     }))
+}
+
+/// One of a tool call's arguments, as a string.
+///
+/// Tools take their arguments the way the routes take query parameters, so
+/// the two surfaces accept the same words for the same thing.
+fn tool_arg(req: &JsonRpcRequest, name: &str) -> Option<String> {
+    req.params
+        .as_ref()?
+        .get("arguments")?
+        .get(name)?
+        .as_str()
+        .map(str::to_string)
+}
+
+/// A handler's response body, as text.
+///
+/// The three /v1 tools pass through whatever their route returned, including
+/// its error bodies: a tool that reported success where the route reported 404
+/// would be a second implementation of the route's own rules.
+async fn response_body(resp: axum::response::Response) -> String {
+    match axum::body::to_bytes(resp.into_body(), 1024 * 1024).await {
+        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+        Err(e) => serde_json::json!({
+            "error": format!("the route produced a body this tool could not read: {e}"),
+        })
+        .to_string(),
+    }
 }
 
 pub(crate) fn mcp_tools_list() -> serde_json::Value {
@@ -79,11 +107,6 @@ pub(crate) fn mcp_tools_list() -> serde_json::Value {
             "inputSchema": { "type": "object", "properties": {} }
         },
         {
-            "name": "get_observations",
-            "description": "Evaluates local hardware observation patterns (Thermal Drain, Phantom Load, Swap Pressure, PCIe Degradation) against the 1-hour DuckDB buffer. Returns any active observations with severity, evidence, and recommended actions.",
-            "inputSchema": { "type": "object", "properties": {} }
-        },
-        {
             "name": "get_metrics_history",
             "description": "Returns the 1-hour rolling metrics history from the local DuckDB store. Includes tok/s, GPU%, power, memory pressure, and swap over time.",
             "inputSchema": {
@@ -97,9 +120,35 @@ pub(crate) fn mcp_tools_list() -> serde_json::Value {
             }
         },
         {
-            "name": "get_model_fit",
-            "description": "Analyzes how well the currently loaded model fits this node across three dimensions: Memory Fit (does it leave safe headroom?), Efficiency (WES score — tok/s per watt after thermal penalty), and Context Runway (how far the KV cache can grow before VRAM runs out). Returns structured scores and a plain-English summary suitable for answering 'can I run this model safely on this node?'",
+            "name": "wicklee_state",
+            "description": "What is installed and loaded on this host: every model with its residency, the context it is running at, its measured footprint, whether any of it sits outside accelerator memory, and when a real caller last used it. Also records which response fields this runtime actually returns, so a caller can tell an unknown from a zero.",
             "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "wicklee_readiness",
+            "description": "Call before starting a task to see whether a model can run without displacing another. Answers ready_now, requires_loading or would_displace for each installed model, with the memory headroom and the evidence behind the answer. Pass a model name to ask about one.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "model": {
+                        "type": "string",
+                        "description": "One model to answer about, e.g. \"qwen3:8b\". Omit for every installed model."
+                    }
+                }
+            }
+        },
+        {
+            "name": "wicklee_inspect",
+            "description": "Current findings about slow or unstable inference on this host, each with the evidence behind it: what was observed, what may follow from it, and what was measured. Also lists what could not be checked and why, so a gap reads as a gap rather than as a clean bill of health.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "since": {
+                        "type": "string",
+                        "description": "How far back to look, e.g. \"24h\", \"90m\" or \"7d\". Defaults to the rules' own windows."
+                    }
+                }
+            }
         }
     ])
 }
@@ -217,8 +266,83 @@ pub(crate) async fn handle_mcp(
     axum::extract::Extension(probe_active):          axum::extract::Extension<Arc<std::sync::atomic::AtomicBool>>,
     axum::extract::Extension(proxy_ports):           axum::extract::Extension<ProxyPorts>,
     axum::extract::Extension(node_id):               axum::extract::Extension<NodeId>,
-    Json(req): Json<JsonRpcRequest>,
+    // The whole request rather than `Json<JsonRpcRequest>`, for two reasons.
+    //
+    // Axum stops implementing `Handler` past sixteen extractors, and the three
+    // /v1 tools need five more things than this handler used to take: the
+    // runtime port, the capability record, the residency tracker, the store
+    // and the observation cache. Taking the request itself is one extractor
+    // for all of them.
+    //
+    // And it lets a malformed body answer as JSON-RPC. `Json<T>` rejects with
+    // a 400 and a plain-text reason, which a JSON-RPC client has no way to
+    // read; a parse error is -32700 and belongs in the envelope.
+    request: axum::extract::Request,
 ) -> Json<JsonRpcResponse> {
+    let (parts, body) = request.into_parts();
+    let port_rx = match parts.extensions.get::<OllamaPortRx>() {
+        Some(OllamaPortRx(rx)) => rx.clone(),
+        // Only reachable if the router stopped layering it, which would break
+        // every /v1 route too. Answered rather than panicked.
+        None => {
+            return Json(JsonRpcResponse::error(
+                serde_json::Value::Null,
+                -32603,
+                "this agent is not serving the runtime port to its own handlers".to_string(),
+            ));
+        }
+    };
+    let caps = match parts.extensions.get::<crate::caps::SharedCaps>() {
+        Some(c) => c.clone(),
+        None => {
+            return Json(JsonRpcResponse::error(
+                serde_json::Value::Null,
+                -32603,
+                "this agent has no capability record".to_string(),
+            ));
+        }
+    };
+    let residency = match parts.extensions.get::<crate::residency::SharedTracker>() {
+        Some(r) => Arc::clone(r),
+        None => {
+            return Json(JsonRpcResponse::error(
+                serde_json::Value::Null,
+                -32603,
+                "this agent has no residency tracker".to_string(),
+            ));
+        }
+    };
+    #[cfg(not(target_env = "musl"))]
+    let store: crate::http_api::MaybeStore = parts
+        .extensions
+        .get::<crate::store::Store>()
+        .cloned()
+        .map(axum::extract::Extension);
+    #[cfg(not(target_env = "musl"))]
+    let observations: crate::http_api::MaybeObservations = parts
+        .extensions
+        .get::<crate::observations::ObservationCache>()
+        .cloned()
+        .map(axum::extract::Extension);
+    // On musl there is no DuckDB, so neither exists and the handler serves
+    // the in-memory evaluation — the same as the HTTP route does there.
+    #[cfg(target_env = "musl")]
+    let store: crate::http_api::MaybeStore = None;
+    #[cfg(target_env = "musl")]
+    let observations: crate::http_api::MaybeObservations = None;
+
+    let bytes = match axum::body::to_bytes(body, 1024 * 1024).await {
+        Ok(b) => b,
+        Err(e) => {
+            return Json(JsonRpcResponse::error(serde_json::Value::Null, -32700, format!("could not read the request body: {e}")));
+        }
+    };
+    let req: JsonRpcRequest = match serde_json::from_slice(&bytes) {
+        Ok(r) => r,
+        Err(e) => {
+            return Json(JsonRpcResponse::error(serde_json::Value::Null, -32700, format!("not a JSON-RPC request: {e}")));
+        }
+    };
     let id = req.id.clone();
 
     // Helper: read all shared state into local snapshots.
@@ -368,20 +492,6 @@ pub(crate) async fn handle_mcp(
                     })))
                 }
 
-                "get_observations" => {
-                    // Fetch from local REST endpoint (backed by ObservationCache → DuckDB)
-                    match local_http_client().get("http://127.0.0.1:7700/api/observations").send().await {
-                        Ok(resp) if resp.status().is_success() => {
-                            let body = resp.text().await.unwrap_or_else(|_| "{}".into());
-                            Json(JsonRpcResponse::success(id, serde_json::json!({
-                                "content": [{ "type": "text", "text": body }]
-                            })))
-                        }
-                        _ => Json(JsonRpcResponse::success(id, serde_json::json!({
-                            "content": [{ "type": "text", "text": "Observations endpoint unavailable — DuckDB may still be initializing." }]
-                        }))),
-                    }
-                }
                 "get_metrics_history" => {
                     let minutes = req.params.as_ref()
                         .and_then(|p| p.get("arguments"))
@@ -403,331 +513,94 @@ pub(crate) async fn handle_mcp(
                     }
                 }
 
-                "get_model_fit" => {
-                    let ollama   = ollama_metrics.lock().map(|g| g.clone()).unwrap_or_default();
-                    let nvidia   = nvidia_metrics.lock().map(|g| g.clone()).unwrap_or_default();
-                    let apple    = apple_metrics.lock().map(|g| g.clone()).unwrap_or_default();
-                    let wes      = wes_metrics.lock().map(|g| g.clone()).unwrap_or_default();
-
-                    let mut sys = sysinfo::System::new();
-                    sys.refresh_memory();
-                    let total_mb     = sys.total_memory() / 1024 / 1024;
-                    let available_mb = sys.available_memory() / 1024 / 1024;
-
-                    // ── Determine active model info ──────────────────────────
-                    let model_name = ollama.ollama_active_model.clone();
-                    let model_gb   = ollama.ollama_model_size_gb;
-                    let quant      = ollama.ollama_quantization.clone();
-                    let tps        = ollama.ollama_tokens_per_second;
-
-                    // ── Memory Fit ───────────────────────────────────────────
-                    // Headroom = available RAM (or VRAM for NVIDIA). Score on
-                    // how much room is left after the model is loaded.
-                    let (vram_total_gb, _vram_used_gb, vram_available_gb) = match (
-                        nvidia.nvidia_vram_total_mb, nvidia.nvidia_vram_used_mb
-                    ) {
-                        (Some(total), Some(used)) => {
-                            let t = total as f64 / 1024.0;
-                            let u = used  as f64 / 1024.0;
-                            (Some(t), Some(u), Some(t - u))
-                        }
-                        _ => (None, None, None),
-                    };
-
-                    // Prefer VRAM for NVIDIA nodes; fall back to system RAM
-                    let (memory_pool_label, pool_total_gb, pool_available_gb) = if let Some(avail) = vram_available_gb {
-                        ("VRAM", vram_total_gb.unwrap_or(0.0), avail)
-                    } else {
-                        let total = total_mb as f64 / 1024.0;
-                        let avail = available_mb as f64 / 1024.0;
-                        ("RAM", total, avail)
-                    };
-
-                    let (memory_score, memory_label, memory_reason) = match model_gb {
-                        Some(mgb) => {
-                            let mgb = mgb as f64;
-                            // Headroom after model = available that isn't consumed by the model
-                            let headroom_gb = pool_available_gb;
-                            let headroom_pct = if pool_total_gb > 0.0 {
-                                headroom_gb / pool_total_gb * 100.0
-                            } else { 0.0 };
-
-                            if headroom_pct >= 20.0 {
-                                ("good",
-                                 "Good",
-                                 format!("{mgb:.1} GB model leaves {headroom_gb:.1} GB headroom ({headroom_pct:.0}% of {memory_pool_label}) — comfortable."))
-                            } else if headroom_pct >= 8.0 {
-                                ("fair",
-                                 "Fair",
-                                 format!("{mgb:.1} GB model leaves {headroom_gb:.1} GB headroom ({headroom_pct:.0}% of {memory_pool_label}) — manageable but tight under long context."))
-                            } else {
-                                ("poor",
-                                 "Poor",
-                                 format!("{mgb:.1} GB model leaves only {headroom_gb:.1} GB headroom ({headroom_pct:.0}% of {memory_pool_label}) — KV cache growth will force swapping."))
-                            }
-                        }
-                        None => ("unknown", "Unknown", "No model loaded or model size unavailable.".into()),
-                    };
-
-                    // ── WES Efficiency ───────────────────────────────────────
-                    // WES = tok/s ÷ (watts × thermal_penalty)
-                    // Levels: excellent >10, good 3–10, acceptable 1–3, low <1
-                    let node_power_w: Option<f64> = apple.soc_power_w
-                        .map(|w| w as f64)
-                        .or_else(|| nvidia.nvidia_power_draw_w.map(|w| w as f64))
-                        .or_else(|| apple.cpu_power_w.map(|w| w as f64));
-
-                    let penalty = wes.penalty_avg.map(|p| p as f64).unwrap_or(1.0).max(0.01);
-
-                    let (wes_score, wes_level, wes_reason) = match (tps, node_power_w) {
-                        (Some(t), Some(w)) if w > 0.0 => {
-                            let wes_val = t as f64 / (w * penalty);
-                            let (level, _label) = if wes_val > 10.0 {
-                                ("excellent", "Excellent")
-                            } else if wes_val > 3.0 {
-                                ("good", "Good")
-                            } else if wes_val > 1.0 {
-                                ("acceptable", "Acceptable")
-                            } else {
-                                ("low", "Low")
-                            };
-                            let reason = if penalty > 1.05 {
-                                format!("{t:.1} tok/s at {w:.0} W with {:.0}% thermal penalty → WES {wes_val:.2}", (penalty - 1.0) * 100.0)
-                            } else {
-                                format!("{t:.1} tok/s at {w:.0} W → WES {wes_val:.2}")
-                            };
-                            (Some(wes_val), level, reason)
-                        }
-                        _ => (None, "unknown", "Inference not active — WES requires live tok/s and power readings.".into()),
-                    };
-
-                    // ── Context Runway ───────────────────────────────────────
-                    // KV cache bytes = 2 × kv_head_layers × head_dim × ctx_tokens × 2 (FP16)
-                    let ctx_runway = (|| -> Option<serde_json::Value> {
-                        let headroom_gb = if memory_pool_label == "VRAM" {
-                            pool_available_gb
-                        } else {
-                            // Use available RAM but reserve 2 GB for OS
-                            (pool_available_gb - 2.0).max(0.0)
-                        };
-                        if headroom_gb <= 0.0 { return None; }
-
-                        // Try exact arch fields first.
-                        //
-                        // One figure, not two: KV cost is the sum of KV heads
-                        // over layers, and `ollama_kv_head_layers` carries that
-                        // sum exactly. A hybrid-attention model has no per-layer
-                        // head count to multiply by the layer count, so reading
-                        // `layers x kv_heads` would have to invent one.
-                        let (kv_head_layers, head_dim, max_ctx, is_exact) =
-                            if let (Some(kvl), Some(nh), Some(ed)) = (
-                                ollama.ollama_kv_head_layers,
-                                ollama.ollama_num_heads,
-                                ollama.ollama_embedding_dim,
-                            ) {
-                                if nh == 0 { return None; }
-                                let hd = ed / nh;
-                                if hd == 0 { return None; }
-                                let mc = ollama.ollama_context_length.unwrap_or(8_192);
-                                (kvl, hd, mc, true)
-                            } else {
-                                // Fallback: estimate from parameter count
-                                let params = ollama.ollama_parameter_count?;
-                                let b = params as f64 / 1e9;
-                                let mc = ollama.ollama_context_length.unwrap_or(8_192);
-                                // [layers, kv_heads, head_dim]
-                                let entry = if b < 2.0        { (22u64, 8u64, 64u64) }
-                                    else if b < 4.5  { (28, 8, 128) }
-                                    else if b < 9.0  { (32, 8, 128) }
-                                    else if b < 18.0 { (40, 8, 128) }
-                                    else if b < 40.0 { (48, 8, 128) }
-                                    else if b < 80.0 { (80, 8, 128) }
-                                    else             { (96, 8, 128) };
-                                (entry.0 * entry.1, entry.2, mc, false)
-                            };
-
-                        let headroom_bytes = headroom_gb * 1024.0 * 1024.0 * 1024.0;
-                        let milestones = [4_096u64, 16_384, 32_768, 65_536, 131_072];
-                        let approx_prefix = if is_exact { "" } else { "~" };
-
-                        let mut points = Vec::new();
-                        let mut max_fits_ctx: Option<u64> = None;
-
-                        for &ctx in &milestones {
-                            if ctx > max_ctx { break; }
-                            // kv bytes = 2 × kv_head_layers × head_dim × ctx × 2 (FP16)
-                            let kv_bytes = 2.0 * kv_head_layers as f64 * head_dim as f64 * ctx as f64 * 2.0;
-                            let kv_gb    = kv_bytes / (1024.0_f64).powi(3);
-                            let fits     = kv_bytes <= headroom_bytes;
-                            if fits { max_fits_ctx = Some(ctx); }
-                            points.push(serde_json::json!({
-                                "ctx_tokens": ctx,
-                                "ctx_label": format!("{}k", ctx / 1024),
-                                "kv_gb": format!("{}{:.2}", approx_prefix, kv_gb),
-                                "fits": fits,
-                            }));
-                        }
-
-                        // Add model's own max_ctx if not a milestone
-                        if !milestones.contains(&max_ctx) {
-                            let kv_bytes = 2.0 * kv_head_layers as f64 * head_dim as f64 * max_ctx as f64 * 2.0;
-                            let kv_gb    = kv_bytes / (1024.0_f64).powi(3);
-                            let fits     = kv_bytes <= headroom_bytes;
-                            if fits { max_fits_ctx = Some(max_ctx); }
-                            let label = if max_ctx >= 1_000_000 { format!("{}M", max_ctx / 1_000_000) }
-                                        else { format!("{}k", max_ctx / 1_000) };
-                            points.push(serde_json::json!({
-                                "ctx_tokens": max_ctx,
-                                "ctx_label": label,
-                                "kv_gb": format!("{}{:.2}", approx_prefix, kv_gb),
-                                "fits": fits,
-                            }));
-                        }
-
-                        let summary = match max_fits_ctx {
-                            None => {
-                                let smallest_kv = 2.0 * kv_head_layers as f64 * head_dim as f64 * 4096.0 * 2.0 / (1024.0_f64).powi(3);
-                                format!("KV cache exceeds {headroom_gb:.1} GB headroom even at 4k context ({approx_prefix}{smallest_kv:.1} GB). Swapping likely.")
-                            }
-                            Some(mfc) if mfc >= max_ctx => {
-                                format!("Full {}{} context window fits within {headroom_gb:.1} GB headroom. No context pressure.", approx_prefix, if max_ctx >= 1000 { format!("{}k", max_ctx/1000) } else { max_ctx.to_string() })
-                            }
-                            Some(mfc) => {
-                                let label = if mfc >= 1000 { format!("{}k", mfc/1000) } else { mfc.to_string() };
-                                format!("Context runway reaches {approx_prefix}{label} before KV cache exceeds {headroom_gb:.1} GB headroom.")
-                            }
-                        };
-
-                        Some(serde_json::json!({
-                            "max_ctx_tokens": max_ctx,
-                            "headroom_gb": format!("{headroom_gb:.2}"),
-                            "is_exact_arch": is_exact,
-                            "milestones": points,
-                            "max_fits_ctx": max_fits_ctx,
-                            "summary": summary,
-                        }))
-                    })();
-
-                    // ── Quant Recommendation ─────────────────────────────────
-                    let quant_rec = (|| -> Option<serde_json::Value> {
-                        let mgb     = model_gb? as f64;
-                        let q       = quant.as_deref().unwrap_or("");
-                        let avail   = pool_available_gb;
-
-                        // Determine quant family by parsing bits from name
-                        // e.g. "Q4_K_M" → 4, "Q8_0" → 8, "F16" → 16
-                        let bits: Option<u32> = if q.starts_with('F') || q.starts_with('f') {
-                            if q.contains("16") { Some(16) } else if q.contains("32") { Some(32) } else { None }
-                        } else {
-                            q.chars().find(|c| c.is_ascii_digit())
-                                .and_then(|c| c.to_digit(10))
-                        };
-
-                        let (kind, headline, detail) = match bits {
-                            Some(b) if b >= 8 => {
-                                // At Q8/F16 — check if lower quant would help
-                                let q4_size_est = mgb * 4.0 / (b as f64);
-                                if avail < mgb * 0.25 {
-                                    // Very tight — recommend downgrade
-                                    ("downgrade",
-                                     format!("Consider Q4_K_M — headroom too tight for {q}"),
-                                     format!("Q4_K_M would reduce model footprint from {mgb:.1} GB to ~{q4_size_est:.1} GB, freeing ~{:.1} GB.", mgb - q4_size_est))
-                                } else {
-                                    // Enough room — Q8 is fine, note the speed trade-off
-                                    ("lossless",
-                                     format!("{q} offers minimal quality loss over F16"),
-                                     "Memory fits. Note: Q8 is ~40% slower than Q4_K_M on memory-bandwidth-bound hardware. Acceptable if quality is the priority.".to_string())
-                                }
-                            }
-                            Some(b) if b <= 3 => {
-                                // Very low quant — suggest upgrade if room permits
-                                let q4_size_est = mgb * 4.0 / (b as f64);
-                                if avail > q4_size_est * 0.3 {
-                                    ("upgrade",
-                                     format!("Consider Q4_K_M — {q} may sacrifice too much quality"),
-                                     format!("Q4_K_M at ~{q4_size_est:.1} GB would likely fit with {avail:.1} GB available and recover significant quality."))
-                                } else {
-                                    ("sweet-spot",
-                                     format!("{q} is appropriate given memory constraints"),
-                                     format!("Only {avail:.1} GB available — {q} is the best fit despite quality trade-offs."))
-                                }
-                            }
-                            Some(4) | Some(5) | Some(6) => {
-                                // Q4–Q6: sweet spot for most hardware
-                                ("sweet-spot",
-                                 format!("{q} is in the sweet spot for this hardware"),
-                                 format!("Q4–Q6 models balance memory footprint, speed, and quality on memory-bandwidth-bound hardware. {mgb:.1} GB with {avail:.1} GB available."))
-                            }
-                            _ => {
-                                // Unknown quant format
-                                ("none",
-                                 "Quantization format not recognized".into(),
-                                 format!("Could not parse quant level from '{q}'. Check model details."))
-                            }
-                        };
-
-                        Some(serde_json::json!({
-                            "current_quant": q,
-                            "kind": kind,
-                            "headline": headline,
-                            "detail": detail,
-                        }))
-                    })();
-
-                    // ── Plain-English Summary ────────────────────────────────
-                    let model_label = model_name.as_deref().unwrap_or("No model loaded");
-                    let summary_parts: Vec<String> = {
-                        let mut parts = Vec::new();
-                        match memory_score {
-                            "good"  => parts.push(format!("Memory fit is good ({memory_reason}).")),
-                            "fair"  => parts.push(format!("Memory fit is fair — {memory_reason}")),
-                            "poor"  => parts.push(format!("Memory is tight — {memory_reason}")),
-                            _       => {}
-                        }
-                        match wes_level {
-                            "excellent" | "good" => parts.push(format!("Efficiency is {wes_level} ({wes_reason}).")),
-                            "acceptable"         => parts.push(format!("Efficiency is acceptable ({wes_reason}).")),
-                            "low"                => parts.push(format!("Efficiency is low — {wes_reason}")),
-                            _                    => {}
-                        }
-                        if let Some(ref r) = ctx_runway
-                            && let Some(s) = r.get("summary").and_then(|v| v.as_str()) {
-                                parts.push(s.to_string());
-                            }
-                        parts
-                    };
-                    let summary = if summary_parts.is_empty() {
-                        "No model is currently loaded on this node.".to_string()
-                    } else {
-                        format!("{model_label}: {}", summary_parts.join(" "))
-                    };
-
-                    let result = serde_json::json!({
-                        "model": model_name,
-                        "quant": quant,
-                        "model_size_gb": model_gb,
-                        "memory_pool": memory_pool_label,
-                        "pool_total_gb": pool_total_gb,
-                        "pool_available_gb": pool_available_gb,
-                        "memory_fit": {
-                            "score": memory_score,
-                            "label": memory_label,
-                            "reason": memory_reason,
-                        },
-                        "efficiency": {
-                            "wes": wes_score,
-                            "level": wes_level,
-                            "reason": wes_reason,
-                        },
-                        "context_runway": ctx_runway,
-                        "quant_recommendation": quant_rec,
-                        "summary": summary,
-                    });
-
+                // ── The /v1 surface, as tools ────────────────────────────────
+                //
+                // Each one calls the same handler the HTTP route calls and
+                // passes its body through. That is how "tool output equals the
+                // HTTP JSON" is true by construction rather than by two
+                // implementations agreeing for now — and it is why these three
+                // do not fetch over loopback the way the older tools do, which
+                // also spares them the hardcoded :7700 those carry.
+                //
+                // `fingerprint` and `verify` are deliberately absent. They are
+                // the only routes that load models, and an agent able to
+                // trigger one could take a colleague's model out of memory
+                // while answering a question about it.
+                "wicklee_state" => {
+                    let body = handle_v1_state(
+                        axum::extract::Extension(OllamaPortRx(port_rx.clone())),
+                        axum::extract::Extension(caps.clone()),
+                        axum::extract::Extension(Arc::clone(&residency)),
+                        axum::extract::Extension(node_id.clone()),
+                    )
+                    .await;
                     Json(JsonRpcResponse::success(id, serde_json::json!({
-                        "content": [{ "type": "text", "text": serde_json::to_string_pretty(&result).unwrap_or_default() }]
+                        "content": [{ "type": "text", "text": serde_json::to_string_pretty(&body.0).unwrap_or_default() }]
                     })))
                 }
+
+                "wicklee_readiness" => {
+                    let mut query = std::collections::HashMap::new();
+                    if let Some(m) = tool_arg(&req, "model") {
+                        query.insert("model".to_string(), m);
+                    }
+                    let resp = handle_v1_readiness(
+                        axum::extract::Extension(OllamaPortRx(port_rx.clone())),
+                        axum::extract::Query(query),
+                        axum::extract::Extension(Arc::clone(&residency)),
+                        axum::extract::Extension(caps.clone()),
+                        axum::extract::Extension(Arc::clone(&apple_metrics)),
+                        axum::extract::Extension(Arc::clone(&nvidia_metrics)),
+                        axum::extract::Extension(node_id.clone()),
+                    )
+                    .await;
+                    Json(JsonRpcResponse::success(id, serde_json::json!({
+                        "content": [{ "type": "text", "text": response_body(resp).await }]
+                    })))
+                }
+
+                "wicklee_inspect" => {
+                    let mut query = std::collections::HashMap::new();
+                    if let Some(w) = tool_arg(&req, "since") {
+                        query.insert("since".to_string(), w);
+                    }
+                    let resp = handle_v1_inspect(
+                        axum::extract::Extension(OllamaPortRx(port_rx.clone())),
+                        axum::extract::Query(query),
+                        axum::extract::Extension(Arc::clone(&residency)),
+                        axum::extract::Extension(caps.clone()),
+                        axum::extract::Extension(Arc::clone(&apple_metrics)),
+                        axum::extract::Extension(Arc::clone(&nvidia_metrics)),
+                        axum::extract::Extension(node_id.clone()),
+                        store.clone(),
+                        observations.clone(),
+                    )
+                    .await;
+                    Json(JsonRpcResponse::success(id, serde_json::json!({
+                        "content": [{ "type": "text", "text": response_body(resp).await }]
+                    })))
+                }
+
+                // Retired in step 6's successor: readiness and inspect replace
+                // them. Answered with a pointer rather than "unknown tool",
+                // because an agent that called one yesterday deserves to be
+                // told where the answer moved rather than that it vanished.
+                "get_model_fit" => Json(JsonRpcResponse::error(
+                    id,
+                    -32601,
+                    "get_model_fit is retired. Call wicklee_readiness instead: it answers whether \
+                     a model can run now, what it would displace, and the evidence for both — \
+                     measured rather than scored."
+                        .to_string(),
+                )),
+                "get_observations" => Json(JsonRpcResponse::error(
+                    id,
+                    -32601,
+                    "get_observations is retired. Call wicklee_inspect instead: it carries the same \
+                     hardware patterns plus the diagnostic rules, each statement labelled by the \
+                     evidence behind it."
+                        .to_string(),
+                )),
 
                 _ => Json(JsonRpcResponse::error(id, -32601, format!("Unknown tool: {tool_name}"))),
             }
@@ -864,5 +737,50 @@ pub(crate) async fn run_mcp_stdio() {
 
         // Write response to stdout (one JSON object per line).
         println!("{resp}");
+    }
+}
+
+#[cfg(test)]
+mod tool_surface_tests {
+    use super::*;
+
+    /// The tool list is the contract an agent reads once and caches, so a
+    /// silent addition or removal is a broken integration somewhere else.
+    /// Pinned here, with the retired names kept out on purpose.
+    #[test]
+    fn the_tool_list_is_exactly_the_published_surface() {
+        let tools = mcp_tools_list();
+        let names: Vec<&str> = tools
+            .as_array()
+            .expect("an array")
+            .iter()
+            .map(|t| t["name"].as_str().expect("a name"))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "get_node_status",
+                "get_inference_state",
+                "get_active_models",
+                "get_metrics_history",
+                "wicklee_state",
+                "wicklee_readiness",
+                "wicklee_inspect",
+            ],
+        );
+        // Retired in step 7. Readiness and inspect replace them, and a call to
+        // either is answered with that pointer rather than "unknown tool".
+        assert!(!names.contains(&"get_model_fit"));
+        assert!(!names.contains(&"get_observations"));
+        // Neither test run is exposed: an agent that could trigger one could
+        // take a colleague's model out of memory while answering a question.
+        assert!(!names.iter().any(|n| n.contains("fingerprint") || n.contains("verify")));
+
+        // Every tool declares a schema, even the ones taking no arguments: an
+        // absent inputSchema makes some clients refuse the tool outright.
+        for t in tools.as_array().expect("an array") {
+            assert_eq!(t["inputSchema"]["type"], "object", "{}", t["name"]);
+            assert!(t["description"].as_str().is_some_and(|d| d.len() > 40), "{}", t["name"]);
+        }
     }
 }
