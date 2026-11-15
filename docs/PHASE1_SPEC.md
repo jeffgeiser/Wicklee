@@ -1391,6 +1391,19 @@ refusal: `POST /v1/verify` answers 409 for a finding that names no model, and
 an agent not storing findings cannot look one up by an id printed two lines
 above. Documenting a surface is a good way to find out what it does not do.
 
+**The README path was walked, not assumed.** A test agent on :7999 against a
+private runtime on :11999: `wicklee inspect` on a fresh store reported every
+model as `cannot_determine` and named four rules it could not run, including
+`context_reset` and `expiry_reload` as unavailable — because with nothing
+loaded `/api/ps` is empty and the capability record reads those fields as
+absent. One load at 8192 and both recover. Six alternating loads at 8192 and
+4096 produced `F-7fff93`, the three sections printed with the new one among
+them, and the command it offered — `wicklee verify F-7fff93` — ran the consent
+handshake, refused on a bare N, and on `--yes` recorded a baseline at 27.3
+tok/s (24.8 to 27.9, n=3). The offered command is not a dead end. Teardown
+checked afterwards: both ports free, the shared runtime still holding what it
+held, the installed daemon untouched at 0.11.1.
+
 **`src/site/DocsPage.tsx` is not updated, and that is a standing instruction
 rather than an oversight.** It is the last AI-discovery surface still carrying
 the pre-Phase-1 API: `public/llms.txt`, `llms-full.txt`, `api.md`,
