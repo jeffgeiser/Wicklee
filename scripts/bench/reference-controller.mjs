@@ -341,7 +341,6 @@ async function runOnce(policyName) {
   const decision = await policies[policyName]();
   const decide_ms = Date.now() - decided;
 
-  let step_ms = null;
   let deferred_ms = 0;
 
   if (decision.deferred) {
@@ -372,7 +371,7 @@ async function runOnce(policyName) {
   }
 
   const step = await generate(decision.choice.name, { num_predict: 32 });
-  step_ms = step.wall_ms;
+  const step_ms = step.wall_ms;
 
   // Workflow A's next request. Its latency is the cost of workflow B's
   // decision: if B evicted A's model, A pays the reload here.
