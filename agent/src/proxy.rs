@@ -193,6 +193,20 @@ pub(crate) async fn proxy_ollama_streaming(
                                             let prompt_dur   = v["prompt_eval_duration"].as_u64().unwrap_or(0);
                                             let eval_dur     = v["eval_duration"].as_u64().unwrap_or(0);
                                             let eval_cnt     = v["eval_count"].as_u64().unwrap_or(0);
+                                            // Step 5. These three stay Option
+                                            // rather than defaulting to 0 like
+                                            // the four above: a receipt built
+                                            // from this row has to tell "the
+                                            // runtime did not report it" from
+                                            // "it was zero", and a warm hit
+                                            // legitimately reports no load at
+                                            // all.
+                                            #[cfg(not(target_env = "musl"))]
+                                            let load_dur     = v["load_duration"].as_u64();
+                                            #[cfg(not(target_env = "musl"))]
+                                            let prompt_cnt   = v["prompt_eval_count"].as_u64();
+                                            #[cfg(not(target_env = "musl"))]
+                                            let prompt_cached = v["prompt_eval_cached_count"].as_u64();
 
                                             let tps = if eval_cnt > 0 && eval_dur > 0 {
                                                 (eval_cnt as f64 / (eval_dur as f64 / 1_000_000_000.0)) as f32
@@ -240,6 +254,11 @@ pub(crate) async fn proxy_ollama_streaming(
                                                     status: status.as_u16() as i32,
                                                     eval_count: Some(eval_cnt as i64),
                                                     eval_duration_ns: Some(eval_dur as i64),
+                                                    load_duration_ns: load_dur.map(|v| v as i64),
+                                                    prompt_eval_count: prompt_cnt.map(|v| v as i64),
+                                                    prompt_eval_cached_count: prompt_cached.map(|v| v as i64),
+                                                    prompt_eval_duration_ns: Some(prompt_dur as i64),
+                                                    total_duration_ns: Some(total_dur as i64),
                                                 });
                                             }
                                         }

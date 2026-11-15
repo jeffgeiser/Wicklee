@@ -291,6 +291,8 @@ pub struct HistoryResponse {
 // ── Inference Traces ──────────────────────────────────────────────────────────
 
 /// Internal write struct for an inference trace captured by the Ollama proxy.
+/// `Clone` so a test can vary one field of a row; the writer moves it.
+#[derive(Clone)]
 pub(crate) struct TraceRow {
     pub id: String,
     pub ts_ms: i64,
@@ -302,6 +304,21 @@ pub(crate) struct TraceRow {
     pub status: i32,
     pub eval_count: Option<i64>,
     pub eval_duration_ns: Option<i64>,
+    // ── Step 5 ───────────────────────────────────────────────────────────────
+    // The spec widens this row with the first three. The last two are a
+    // deviation worth stating: `latency_ms` and `ttft_ms` above are the same
+    // numbers rounded to milliseconds, and a receipt is the one artifact in
+    // Phase 1 that claims to be exact, so it needs the nanoseconds the
+    // runtime actually reported. Carrying them here rather than on a parallel
+    // channel means one row describes one request, and the proxy sends the
+    // done packet's contents once.
+    pub load_duration_ns: Option<i64>,
+    pub prompt_eval_count: Option<i64>,
+    /// Prompt tokens served from the KV cache rather than recomputed. A high
+    /// share of these is why a repeated prompt looks impossibly fast.
+    pub prompt_eval_cached_count: Option<i64>,
+    pub prompt_eval_duration_ns: Option<i64>,
+    pub total_duration_ns: Option<i64>,
 }
 
 /// JSON-serialisable trace record returned by `GET /api/traces`.
@@ -505,7 +522,12 @@ impl Store {
                 tpot_ms           DOUBLE  NOT NULL,
                 status            INTEGER NOT NULL,
                 eval_count        BIGINT,
-                eval_duration_ns  BIGINT
+                eval_duration_ns  BIGINT,
+                load_duration_ns         BIGINT,
+                prompt_eval_count        BIGINT,
+                prompt_eval_cached_count BIGINT,
+                prompt_eval_duration_ns  BIGINT,
+                total_duration_ns        BIGINT
             );
 
             -- Node events: persisted Live Activity events for the Observability tab.
@@ -654,6 +676,13 @@ impl Store {
             "ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS vllm_cache_usage_perc DOUBLE",
             // HF likes — nullable so existing-row tables accept the migration.
             "ALTER TABLE model_catalog ADD COLUMN IF NOT EXISTS likes BIGINT DEFAULT 0",
+            // Step 5: the proxy's done packet, in full. An existing database
+            // has the old ten columns, so these arrive by migration.
+            "ALTER TABLE inference_traces ADD COLUMN IF NOT EXISTS load_duration_ns         BIGINT",
+            "ALTER TABLE inference_traces ADD COLUMN IF NOT EXISTS prompt_eval_count        BIGINT",
+            "ALTER TABLE inference_traces ADD COLUMN IF NOT EXISTS prompt_eval_cached_count BIGINT",
+            "ALTER TABLE inference_traces ADD COLUMN IF NOT EXISTS prompt_eval_duration_ns  BIGINT",
+            "ALTER TABLE inference_traces ADD COLUMN IF NOT EXISTS total_duration_ns        BIGINT",
         ];
         {
             let conn = self.0.lock().unwrap();
@@ -1005,8 +1034,10 @@ impl Store {
         let res = conn.prepare_cached(
             "INSERT INTO inference_traces
              (id, ts_ms, node_id, model, latency_ms, ttft_ms, tpot_ms, status,
-              eval_count, eval_duration_ns)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              eval_count, eval_duration_ns, load_duration_ns,
+              prompt_eval_count, prompt_eval_cached_count,
+              prompt_eval_duration_ns, total_duration_ns)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT (id) DO NOTHING",
         ).and_then(|mut stmt| stmt.execute(params![
                 t.id.as_str(),
@@ -1019,6 +1050,11 @@ impl Store {
                 t.status,
                 t.eval_count,
                 t.eval_duration_ns,
+                t.load_duration_ns,
+                t.prompt_eval_count,
+                t.prompt_eval_cached_count,
+                t.prompt_eval_duration_ns,
+                t.total_duration_ns,
             ]));
         if let Err(e) = res {
             eprintln!("[store] trace write error: {e}");

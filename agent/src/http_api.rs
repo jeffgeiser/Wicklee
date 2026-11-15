@@ -1440,22 +1440,12 @@ fn ambient_for(
     frame: &crate::metrics::LatestFrame,
     now_ms: i64,
 ) -> crate::receipts::Ambient {
-    let mut a = crate::receipts::Ambient { ts_ms: now_ms, ..Default::default() };
-
-    if let Ok(t) = residency.lock() {
-        for s in t.states() {
-            if s.model == model {
-                a.was_loaded = true;
-                a.digest = s.digest.clone();
-                a.size_bytes = s.size_bytes;
-                a.size_vram_bytes = s.size_vram_bytes;
-                a.running_context_length = s.context_length;
-            } else {
-                a.co_resident.push(s.model.clone());
-            }
-        }
-    }
-    a.co_resident.sort();
+    let states = match residency.lock() {
+        Ok(t) => t.states().cloned().collect::<Vec<_>>(),
+        Err(_) => Vec::new(),
+    };
+    let refs: Vec<&crate::residency::ModelState> = states.iter().collect();
+    let mut a = crate::receipts::ambient_from_states(model, &refs, now_ms);
 
     a.thermal_state = frame
         .0

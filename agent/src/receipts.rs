@@ -328,6 +328,83 @@ pub(crate) fn from_callback(
     })
 }
 
+/// The ambient half of a receipt, from the tracker's model states.
+///
+/// Shared by the callback route and the proxy's receipt writer so the two
+/// cannot disagree about what "co-resident" means. The caller adds the thermal
+/// state, which comes from the metrics frame rather than the tracker.
+pub(crate) fn ambient_from_states(
+    model: &str,
+    states: &[&crate::residency::ModelState],
+    ts_ms: i64,
+) -> Ambient {
+    let mut a = Ambient { ts_ms, ..Default::default() };
+    for s in states {
+        if s.model == model {
+            a.was_loaded = true;
+            a.digest = s.digest.clone();
+            a.size_bytes = s.size_bytes;
+            a.size_vram_bytes = s.size_vram_bytes;
+            a.running_context_length = s.context_length;
+        } else {
+            a.co_resident.push(s.model.clone());
+        }
+    }
+    a.co_resident.sort();
+    a
+}
+
+/// A receipt from a proxied request's final packet.
+///
+/// The proxy forwards the done packet onto the trace row and nothing more: it
+/// starts before the residency tracker exists and has no view of what else is
+/// loaded. So the enrichment happens here, in the writer task that has both.
+///
+/// `ts_ms` is the request's, taken from the trace, not the moment the row was
+/// drained — a receipt timestamped when it was written would misplace every
+/// proxied request by however long the queue was.
+#[cfg(not(target_env = "musl"))]
+pub(crate) fn from_proxy_trace(t: &crate::store::TraceRow, ambient: &Ambient) -> Receipt {
+    let u = |v: Option<i64>| v.and_then(|x| u64::try_from(x).ok());
+    let load_ns = u(t.load_duration_ns);
+    Receipt {
+        // The trace id is already unique per proxied request, so there is
+        // nothing to deduplicate and no reason to hash the packet: one
+        // request through the proxy is one receipt.
+        id: receipt_id(ReceiptSource::Proxy, &t.id),
+        ts_ms: t.ts_ms,
+        source: ReceiptSource::Proxy,
+        model: t.model.clone(),
+        digest: ambient.digest.clone(),
+        context_length: ambient.running_context_length,
+        size_bytes: ambient.size_bytes,
+        size_vram_bytes: ambient.size_vram_bytes,
+        // The reported load duration decides, not the tracker: a receipt is
+        // written seconds after the request, by which time the tracker's view
+        // is of the host now rather than of the host then.
+        start_state: if load_ns.is_some_and(|ns| ns > COLD_LOAD_NS) {
+            StartState::ColdUnknown
+        } else {
+            StartState::Loaded
+        },
+        load_ns,
+        prompt_eval_count: u(t.prompt_eval_count),
+        prompt_eval_cached_count: u(t.prompt_eval_cached_count),
+        prompt_eval_ns: u(t.prompt_eval_duration_ns),
+        eval_count: u(t.eval_count),
+        eval_ns: u(t.eval_duration_ns),
+        total_ns: u(t.total_duration_ns),
+        // Wicklee did not time this request; the runtime did, and the proxy
+        // only watched the bytes go past. A wall time measured around the
+        // relay would include the client's own read speed.
+        wall_ms: None,
+        co_resident: ambient.co_resident.clone(),
+        thermal_state: ambient.thermal_state.clone(),
+        test_id: None,
+        finding_id: None,
+    }
+}
+
 /// Above this, a reported load duration means a real load rather than the
 /// microseconds a warm hit spends checking. A warm `/api/generate` on the
 /// maintainer's M4 reports about 6 ms; a 4B cold load takes 3.4 s. 100 ms
@@ -524,6 +601,54 @@ mod tests {
         }
         assert_eq!(ReceiptSource::from_name("telepathy"), None);
         assert_eq!(StartState::from_name("cold_cached"), None, "no such thing in Phase 1");
+    }
+
+    #[cfg(not(target_env = "musl"))]
+    #[test]
+    fn a_proxy_trace_becomes_a_receipt_with_the_runtimes_own_nanoseconds() {
+        let t = crate::store::TraceRow {
+            id: "11111111-2222-3333-4444-555555555555".into(),
+            ts_ms: 1_700_000_000_000,
+            node_id: "WK-TEST".into(),
+            model: "coder:14b".into(),
+            // The rounded millisecond fields the dashboard uses. The receipt
+            // must not be built from these.
+            latency_ms: 8_113,
+            ttft_ms: 130,
+            tpot_ms: 16.33,
+            status: 200,
+            eval_count: Some(298),
+            eval_duration_ns: Some(4_868_000_000),
+            load_duration_ns: Some(6_396_458),
+            prompt_eval_count: Some(26),
+            prompt_eval_cached_count: Some(12),
+            prompt_eval_duration_ns: Some(130_079_000),
+            total_duration_ns: Some(8_113_331_500),
+        };
+        let mut a = ambient();
+        a.ts_ms = t.ts_ms;
+        let r = from_proxy_trace(&t, &a);
+
+        assert_eq!(r.source, ReceiptSource::Proxy);
+        assert_eq!(r.ts_ms, t.ts_ms, "the request's time, not the queue's");
+        assert_eq!(r.total_ns, Some(8_113_331_500), "nanoseconds, not 8113 ms");
+        assert_eq!(r.prompt_eval_ns, Some(130_079_000));
+        assert_eq!(r.prompt_eval_cached_count, Some(12));
+        assert_eq!(r.start_state, StartState::Loaded, "6.4 ms is a warm hit");
+        assert_eq!(r.wall_ms, None, "the proxy only watched the bytes go past");
+        assert_eq!(r.co_resident, vec!["other:7b".to_string()]);
+        assert!((r.decode_tps().unwrap() - 61.2).abs() < 0.1);
+
+        // One request through the proxy is one receipt, keyed on its trace id.
+        assert_eq!(r.id, from_proxy_trace(&t, &a).id);
+        let mut other = t.clone();
+        other.id = "99999999-2222-3333-4444-555555555555".into();
+        assert_ne!(from_proxy_trace(&other, &a).id, r.id);
+
+        // A real load makes it cold even though the tracker says it was there.
+        let mut cold = t.clone();
+        cold.load_duration_ns = Some(3_364_000_000);
+        assert_eq!(from_proxy_trace(&cold, &a).start_state, StartState::ColdUnknown);
     }
 
     #[test]

@@ -842,6 +842,11 @@ async fn main() {
         cloud_push::start_cloud_push(Arc::clone(&pairing_state), broadcast_tx.clone(), Arc::clone(&deployment_profile));
     }
 
+    // The latest broadcast frame, kept once. Two readers: the router, and the
+    // proxy receipt writer, which takes the host's thermal state from it.
+    // Calling track_latest_frame twice would subscribe twice.
+    let latest_frame = metrics::track_latest_frame(&broadcast_tx);
+
     // ── Local metrics store (DuckDB) ──────────────────────────────────────────
     // Opens ~/.wicklee/metrics.db and subscribes to the broadcast channel.
     // Not available on musl targets — store module and handler compile out.
@@ -925,16 +930,60 @@ async fn main() {
                     });
                 }
 
-                // Trace writer — receives traces from the proxy and persists to DuckDB.
+                // Trace writer — receives traces from the proxy and persists
+                // to DuckDB, and since step 5 writes a receipt from the same
+                // row.
+                //
+                // The enrichment happens here rather than in the proxy for a
+                // startup-order reason: the proxy binds :11434 long before the
+                // residency tracker exists, so it has no view of what else is
+                // loaded. This task has both, and one row still describes one
+                // request.
                 {
                     let store_clone = s.clone();
+                    let tracker = Arc::clone(&residency_tracker);
+                    let node_id_clone = config.node_id.clone();
+                    let frame = latest_frame.clone();
                     let mut rx = trace_rx;
                     tokio::spawn(async move {
                         while let Some(trace) = rx.recv().await {
+                            let states = match tracker.lock() {
+                                Ok(t) => t.states().cloned().collect::<Vec<_>>(),
+                                Err(_) => Vec::new(),
+                            };
+                            let refs: Vec<&residency::ModelState> = states.iter().collect();
+                            let mut ambient = receipts::ambient_from_states(
+                                &trace.model,
+                                &refs,
+                                trace.ts_ms,
+                            );
+                            ambient.thermal_state = frame
+                                .0
+                                .read()
+                                .ok()
+                                .and_then(|f| f.clone())
+                                .and_then(|j| serde_json::from_str::<serde_json::Value>(&j).ok())
+                                .and_then(|v| {
+                                    v.get("thermal_state")
+                                        .and_then(|t| t.as_str())
+                                        .map(str::to_string)
+                                });
+                            let receipt = receipts::from_proxy_trace(&trace, &ambient);
+                            let (activity_model, activity_ts) =
+                                (receipt.model.clone(), receipt.ts_ms);
                             let st = store_clone.clone();
+                            let node_id = node_id_clone.clone();
                             let _ = tokio::task::spawn_blocking(move || {
                                 st.write_trace(&trace);
+                                if let Err(e) = st.write_receipt(&node_id, &receipt) {
+                                    eprintln!("[receipts] proxy receipt not stored: {e}");
+                                }
                             }).await;
+                            // A proxied request is activity by definition:
+                            // someone sent it through Wicklee to the runtime.
+                            if let Ok(mut t) = tracker.lock() {
+                                t.note_activity(&activity_model, activity_ts);
+                            }
                         }
                     });
                 }
@@ -1234,7 +1283,7 @@ async fn main() {
          .layer(axum::extract::Extension(wes_metrics))
          .layer(axum::extract::Extension(swap_metrics))
          .layer(axum::extract::Extension(Arc::clone(&recent_events_log)))
-         .layer(axum::extract::Extension(track_latest_frame(&broadcast_tx)))
+         .layer(axum::extract::Extension(latest_frame.clone()))
          .layer(axum::extract::Extension(broadcast_tx))
          .layer(axum::extract::Extension(probe_active))
          .layer(axum::extract::Extension(NodeId(Arc::new(config.node_id.clone()))))
