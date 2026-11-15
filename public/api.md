@@ -49,7 +49,7 @@ response lists it under `not_checked` rather than returning an empty result.
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | /v1/state | Every installed model: residency, running context, measured footprint, how much sits outside accelerator memory, last real caller. Plus a capability record of which fields this runtime actually returns |
-| GET | /v1/readiness?model=X | `ready_now`, `requires_loading`, `would_displace` or `cannot_determine`, with memory headroom and the evidence. `valid_for_s` says how long it holds |
+| GET | /v1/readiness?model=X | `ready_now`, `requires_loading`, `would_displace` or `cannot_determine`, with memory headroom and the evidence. `valid_for_s` says how long it holds. A `requires_loading` answer carries `coexistence: "unverified"` while another model is resident: it fits by accounting, and on the one host measured the runtime still evicted a resident model in 5 of 6 such cases |
 | GET | /v1/inspect?since=24h | Findings, readiness and what was not checked, in one answer |
 | GET | /v1/findings?all=true | The findings alone. Resolution is observed, not scheduled: a finding resolves because an evaluation ran and did not produce it |
 | GET | /v1/receipts?model=X&limit=N | Stored per-request measurements with a median and range |

@@ -52,7 +52,7 @@
       "get": {
         "operationId": "v1Readiness",
         "summary": "Whether a model can run without displacing another",
-        "description": "Call before starting a task. Answers ready_now, requires_loading, would_displace or cannot_determine per model, with the memory headroom and the evidence behind the answer. valid_for_s says how long the answer holds.",
+        "description": "Call before starting a task. Answers ready_now, requires_loading, would_displace or cannot_determine per model, with the memory headroom and the evidence behind the answer. valid_for_s says how long the answer holds. A requires_loading answer carries coexistence: \"unverified\" whenever another model is resident, meaning it fits by memory accounting only: on the one host measured so far the runtime evicted a resident model in 5 of 6 such cases, so do not treat it as safe.",
         "parameters": [
           {
             "name": "model",

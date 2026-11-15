@@ -282,6 +282,13 @@ Per model: `ready_now`, `requires_loading`, `would_displace` or
 `statements` carrying the evidence. `valid_for_s` says how long the answer
 holds. 404 for a model this host has never seen.
 
+A `requires_loading` answer carries `coexistence: "unverified"` whenever
+another model is resident. It means the model fits by memory accounting and
+nothing more: on the one host measured so far, the runtime evicted a resident
+model in 5 of 6 such cases, including a pair that coexists when loaded in the
+opposite order. Do not read it as safe. The field is absent, not null, when
+nothing else is resident.
+
 ### GET /v1/inspect?since=24h
 Findings, readiness and `not_checked` in one answer, plus `history`
 (`transitions`, `persisted`) so a caller reading a short log can tell the whole

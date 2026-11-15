@@ -791,6 +791,14 @@ fn describe(row: &serde_json::Value) -> String {
 
     match row["readiness"].as_str().unwrap_or("") {
         "ready_now" => format!("Ready now, {activity}"),
+        // "Fits" and "will not displace anything" are different claims, and
+        // only the first has been measured — so where something else is
+        // resident the agent marks co-residency unverified, and the line says
+        // so rather than reading as an all-clear.
+        "requires_loading" if row["coexistence"].as_str() == Some("unverified") => {
+            "Requires loading. Fits by accounting; may still displace resident models (unverified)"
+                .to_string()
+        }
         "requires_loading" => match row["fit_basis"].as_str() {
             Some("measured") => "Requires loading, and fits on a measured footprint".to_string(),
             _ => "Requires loading, and fits on a calibrated estimate".to_string(),
@@ -1094,6 +1102,40 @@ mod tests {
             out.contains("nothing is resident to evict"),
             "the too-large case says there is nothing to displace; got:\n{out}"
         );
+    }
+
+    /// A fit is not an all-clear while co-residency is unverified, and the
+    /// line has to read that way to someone scanning it.
+    #[test]
+    fn an_unverified_fit_does_not_read_as_safe() {
+        let out = render_ready(&serde_json::json!({
+            "models": [{
+                "model": "extractor:8b",
+                "readiness": "requires_loading",
+                "fit_basis": "measured",
+                "coexistence": "unverified",
+                "in_use": false,
+            }],
+            "activity_signal": true,
+        }));
+        // Asserted in pieces: the line is wrapped, so the words are not
+        // contiguous in the output.
+        assert!(out.contains("Fits by accounting"), "got:\n{out}");
+        assert!(out.contains("may still displace"), "got:\n{out}");
+        assert!(out.contains("resident models (unverified)"), "got:\n{out}");
+
+        // Without the field the old line is unchanged.
+        let out = render_ready(&serde_json::json!({
+            "models": [{
+                "model": "extractor:8b",
+                "readiness": "requires_loading",
+                "fit_basis": "measured",
+                "in_use": false,
+            }],
+            "activity_signal": true,
+        }));
+        assert!(out.contains("fits on a measured footprint"), "got:\n{out}");
+        assert!(!out.contains("unverified"), "got:\n{out}");
     }
 
     #[test]

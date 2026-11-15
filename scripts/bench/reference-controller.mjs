@@ -156,9 +156,21 @@ const policies = {
 
   /// Reads /v1/readiness. Skips anything that would displace a model in use,
   /// takes the best of what is left, and defers when nothing is safe.
+  ///
+  /// An unverified fit counts as a risk. Step 9 measured what the first
+  /// version of this policy assumed: `requires_loading` means it fits by
+  /// memory accounting, and on the one host tested the runtime still evicted a
+  /// resident model in five of six such cases. The agent now marks those
+  /// answers `coexistence: "unverified"`, and a policy that reads them as safe
+  /// is making exactly the prediction that measurement falsified. So while
+  /// something in use is resident, an unverified fit is unsafe — which is a
+  /// harder bar than the earlier run cleared, and may cost deferrals.
   wicklee: async () => {
     const rows = await readiness();
     const by = new Map(rows.map((r) => [r.model, r]));
+    const heldInUse = rows
+      .filter((x) => x.readiness === "ready_now" && x.in_use === true)
+      .map((x) => x.model);
 
     const safe = [];
     const unsafe = [];
@@ -185,6 +197,11 @@ const policies = {
         unsafe.push({
           model: m,
           why: `would displace ${unknown.map((v) => v.model).join(", ")}, and this runtime reports no activity signal`,
+        });
+      } else if (r.coexistence === "unverified" && heldInUse.length) {
+        unsafe.push({
+          model: m,
+          why: `fits by accounting, but co-residency with ${heldInUse.join(", ")} (in use) is unverified`,
         });
       } else if (r.readiness === "cannot_determine") {
         unsafe.push({ model: m, why: "readiness cannot determine it" });

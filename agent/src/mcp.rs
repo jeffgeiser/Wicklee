@@ -126,7 +126,7 @@ pub(crate) fn mcp_tools_list() -> serde_json::Value {
         },
         {
             "name": "wicklee_readiness",
-            "description": "Call before starting a task to see whether a model can run without displacing another. Answers ready_now, requires_loading or would_displace for each installed model, with the memory headroom and the evidence behind the answer. Pass a model name to ask about one.",
+            "description": "Call before starting a task to see whether a model can run without displacing another. Answers ready_now, requires_loading or would_displace for each installed model, with the memory headroom and the evidence behind the answer. Pass a model name to ask about one. Do not treat requires_loading as safe when the answer carries coexistence: \"unverified\" — that means the model fits by memory accounting while another model is resident, and on the one host measured so far the runtime evicted a resident model in 5 of 6 such cases. Loading it may still displace work in progress.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

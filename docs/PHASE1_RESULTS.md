@@ -187,6 +187,36 @@ measured a second way.
 
 Raw: [`bench-controller-m4-2026-11-15.md`](bench-controller-m4-2026-11-15.md).
 
+### Re-run after the interim wording
+
+The agent now marks a `requires_loading` answer `coexistence: "unverified"`
+while another model is resident, and the `wicklee` policy treats that as a
+displacement risk. Same host, same five runs per policy, randomised order:
+
+| Policy | Chose | B step ms | A latency ms | A reloads | In-use displaced | Deferrals |
+| --- | --- | --- | --- | --- | --- | --- |
+| `naive` | qwen3.5:9b ×5 | 7167 (6965–7267) | 4207 (3929–4475) | 5/5 | **5/5** | 0 |
+| `loaded_check` | qwen3.5:9b ×5 | 6709 (6667–7306) | 4205 (3996–4756) | 5/5 | **5/5** | 0 |
+| `wicklee` | qwen3.5:4b ×5 | 34742 (34445–35075) | 519 (498–535) | 0/5 | **0/5** | 5 |
+
+**The tie is gone and the direction is the one the measurement predicted.**
+`wicklee` picked the model that actually coexists, displaced the in-use model
+in none of five runs where both baselines displaced it in all five, and
+workflow A's next request came back in 519 ms instead of 4,205 — it never had
+to reload. Reading the unverified fit as a risk is what produced that; the
+previous run read it as safe and lost the held model every time.
+
+**The 28 extra seconds are the policy's, not the agent's, and they are a
+finding about this wording.** Every acceptable option now reads unsafe, so the
+policy has no way to say "least risky of the unverified": it defers, re-polls
+until its 30 s timeout expires, and only then falls through to the
+smallest-footprint fallback — which happens to be the right answer. The choice
+was available immediately. A policy that ranked unverified fits by footprint
+would have made it in milliseconds, and that is the next thing to try. Taken
+literally, "unverified" collapses a ranking into a single bucket.
+
+Raw: [`bench-controller-rerun-m4-2026-11-15.json`](bench-controller-rerun-m4-2026-11-15.json).
+
 ---
 
 ## Two corrections to the record

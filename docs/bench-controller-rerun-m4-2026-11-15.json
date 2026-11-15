@@ -1,0 +1,394 @@
+{
+  "started_at": "2026-11-15T18:25:58.208Z",
+  "host": {
+    "label": "M4 Mac mini, 16 GB unified",
+    "accelerator_budget_gb": 11.6,
+    "notes": "iogpu.wired_limit_mb reads 0 on this M4, so the agent falls back to 75% of total RAM."
+  },
+  "workflow": {
+    "held": {
+      "name": "llama3.1:8b",
+      "resident_gb": 4.9,
+      "default_context": 8192
+    },
+    "acceptable": [
+      {
+        "name": "qwen3.5:9b",
+        "resident_gb": 6.6,
+        "default_context": 8192
+      },
+      {
+        "name": "qwen3.5:4b",
+        "resident_gb": 3.4,
+        "default_context": 8192
+      }
+    ],
+    "defer_allowed": true
+  },
+  "runs_per_policy": 5,
+  "order": [
+    "naive",
+    "wicklee",
+    "naive",
+    "wicklee",
+    "naive",
+    "loaded_check",
+    "wicklee",
+    "naive",
+    "naive",
+    "loaded_check",
+    "loaded_check",
+    "loaded_check",
+    "wicklee",
+    "loaded_check",
+    "wicklee"
+  ],
+  "env": {
+    "agent_version": "0.14.0",
+    "ollama_version": "0.40.16",
+    "models": [
+      {
+        "model": "llama3.1:8b",
+        "installed_size_bytes": 4920753328
+      },
+      {
+        "model": "qwen3.5:4b",
+        "installed_size_bytes": 3389983735
+      },
+      {
+        "model": "qwen3.5:9b",
+        "installed_size_bytes": 6594474711
+      }
+    ]
+  },
+  "runs": [
+    {
+      "policy": "naive",
+      "chose": "qwen3.5:9b",
+      "reason": "preferred option, unconditionally",
+      "considered": null,
+      "held_loaded_before": true,
+      "decide_ms": 0,
+      "deferred_ms": 0,
+      "step_total_ms": 7267,
+      "step_ms": 7267,
+      "workflow_a_ms": 4475,
+      "workflow_a_reloaded": true,
+      "workflow_a_load_ms": 3906,
+      "displaced_in_use": true,
+      "transitions_added": 1
+    },
+    {
+      "policy": "wicklee",
+      "chose": "qwen3.5:4b",
+      "reason": "deferred 30s, nothing became safe, ran qwen3.5:4b as the least displacing",
+      "considered": null,
+      "held_loaded_before": true,
+      "decide_ms": 7,
+      "deferred_ms": 30000,
+      "step_total_ms": 35075,
+      "step_ms": 5075,
+      "workflow_a_ms": 518,
+      "workflow_a_reloaded": false,
+      "workflow_a_load_ms": 8,
+      "displaced_in_use": false,
+      "transitions_added": 0
+    },
+    {
+      "policy": "naive",
+      "chose": "qwen3.5:9b",
+      "reason": "preferred option, unconditionally",
+      "considered": null,
+      "held_loaded_before": true,
+      "decide_ms": 0,
+      "deferred_ms": 0,
+      "step_total_ms": 7167,
+      "step_ms": 7167,
+      "workflow_a_ms": 4259,
+      "workflow_a_reloaded": true,
+      "workflow_a_load_ms": 3651,
+      "displaced_in_use": true,
+      "transitions_added": 1
+    },
+    {
+      "policy": "wicklee",
+      "chose": "qwen3.5:4b",
+      "reason": "deferred 30s, nothing became safe, ran qwen3.5:4b as the least displacing",
+      "considered": null,
+      "held_loaded_before": true,
+      "decide_ms": 5,
+      "deferred_ms": 30000,
+      "step_total_ms": 34445,
+      "step_ms": 4445,
+      "workflow_a_ms": 498,
+      "workflow_a_reloaded": false,
+      "workflow_a_load_ms": 3,
+      "displaced_in_use": false,
+      "transitions_added": 1
+    },
+    {
+      "policy": "naive",
+      "chose": "qwen3.5:9b",
+      "reason": "preferred option, unconditionally",
+      "considered": null,
+      "held_loaded_before": true,
+      "decide_ms": 0,
+      "deferred_ms": 0,
+      "step_total_ms": 6965,
+      "step_ms": 6965,
+      "workflow_a_ms": 3929,
+      "workflow_a_reloaded": true,
+      "workflow_a_load_ms": 3361,
+      "displaced_in_use": true,
+      "transitions_added": 2
+    },
+    {
+      "policy": "loaded_check",
+      "chose": "qwen3.5:9b",
+      "reason": "none of the acceptable options is loaded",
+      "considered": null,
+      "held_loaded_before": true,
+      "decide_ms": 5,
+      "deferred_ms": 0,
+      "step_total_ms": 6709,
+      "step_ms": 6709,
+      "workflow_a_ms": 3996,
+      "workflow_a_reloaded": true,
+      "workflow_a_load_ms": 3422,
+      "displaced_in_use": true,
+      "transitions_added": 1
+    },
+    {
+      "policy": "wicklee",
+      "chose": "qwen3.5:4b",
+      "reason": "deferred 30s, nothing became safe, ran qwen3.5:4b as the least displacing",
+      "considered": null,
+      "held_loaded_before": true,
+      "decide_ms": 5,
+      "deferred_ms": 30000,
+      "step_total_ms": 34479,
+      "step_ms": 4479,
+      "workflow_a_ms": 535,
+      "workflow_a_reloaded": false,
+      "workflow_a_load_ms": 9,
+      "displaced_in_use": false,
+      "transitions_added": 0
+    },
+    {
+      "policy": "naive",
+      "chose": "qwen3.5:9b",
+      "reason": "preferred option, unconditionally",
+      "considered": null,
+      "held_loaded_before": true,
+      "decide_ms": 0,
+      "deferred_ms": 0,
+      "step_total_ms": 6984,
+      "step_ms": 6984,
+      "workflow_a_ms": 4017,
+      "workflow_a_reloaded": true,
+      "workflow_a_load_ms": 3430,
+      "displaced_in_use": true,
+      "transitions_added": 1
+    },
+    {
+      "policy": "naive",
+      "chose": "qwen3.5:9b",
+      "reason": "preferred option, unconditionally",
+      "considered": null,
+      "held_loaded_before": true,
+      "decide_ms": 0,
+      "deferred_ms": 0,
+      "step_total_ms": 7248,
+      "step_ms": 7248,
+      "workflow_a_ms": 4207,
+      "workflow_a_reloaded": true,
+      "workflow_a_load_ms": 3644,
+      "displaced_in_use": true,
+      "transitions_added": 3
+    },
+    {
+      "policy": "loaded_check",
+      "chose": "qwen3.5:9b",
+      "reason": "none of the acceptable options is loaded",
+      "considered": null,
+      "held_loaded_before": true,
+      "decide_ms": 1,
+      "deferred_ms": 0,
+      "step_total_ms": 6676,
+      "step_ms": 6676,
+      "workflow_a_ms": 4220,
+      "workflow_a_reloaded": true,
+      "workflow_a_load_ms": 3645,
+      "displaced_in_use": true,
+      "transitions_added": 3
+    },
+    {
+      "policy": "loaded_check",
+      "chose": "qwen3.5:9b",
+      "reason": "none of the acceptable options is loaded",
+      "considered": null,
+      "held_loaded_before": true,
+      "decide_ms": 1,
+      "deferred_ms": 0,
+      "step_total_ms": 6723,
+      "step_ms": 6723,
+      "workflow_a_ms": 4205,
+      "workflow_a_reloaded": true,
+      "workflow_a_load_ms": 3641,
+      "displaced_in_use": true,
+      "transitions_added": 4
+    },
+    {
+      "policy": "loaded_check",
+      "chose": "qwen3.5:9b",
+      "reason": "none of the acceptable options is loaded",
+      "considered": null,
+      "held_loaded_before": true,
+      "decide_ms": 0,
+      "deferred_ms": 0,
+      "step_total_ms": 6667,
+      "step_ms": 6667,
+      "workflow_a_ms": 4203,
+      "workflow_a_reloaded": true,
+      "workflow_a_load_ms": 3644,
+      "displaced_in_use": true,
+      "transitions_added": 2
+    },
+    {
+      "policy": "wicklee",
+      "chose": "qwen3.5:4b",
+      "reason": "deferred 30s, nothing became safe, ran qwen3.5:4b as the least displacing",
+      "considered": null,
+      "held_loaded_before": true,
+      "decide_ms": 6,
+      "deferred_ms": 30000,
+      "step_total_ms": 34778,
+      "step_ms": 4778,
+      "workflow_a_ms": 531,
+      "workflow_a_reloaded": false,
+      "workflow_a_load_ms": 9,
+      "displaced_in_use": false,
+      "transitions_added": 0
+    },
+    {
+      "policy": "loaded_check",
+      "chose": "qwen3.5:9b",
+      "reason": "none of the acceptable options is loaded",
+      "considered": null,
+      "held_loaded_before": true,
+      "decide_ms": 2,
+      "deferred_ms": 0,
+      "step_total_ms": 7306,
+      "step_ms": 7306,
+      "workflow_a_ms": 4756,
+      "workflow_a_reloaded": true,
+      "workflow_a_load_ms": 4184,
+      "displaced_in_use": true,
+      "transitions_added": 1
+    },
+    {
+      "policy": "wicklee",
+      "chose": "qwen3.5:4b",
+      "reason": "deferred 30s, nothing became safe, ran qwen3.5:4b as the least displacing",
+      "considered": null,
+      "held_loaded_before": true,
+      "decide_ms": 5,
+      "deferred_ms": 30000,
+      "step_total_ms": 34742,
+      "step_ms": 4742,
+      "workflow_a_ms": 519,
+      "workflow_a_reloaded": false,
+      "workflow_a_load_ms": 6,
+      "displaced_in_use": false,
+      "transitions_added": 0
+    }
+  ],
+  "summary": {
+    "naive": {
+      "runs": 5,
+      "chose": {
+        "qwen3.5:9b": 5
+      },
+      "step_total_ms": {
+        "median": 7167,
+        "low": 6965,
+        "high": 7267,
+        "n": 5
+      },
+      "workflow_a_ms": {
+        "median": 4207,
+        "low": 3929,
+        "high": 4475,
+        "n": 5
+      },
+      "workflow_a_reloads": 5,
+      "displaced_in_use": 5,
+      "transitions_added": {
+        "median": 1,
+        "low": 1,
+        "high": 3,
+        "n": 5
+      },
+      "deferrals": 0
+    },
+    "loaded_check": {
+      "runs": 5,
+      "chose": {
+        "qwen3.5:9b": 5
+      },
+      "step_total_ms": {
+        "median": 6709,
+        "low": 6667,
+        "high": 7306,
+        "n": 5
+      },
+      "workflow_a_ms": {
+        "median": 4205,
+        "low": 3996,
+        "high": 4756,
+        "n": 5
+      },
+      "workflow_a_reloads": 5,
+      "displaced_in_use": 5,
+      "transitions_added": {
+        "median": 2,
+        "low": 1,
+        "high": 4,
+        "n": 5
+      },
+      "deferrals": 0
+    },
+    "wicklee": {
+      "runs": 5,
+      "chose": {
+        "qwen3.5:4b": 5
+      },
+      "step_total_ms": {
+        "median": 34742,
+        "low": 34445,
+        "high": 35075,
+        "n": 5
+      },
+      "workflow_a_ms": {
+        "median": 519,
+        "low": 498,
+        "high": 535,
+        "n": 5
+      },
+      "workflow_a_reloads": 0,
+      "displaced_in_use": 0,
+      "transitions_added": {
+        "median": 0,
+        "low": 0,
+        "high": 1,
+        "n": 5
+      },
+      "deferrals": 5
+    }
+  },
+  "verdict": {
+    "outcome": "differs",
+    "detail": "wicklee chose qwen3.5:4b where loaded_check chose qwen3.5:9b. Compare displaced_in_use and workflow_a_reloads to see whether the difference was worth it."
+  },
+  "finished_at": "2026-11-15T18:32:55.951Z"
+}

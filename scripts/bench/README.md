@@ -97,3 +97,12 @@ are separate hypotheses, judged separately.
 A deferral is counted as cost, not as a win. When the `wicklee` policy waits,
 the wait is added to the step's end-to-end time, so a policy that avoids every
 displacement by always waiting does not come out ahead for free.
+
+**An unverified fit counts as a risk.** Step 9 measured what the first version
+of the `wicklee` policy assumed: a `requires_loading` answer means the model
+fits by memory accounting, and on the one host tested the runtime still evicted
+a resident model in five of six such cases. The agent now marks those answers
+`coexistence: "unverified"`, and the policy treats one as unsafe while anything
+in use is resident. That is a harder bar than the first run cleared, and it can
+turn a choice into a deferral — which is the trade the numbers are there to
+show.

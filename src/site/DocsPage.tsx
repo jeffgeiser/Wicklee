@@ -492,7 +492,7 @@ Not checked: cpu_split (this host has unified memory, so there is no accelerator
                 <thead><tr className="border-b border-gray-700"><Th>Endpoint</Th><Th>Returns</Th></tr></thead>
                 <tbody>
                   <tr className="border-b border-gray-700"><Td mono>GET /v1/state</Td><Td>Every installed model with residency, running context, measured footprint, placement, last real caller, plus the runtime capability record</Td></tr>
-                  <tr className="border-b border-gray-700"><Td mono>GET /v1/readiness?model=</Td><Td>ready_now / requires_loading / would_displace / cannot_determine, with headroom and the evidence</Td></tr>
+                  <tr className="border-b border-gray-700"><Td mono>GET /v1/readiness?model=</Td><Td>ready_now / requires_loading / would_displace / cannot_determine, with headroom and the evidence. A <code className="text-gray-400 font-mono text-[10px]">requires_loading</code> answer carries <code className="text-gray-400 font-mono text-[10px]">coexistence: "unverified"</code> while another model is resident — it fits by accounting, which is not the same as safe</Td></tr>
                   <tr className="border-b border-gray-700"><Td mono>GET /v1/inspect?since=24h</Td><Td>Findings, readiness and the not-checked list — what <code className="text-gray-400 font-mono text-[10px]">wicklee inspect</code> renders</Td></tr>
                   <tr className="border-b border-gray-700"><Td mono>GET /v1/findings?all=true</Td><Td>Findings alone, open or resolved</Td></tr>
                   <tr className="border-b border-gray-700"><Td mono>GET /v1/receipts?model=</Td><Td>Exact per-request measurements</Td></tr>
