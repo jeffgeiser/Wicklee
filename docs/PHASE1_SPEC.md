@@ -973,8 +973,8 @@ The remote-access rule moved from step 3 to step 1, because V8 showed the existi
 
 The pristine and step 1 figures were measured on the same toolchain, which is the only way that comparison means anything. The step 4 figure is on rustc 1.94.1 and its toolchain match to step 1 is unverified, so the +0.81% is indicative.
 
-**The production-code budget is blown, and the decision is still open.** The
-~3,500-line budget covers Phase 1 as a whole. The seven new modules are at
+**The production-code budget was re-cut to ~4,500 excluding `auth.rs`, on
+2026-11-14.** The original ~3,500 covered Phase 1 as a whole. The seven new modules are at
 3,762 production lines after step 4:
 
 | Module | Production lines | After step 3 |
@@ -996,13 +996,19 @@ list and nothing else. And it is not a surprise at step 6, which was the
 outcome worth avoiding — it is a number on the table with four steps of
 implementation left to spend against it.
 
-The recommendation, which is the maintainer's to accept or refuse: re-cut to
-~4,500 production lines excluding `auth.rs`, on the grounds that `auth.rs` was
+The maintainer took the re-cut on 2026-11-14. Two grounds: `auth.rs` was
 never in the original budget at all — it was added to step 1 after V8 found no
-inbound authentication existed — and that the ~3,500 estimate was made before
-anyone had read the code it was estimating. The alternative is to cut receipts
-or the fingerprint to fit an estimate that predates the evidence, which trades
-a real capability for a number.
+inbound authentication existed — and the ~3,500 estimate was made before
+anyone had read the code it was estimating. The alternative, cutting receipts
+or the fingerprint to fit an estimate that predates the evidence, trades a
+real capability for a number.
+
+Against the new budget: **3,445 of ~4,500 spent**, 1,055 left for
+`receipts.rs` and `fingerprint.rs`. The 401 lines in `http_api.rs` and
+`store.rs` stay outside it, as they were outside the old one; if steps 5 and 6
+add routes and tables at step 4's rate that is another ~400 nobody is
+counting, which is worth saying out loud now rather than discovering at step
+6.
 
 **The probe fix is verified against a real runtime, not only unit tests.** The old request body took a model loaded at `num_ctx` 8192 down to 4096 with a 2,626 ms reload. The new body holds 8192 and returns in 3 ms. That is the V3 bug reproduced and then closed, with a measurement on each side.
 

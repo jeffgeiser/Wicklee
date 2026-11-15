@@ -255,13 +255,14 @@ continue."* Two things to know about what it does and does not do:
   the cloud also consumes, and it is not step 4. Each dropped sentence is
   logged, so that work has a worklist.
 
-**Still undecided: the production-code budget.** The ~3,500-line budget is
-3,762 spent in the seven new modules after step 4, plus 401 lines in
-`http_api.rs` and `store.rs` that the budget never counted — and steps 5 and 6
-still need `receipts.rs` and `fingerprint.rs`. The recommendation is to re-cut
-to ~4,500 excluding `auth.rs`, which was never in the original budget; the
-alternative is to cut receipts or the fingerprint to fit an estimate made
-before anyone had read the code. See *Measured* in `docs/PHASE1_SPEC.md`.
+**Decided 2026-11-14: the production-code budget is ~4,500, excluding
+`auth.rs`.** The ~3,500 estimate was made before anyone had read the code it
+was estimating, and `auth.rs` (317 lines) was added to step 1 after the audit
+found no inbound authentication existed at all, so it was never in that
+number. Steps 5 and 6 build `receipts.rs` and `fingerprint.rs` in full rather
+than trading a capability for an estimate. Spent after step 4: 3,445 inside
+the new budget, plus 401 lines in `http_api.rs` and `store.rs` that no budget
+counted. See *Measured* in `docs/PHASE1_SPEC.md`.
 
 **Then:** step 5 receipts and fingerprint, 6 verify, 7 MCP tools, 8 fault
 injection and the reference controller, 9 acceptance runs, 10 README and this

@@ -1600,6 +1600,26 @@ pub(crate) fn bytes_per_weight(quant: &str) -> f32 {
     1.0  // conservative default — same as Q8/FP8
 }
 
+/// How a measured rate reads against an estimated ceiling.
+///
+/// Above the ceiling means the 40% realizable figure underestimates this
+/// hardware and quant pair, not that the node beat physics, so the ratio is
+/// not a percentage of anything. The first live run with a store (2026-11-14)
+/// measured 29.3 tok/s against a 17.2 tok/s ceiling on an M4 at Q4_K_M and
+/// printed "171% of achievable ceiling", which cannot be true of a ceiling
+/// and is exactly what an observed statement is not allowed to be.
+#[cfg(not(target_env = "musl"))]
+fn ceiling_phrase(utilization: f64, ceiling_tps: f32) -> String {
+    if utilization > 1.0 {
+        format!("above the {ceiling_tps:.1} tok/s estimated ceiling")
+    } else {
+        format!(
+            "{:.0}% of the {ceiling_tps:.1} tok/s achievable ceiling",
+            utilization * 100.0,
+        )
+    }
+}
+
 #[cfg(not(target_env = "musl"))]
 pub(crate) fn evaluate_bandwidth_ceiling(
     samples:   &[store::ObsSample],
@@ -1648,7 +1668,11 @@ pub(crate) fn evaluate_bandwidth_ceiling(
         .filter(|s| s.ts_ms >= cutoff)
         .filter(|s| s.tps.is_some_and(|t| t > 0.5))
         .collect();
-    if live_samples.len() < 30 { return None; }   // 30 × 10s ~= 5 min
+    // metrics_raw is written once a second, so five minutes is 300 samples.
+    // This read 30 behind a comment claiming ten seconds a sample, which made
+    // the "sustained" guard thirty seconds. The first live run with a store
+    // (2026-11-14) fired it on two minutes of test traffic.
+    if live_samples.len() < 300 { return None; }
 
     let tps_vals:  Vec<f64> = live_samples.iter().filter_map(|s| s.tps).collect();
     let observed_tps_p50 = obs_mean(&tps_vals);
@@ -1656,6 +1680,18 @@ pub(crate) fn evaluate_bandwidth_ceiling(
 
     let utilization = observed_tps_p50 / achievable_ceiling_tps as f64;
     if utilization < 0.65 { return None; }   // not bandwidth-bound — something else limits
+
+    // Above the ceiling means the 40% figure underestimates this hardware and
+    // quant pair, not that the node beat physics. The first live run measured
+    // 29.3 tok/s against a 17.2 tok/s ceiling on an M4 at Q4_K_M and reported
+    // "171% of achievable ceiling", which cannot be true of a ceiling. Say
+    // which side of the estimate the measurement falls on instead; the ratio
+    // is still printed when there is a ratio worth printing.
+    // 4-bit GGUF lands at 0.5-0.6 bytes per weight; anything at or below that
+    // has no smaller quant worth recommending.
+    let already_small_quant = bpw <= 0.65;
+
+    let against_ceiling = ceiling_phrase(utilization, achievable_ceiling_tps);
 
     // Confirmation: GPU not pegged at 100% (compute-bound is a different story —
     // the bandwidth_saturation pattern handles compute-stalled-on-memory cases).
@@ -1676,29 +1712,38 @@ pub(crate) fn evaluate_bandwidth_ceiling(
         pattern_id:       "bandwidth_ceiling_reached",
         severity:         "info",
         title:            "Memory-Bandwidth Ceiling Reached".into(),
-        hook:             format!(
-            "{:.1} tok/s · {:.0}% of {:.1} tok/s achievable ceiling",
-            observed_tps_p50, utilization * 100.0, achievable_ceiling_tps,
-        ),
+        hook:             format!("{observed_tps_p50:.1} tok/s · {against_ceiling}"),
         body:             format!(
-            "{hostname} is decoding {model_name} at {observed_tps_p50:.1} tok/s — \
-             {pct:.0}% of the achievable memory-bandwidth ceiling for {hw_label} \
+            "{hostname} is decoding {model_name} at {observed_tps_p50:.1} tok/s, \
+             {against_ceiling} for {hw_label} \
              ({model_size_gb:.1} GB resident weights at {quant}, \
              {bandwidth_gbps:.0} GB/s rated bandwidth, ~40% realizable at batch=1). \
              The 'Low' tok/W reading is \
              expected: at batch=1, fixed GPU baseline power dominates and efficiency \
              cannot improve without changing quant or batch size. The node is healthy.",
-            pct = utilization * 100.0,
         ),
-        recommendation:   "This is normal for batch=1 decode. To increase tok/s: \
-                          drop to a smaller quant (e.g. Q4_K_M). To increase tok/W: \
-                          raise concurrent batch size — fixed power baseline \
-                          amortises across requests.".into(),
-        resolution_steps: vec![
-            "If interactive latency matters: switch to a Q4_K_M GGUF (~2× tok/s, modest quality cost)".into(),
-            "If serving multiple users: raise batch size with vLLM `--max-num-seqs 8` or higher".into(),
-            "If quality is paramount: leave as-is — you are at the physics ceiling for this hardware/quant pair".into(),
-        ],
+        recommendation:   if already_small_quant {
+            "This is normal for batch=1 decode, and the quant is already 4-bit or \
+             smaller, so there is little left to win on tok/s. To increase tok/W: \
+             raise concurrent batch size — fixed power baseline amortises across \
+             requests.".into()
+        } else {
+            "This is normal for batch=1 decode. To increase tok/s: drop to a \
+             smaller quant (e.g. Q4_K_M). To increase tok/W: raise concurrent \
+             batch size — fixed power baseline amortises across requests.".into()
+        },
+        resolution_steps: {
+            // Telling a Q4_K_M run to switch to Q4_K_M is how this read on the
+            // first live run. Offer the quant step only when there is a smaller
+            // quant to go to.
+            let mut steps = Vec::new();
+            if !already_small_quant {
+                steps.push("If interactive latency matters: switch to a Q4_K_M GGUF (~2× tok/s, modest quality cost)".into());
+            }
+            steps.push("If serving multiple users: raise batch size with vLLM `--max-num-seqs 8` or higher".into());
+            steps.push("If quality is paramount: leave as-is — you are at the physics ceiling for this hardware/quant pair".into());
+            steps
+        },
         action_id:        "bandwidth_ceiling_info",
         confidence,
         confidence_ratio,
@@ -1799,6 +1844,31 @@ mod bytes_per_weight_tests {
         assert_eq!(bytes_per_weight("awq"), 0.56);
         assert_eq!(bytes_per_weight("IQ1_S"), 0.25);
         assert_eq!(bytes_per_weight("mystery"), 1.0);
+    }
+}
+
+#[cfg(all(test, not(target_env = "musl")))]
+mod ceiling_phrase_tests {
+    use super::*;
+
+    #[test]
+    fn under_the_ceiling_reads_as_a_share_of_it() {
+        assert_eq!(
+            ceiling_phrase(0.82, 17.2),
+            "82% of the 17.2 tok/s achievable ceiling"
+        );
+        assert_eq!(
+            ceiling_phrase(1.0, 17.2),
+            "100% of the 17.2 tok/s achievable ceiling"
+        );
+    }
+
+    #[test]
+    fn over_the_ceiling_never_claims_a_percentage_of_it() {
+        // The live-run case: 29.3 tok/s measured, 17.2 tok/s estimated.
+        let phrase = ceiling_phrase(29.3 / 17.2, 17.2);
+        assert_eq!(phrase, "above the 17.2 tok/s estimated ceiling");
+        assert!(!phrase.contains('%'));
     }
 }
 
