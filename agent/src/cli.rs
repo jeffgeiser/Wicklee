@@ -557,12 +557,8 @@ pub(crate) fn is_findings_answer(body: &serde_json::Value) -> bool {
     body["findings"].is_array() || body["finding"].is_object()
 }
 
-/// The whole `inspect` output: what is happening, then what can run, then what
-/// was not checked.
-///
-/// The spec's example carries a third section, "WHAT TO CHANGE", whose every
-/// line is a `wicklee verify` command. `verify` is step 6, so the section is
-/// left out rather than printed with commands that do not run yet.
+/// The whole `inspect` output: what is happening, what can run, what to
+/// change, and what was not checked.
 pub(crate) fn render_inspect(body: &serde_json::Value) -> String {
     let mut out = String::from("WHAT IS HAPPENING\n");
     let findings = body["findings"].as_array().map(Vec::as_slice).unwrap_or(&[]);
@@ -580,9 +576,44 @@ pub(crate) fn render_inspect(body: &serde_json::Value) -> String {
         "activity_signal": body["activity_signal"].clone(),
     })));
 
+    out.push_str(&render_what_to_change(findings, body));
     out.push_str(&render_not_checked(body));
     out.push_str(&render_history_scope(body));
     out
+}
+
+/// The spec's third section: one `wicklee verify` line per finding that has
+/// something to measure.
+///
+/// Two conditions, both matching what `POST /v1/verify` will actually do. A
+/// finding that names no model is refused with a 409 — the adapted hardware
+/// findings are like that, their evidence being a pattern over samples rather
+/// than a model's own transitions. And an agent that is not storing findings
+/// cannot look one up by id, so the command would answer "no finding" on an id
+/// printed two lines above it.
+fn render_what_to_change(findings: &[serde_json::Value], body: &serde_json::Value) -> String {
+    if body["history"]["findings_persisted"] != serde_json::Value::Bool(true) {
+        return String::new();
+    }
+    let mut out = String::new();
+    for f in findings {
+        let (Some(id), Some(models)) = (f["id"].as_str(), f["models"].as_array()) else {
+            continue;
+        };
+        let named: Vec<&str> = models.iter().filter_map(serde_json::Value::as_str).collect();
+        if named.is_empty() {
+            continue;
+        }
+        out.push_str(&wrap_indented(
+            &format!("{id:<ID_WIDTH$}"),
+            2 + ID_WIDTH,
+            &format!("Re-measure {} and compare: wicklee verify {id}", named.join(", ")),
+        ));
+    }
+    if out.is_empty() {
+        return out;
+    }
+    format!("\nWHAT TO CHANGE\n{out}")
 }
 
 /// The `findings` output: the findings alone.
@@ -685,8 +716,13 @@ fn render_history_scope(body: &serde_json::Value) -> String {
 
 /// Wrap a statement under an id column and an evidence-label column.
 fn wrap_statement(id: &str, label: &str, text: &str) -> String {
-    let indent = 2 + ID_WIDTH + LABEL_WIDTH;
-    let mut out = format!("  {id:<ID_WIDTH$}{label:<LABEL_WIDTH$}");
+    wrap_indented(&format!("{id:<ID_WIDTH$}{label:<LABEL_WIDTH$}"), 2 + ID_WIDTH + LABEL_WIDTH, text)
+}
+
+/// Wrap `text` to `WRAP_AT` columns after `prefix`, with continuation lines
+/// indented to `indent`.
+fn wrap_indented(prefix: &str, indent: usize, text: &str) -> String {
+    let mut out = format!("  {prefix}");
     let mut col = 0usize;
     for word in text.split_whitespace() {
         if col == 0 {
@@ -1105,7 +1141,10 @@ mod tests {
                 "observed_at_ms":   1_700_000_012_000_i64,
             }],
             "activity_signal": true,
-            "history": { "transitions": 412, "persisted": true, "scope": "stored" },
+            "history": {
+                "transitions": 412, "persisted": true,
+                "findings_persisted": true, "scope": "stored",
+            },
         })
     }
 
@@ -1213,10 +1252,24 @@ mod tests {
             out.contains("Not checked: baseline_regression (no fingerprint baseline yet)"),
             "{out}"
         );
-        // WHAT TO CHANGE is left out until `verify` exists, rather than
-        // printing commands that do not run.
+        assert!(out.contains("WHAT TO CHANGE"), "{out}");
+        assert!(out.contains("wicklee verify F-a3f29c"), "{out}");
+    }
+
+    #[test]
+    fn what_to_change_only_offers_commands_that_would_work() {
+        // A finding naming no model is refused by the verify route with a 409,
+        // so offering the command would send someone to a refusal.
+        let mut body = inspect_body();
+        body["findings"][0]["models"] = serde_json::json!([]);
+        let out = render_inspect(&body);
         assert!(!out.contains("WHAT TO CHANGE"), "{out}");
-        assert!(!out.contains("wicklee verify"), "{out}");
+
+        // Findings that are not stored cannot be looked up by id either.
+        let mut body = inspect_body();
+        body["history"]["findings_persisted"] = serde_json::Value::Bool(false);
+        let out = render_inspect(&body);
+        assert!(!out.contains("WHAT TO CHANGE"), "{out}");
     }
 
     #[test]
