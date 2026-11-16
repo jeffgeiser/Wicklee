@@ -285,10 +285,10 @@
     "/metrics": {
       "get": {
         "operationId": "prometheusMetrics",
-        "summary": "Prometheus scrape endpoint (Team+ tier)",
+        "summary": "Prometheus scrape endpoint",
         "description": "Returns fleet metrics in Prometheus text format. 7 gauges per node: gpu_utilization, power_watts, tokens_per_second, wes_score, thermal_penalty, memory_pressure, ttft_ms.",
         "parameters": [{ "name": "X-API-Key", "in": "header", "required": true, "schema": { "type": "string" } }],
-        "responses": { "200": { "description": "Prometheus text format", "content": { "text/plain": {} } }, "401": { "description": "Missing API key" }, "403": { "description": "Team tier required" } }
+        "responses": { "200": { "description": "Prometheus text format", "content": { "text/plain": {} } }, "401": { "description": "Missing API key" }, "403": { "description": "Not permitted for this key" } }
       }
     },
     "/api/v1/fleet": {
@@ -348,14 +348,14 @@
     "/api/v1/insights/latest": {
       "get": {
         "operationId": "getInsights",
-        "summary": "Get fleet intelligence snapshot (Team+)",
+        "summary": "Get fleet intelligence snapshot",
         "description": "Fleet summary with avg WES, total tok/s, and findings array (thermal stress, WES below baseline, etc.).",
         "responses": {
           "200": {
             "description": "Intelligence snapshot",
             "content": { "application/json": { "schema": { "$ref": "#/components/schemas/InsightsResponse" } } }
           },
-          "402": { "description": "Requires Team tier or above" }
+          "402": { "description": "Not available on this account" }
         }
       }
     },
@@ -405,7 +405,7 @@
     "/api/v1/thermal-budget": {
       "get": {
         "operationId": "getThermalBudget",
-        "summary": "Thermal Budget Calculator (Pro+) — predicts when pushing harder backfires",
+        "summary": "Thermal Budget Calculator — predicts when pushing harder backfires",
         "description": "Walks the 7-day metrics_5min Postgres rollup, identifies sustained Normal-thermal blocks (≥30 min) and Normal→Fair transitions, computes the sustainable tok/s rate, the load level that pushes the node out of Normal, the average time-to-Fair, and the resulting penalized rate (push ÷ 1.25). Generates a plain-English advice string comparing 1-hour token output of stay-sustainable vs push-then-drop-to-penalized.",
         "parameters": [
           { "name": "node_id", "in": "query", "required": true, "schema": { "type": "string" }, "example": "WK-XXXX" }
@@ -414,7 +414,7 @@
           "200": { "description": "Thermal budget summary", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ThermalBudget" } } } },
           "400": { "description": "node_id query param required" },
           "401": { "description": "Missing or invalid auth" },
-          "403": { "description": "Pro tier or higher required" },
+          "403": { "description": "Not permitted for this key" },
           "404": { "description": "Node not found in user's fleet" }
         }
       }
@@ -480,7 +480,7 @@
     "/api/v1/webhooks": {
       "post": {
         "operationId": "createWebhook",
-        "summary": "Threshold Webhooks (Pro+) — create subscription",
+        "summary": "Threshold Webhooks — create subscription",
         "description": "Register a webhook for state-transition push notifications (thermal_state_changed, inference_state_changed, wes_below, wes_above). Returns the HMAC-SHA256 secret ONCE — store it. Receivers verify the X-Wicklee-Signature header to confirm authenticity.",
         "requestBody": {
           "required": true,
@@ -490,7 +490,7 @@
           "200": { "description": "Subscription created (secret returned ONCE)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WebhookSubscription" } } } },
           "400": { "description": "Invalid url, event_type, or missing required threshold" },
           "401": { "description": "Missing or invalid auth" },
-          "403": { "description": "Pro tier or higher required" },
+          "403": { "description": "Not permitted for this key" },
           "404": { "description": "Specified node_id not found in user's fleet" }
         }
       },
