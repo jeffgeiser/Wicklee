@@ -107,7 +107,7 @@ Want the agent to run on every boot?
 sudo ~/.wicklee/bin/wicklee --install-service
 ```
 
-That's the only step that needs root. WES, the leaderboard, multi-model WES, and Thermal Cost % are all available on the free Community tier — no upgrade required.
+That's the only step that needs root. WES, multi-model WES and Thermal Cost % are all in the agent, which is free and needs no account.
 
 ---
 

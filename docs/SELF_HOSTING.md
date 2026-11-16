@@ -1,4 +1,4 @@
-# Self-Hosted Control Plane (Enterprise)
+# Self-Hosted Control Plane
 
 > **The hosted control plane is not maintained.** Wicklee v0.15.0 is a single
 > binary on one host, reached over localhost; the paid tiers behind this

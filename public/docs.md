@@ -633,7 +633,7 @@ For threshold-crossing events (`wes_below`, `wes_above`), the body uses `previou
 
 Manage subscriptions in **Settings → Threshold Webhooks**. The HMAC secret is shown **once** at creation — store it in your secrets manager before dismissing.
 
-### Thermal Budget Calculator (Pro)
+### Thermal Budget Calculator
 `GET /api/v1/thermal-budget?node_id=X` — predicts when pushing a node harder backfires. Walks the 7-day `metrics_5min` rollup, identifies sustained Normal-thermal blocks and Normal→Fair transitions, then computes:
 
 - **`sustainable_tps`** — max tok/s observed during any Normal block ≥ 30 min long. The rate you can hold indefinitely.
@@ -1120,9 +1120,14 @@ sudo systemctl restart wicklee
 
 Verify the proxy is active — your dashboard will show `proxy: :11434 → :11435` in the Diagnostics rail.
 
-### Tier note
+### Where the proxy's numbers show up
 
-The proxy works locally on any install. Proxy-derived metrics (E2E latency, request count, production tok/s) are visible in the fleet dashboard for **Pro tier and above**.
+The proxy works locally on any install, and its metrics (E2E latency, request
+count, production tok/s) are on the local dashboard and in the telemetry a
+paired node pushes. `POST /v1/receipts` is the other way to get exact
+per-request numbers without a proxy, and on a default macOS install it is the
+only one that works, because the proxy cannot bind 11434 while Ollama holds
+it.
 
 ### Runtime coverage
 
@@ -1140,7 +1145,7 @@ The proxy works locally on any install. Proxy-derived metrics (E2E latency, requ
 
 ## OpenTelemetry & Prometheus
 
-**Team tier required.**
+Both are cloud-side, and the hosted backend is being shut down.
 
 ### OpenTelemetry Export
 
@@ -1191,7 +1196,7 @@ Wicklee is sovereign by default:
 - No outbound connections by default — structural guarantee
 - Local dashboard at localhost:7700 works with zero configuration
 
-**Self-hosted control plane (Enterprise):** the entire fleet backend — ingest, dashboard, alerting, SLOs, cost governance — runs on your infrastructure via `deploy/self-hosted/docker-compose.yml` or the Helm chart at `deploy/helm/wicklee` (TimescaleDB + one Rust binary + nginx frontend, the same images behind wicklee.dev). Bring your own Clerk app for auth, pair agents against your URL, and nothing ships to wicklee.dev. Requires an Enterprise license (`WICKLEE_LICENSE_KEY`; evaluation mode without one). Full guide: `docs/SELF_HOSTING.md` in the repo, including a network-egress inventory for firewall policy.
+**Self-hosted control plane:** not maintained. `deploy/self-hosted/docker-compose.yml` and the Helm chart at `deploy/helm/wicklee` are frozen in the repository and are not tested against a current release; `docs/SELF_HOSTING.md` describes what they do and says so. A self-hostable coordinator is a later roadmap item and is not this code. The agent needs none of it: unpaired, nothing leaves the machine.
 
 ---
 
