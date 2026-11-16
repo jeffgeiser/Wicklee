@@ -1,5 +1,15 @@
 # Grafana + Prometheus
 
+> **The hosted control plane is not maintained.** Wicklee v0.15.0 is a single
+> binary on one host, reached over localhost; the paid tiers behind this
+> document are withdrawn (`docs/STRATEGY.md` §14) and the hosted backend, its
+> database and the payment integration are being shut down rather than left
+> running. `cloud/`, `src/cloud/` and the control-plane deployment files are
+> frozen in the repository, and whether they are deleted or kept as the Stage 4
+> starting point is step 7 of `docs/TRANSITION_PLAN.md`. Nothing below is
+> tested against a current release. It is kept as a description of what the
+> frozen code does, not as something to deploy.
+
 Wicklee already exposes a Prometheus scrape endpoint, so getting fleet
 efficiency into Grafana needs no plugin — just a scrape job and a dashboard
 import.
