@@ -129,7 +129,7 @@ Eight summary cards at the top of the dashboard. All displayed values pass throu
 | 4 | **Fleet Nodes** | Online node count / total paired node count | Online = telemetry within last 60s |
 | 5 | **Avg WES** | Mean `tok/s ÷ (watts × PUE × ThermalPenalty)` across nodes with power data | Thermally penalized tok/watt |
 | 6 | **W/1K Tkn** | `(totalPowerW ÷ fleetTps) × 1000` | Watts per 1,000 tok/s; equivalent to J/tok |
-| 7 | **Cost/1M Tokens** | `wattPer1k × kWhRate ÷ 3,600,000 × 1,000,000` | Default $0.13/kWh; configure in Settings |
+| 7 | **Cost/1M Tokens** | `wattPer1k × kWhRate ÷ 3,600,000 × 1,000` | Default $0.13/kWh; configure in Settings. The `÷ 3,600,000` converts Joules to kWh and the `× 1,000` scales a per-1k-token cost to per-million — the same two steps as the worked example under COST/1M TOKENS below |
 | 8 | **Fleet Power Cost/Day** | `∑ (watts_i × PUE_i) × 24 × (rate ÷ 1000)` | Always-on infrastructure cost — not filtered by inference activity |
 
 *Source: `src/utils/efficiency.ts`, computed inline in `src/components/Overview.tsx`*

@@ -3,7 +3,8 @@
 ## Localhost Agent API
 
 Base URL: `http://localhost:7700`
-Auth: None required.
+Auth: none on a loopback bind. A non-loopback `bind_address` refuses to start
+without an inbound token, and the refusal names the key to set.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -13,8 +14,8 @@ Auth: None required.
 | GET | /api/history?node_id=WK-XXXX | Metric history — 1h raw samples |
 | GET | /api/profile?minutes=60 | Inference Profiler — correlated TTFT/KV/queue/thermal/power timeline |
 | GET | /api/sla?window_min=60&target_ttft_ms=500 | Inference SLA Monitor — p50/p95/p99 for TTFT, E2E latency, TPOT plus compliance vs target |
-| GET | /api/v1/thermal-budget?node_id=X | Thermal Budget Calculator (Pro+, cloud) — sustainable rate, push threshold, time-to-Fair, penalized rate, plain-English advice |
-| POST/GET/DELETE | /api/v1/webhooks[/:id[/test]] | Threshold Webhooks (Pro+) — push notifications on thermal/inference state changes and WES threshold crossings. HMAC-SHA256 signed |
+| GET | /api/v1/thermal-budget?node_id=X | Thermal Budget Calculator (cloud) — sustainable rate, push threshold, time-to-Fair, penalized rate, plain-English advice |
+| POST/GET/DELETE | /api/v1/webhooks[/:id[/test]] | Threshold Webhooks (cloud) — push notifications on thermal/inference state changes and WES threshold crossings. HMAC-SHA256 signed |
 | GET | /api/health (localhost) | Agent diagnostic — agent version, build target, DuckDB store health, list of routes available/unavailable when store init failed. One-curl debug for "why are my routes missing?" |
 | GET | /api/cost-by-model?hours=24 | Cost attribution per model — daily power cost breakdown |
 | GET | /api/explain-slowdown?ts_ms=N | Slowdown explainer — root cause analysis for a slow request |
@@ -217,28 +218,33 @@ curl -X POST http://localhost:7700/mcp \
 Base URL: `https://wicklee.dev/api/v1`
 Auth: `X-API-Key: wk_live_...` header.
 
-| Method | Endpoint | Description | Tier |
-|--------|----------|-------------|------|
-| GET | /api/v1/fleet | All nodes with full MetricsPayload | All |
-| GET | /api/v1/fleet/wes | WES scores ranked | All |
-| GET | /api/v1/nodes/{id} | Single node deep dive | All |
-| GET | /api/v1/route/best | Routing recommendation (latency or efficiency). Optional `?model=` for per-model routing | All |
-| GET | /api/v1/models/discover | Model discovery — browse catalog, `?simulate_hw=` (Pro+), `?fleet=true` (Team+) | Tiered |
-| GET | /api/v1/fleet/model-comparison?hours=168 | Fleet-wide per-model rollup (WES, tok/s, watts, TTFT, cost). Reads `metrics_5min`. 1–720 hour window. | All |
-| GET | /api/v1/fleet/model-switches?hours=24 | Cross-node model swap events (LAG window function over `metrics_raw`). 1–168 hour window, capped at 200 rows. | All |
-| GET | /api/v1/fleet/cost-by-model?hours=24 | Fleet-wide per-model power cost using $0.16/kWh default. 1–168 hour window. | All |
-| GET | /api/v1/insights/latest | Fleet intelligence snapshot | Team+ |
-| GET | /api/v1/fleet/chargeback?days=30 | Chargeback/showback (Clerk JWT auth) — cost + $/1M-token attribution by team tag / model / node + daily trend. `&format=csv&group=` for finance export (audited) | Team+ |
-| GET | /api/v1/fleet/capacity?target_tok_s=200 | Capacity planner with procurement scenarios (Clerk JWT auth) — "reach 200 tok/s: 2× RTX 4090 vs 1× H100" priced from the fleet's own measured tok/W per hardware class; every scenario states its basis | Team+ |
-| GET | /api/v1/fleet/migration-advisor | Cross-node model migration (Clerk JWT auth) — live WES vs peers' 7-day demonstrated WES + free memory; moves with ≥20% estimated gain and 1.2× headroom | Team+ |
-| GET | /api/v1/fleet/idle-waste?days=30 | Idle-waste & right-sizing report (Clerk JWT auth) — phantom-load cost + recovery actions (unload idle model, consolidate) with projected $/mo recovery | Team+ |
-| GET/PUT | /api/digest | Weekly idle-waste email digest settings (Clerk JWT auth) — Resend-delivered, one per tenant, audited | Team+ |
-| POST | /api/v1/keys | Create API key | All |
-| GET | /api/v1/keys | List API keys | All |
-| DELETE | /api/v1/keys/{id} | Revoke API key | All |
-| GET | /metrics | Prometheus scrape endpoint (text format) | Team+ |
-| GET | /api/otel/config | OpenTelemetry export configuration | Team+ |
-| PUT | /api/otel/config | Update OTel export settings | Team+ |
+**The hosted fleet backend is being shut down.** It still runs, and this table
+describes it accurately, but it serves the product that has been withdrawn.
+There are no paid plans and nothing here is tier-gated any more. The localhost
+agent API above is the supported surface.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | /api/v1/fleet | All nodes with full MetricsPayload |
+| GET | /api/v1/fleet/wes | WES scores ranked |
+| GET | /api/v1/nodes/{id} | Single node deep dive |
+| GET | /api/v1/route/best | Routing recommendation (latency or efficiency). Optional `?model=` for per-model routing |
+| GET | /api/v1/models/discover | Model discovery — browse catalog, `?simulate_hw=`, `?fleet=true` |
+| GET | /api/v1/fleet/model-comparison?hours=168 | Fleet-wide per-model rollup (WES, tok/s, watts, TTFT, cost). Reads `metrics_5min`. 1–720 hour window. |
+| GET | /api/v1/fleet/model-switches?hours=24 | Cross-node model swap events (LAG window function over `metrics_raw`). 1–168 hour window, capped at 200 rows. |
+| GET | /api/v1/fleet/cost-by-model?hours=24 | Fleet-wide per-model power cost using $0.16/kWh default. 1–168 hour window. |
+| GET | /api/v1/insights/latest | Fleet intelligence snapshot |
+| GET | /api/v1/fleet/chargeback?days=30 | Chargeback/showback (Clerk JWT auth) — cost + $/1M-token attribution by team tag / model / node + daily trend. `&format=csv&group=` for finance export (audited) |
+| GET | /api/v1/fleet/capacity?target_tok_s=200 | Capacity planner with procurement scenarios (Clerk JWT auth) — "reach 200 tok/s: 2× RTX 4090 vs 1× H100" priced from the fleet's own measured tok/W per hardware class; every scenario states its basis |
+| GET | /api/v1/fleet/migration-advisor | Cross-node model migration (Clerk JWT auth) — live WES vs peers' 7-day demonstrated WES + free memory; moves with ≥20% estimated gain and 1.2× headroom |
+| GET | /api/v1/fleet/idle-waste?days=30 | Idle-waste & right-sizing report (Clerk JWT auth) — phantom-load cost + recovery actions (unload idle model, consolidate) with projected $/mo recovery |
+| GET/PUT | /api/digest | Weekly idle-waste email digest settings (Clerk JWT auth) — Resend-delivered, one per tenant, audited |
+| POST | /api/v1/keys | Create API key |
+| GET | /api/v1/keys | List API keys |
+| DELETE | /api/v1/keys/{id} | Revoke API key |
+| GET | /metrics | Prometheus scrape endpoint (text format) |
+| GET | /api/otel/config | OpenTelemetry export configuration |
+| PUT | /api/otel/config | Update OTel export settings |
 
 ## Response Examples
 

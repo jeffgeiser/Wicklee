@@ -872,7 +872,7 @@ The maintainer decided the first three on 2026-11-12. The Question column record
 | Embedded dashboard | About 18,000 lines of components, compiled into the agent binary | Every `/api` route the UI calls | Decided: remove it from the agent binary and serve a minimal debugging page instead. |
 | Dashboard-only agent routes: cost by model, SLA, profile, export, model comparison | Parts of `http_api.rs` and `store.rs` | Used by two to five frontend files each | Decided: remove with the dashboard, once the audit confirms nothing else calls them |
 | Cloud features: alerts, governance, SLO, reports, webhooks, billing | About 4,800 cloud lines | Paid tiers and the live checkout | Decided: paid tiers are withdrawn until there is a monetization plan. The code stays frozen for now. The maintainer is open to deleting it later |
-| Enterprise docs: `SSO.md`, `MODEL_GOVERNANCE.md`, `TERRAFORM.md`, `SELF_HOSTING.md`, `BILLING.md` | 637 lines | The current pricing page | Follow the cloud code decision above |
+| Enterprise docs: `SSO.md`, `MODEL_GOVERNANCE.md`, `TERRAFORM.md`, `SELF_HOSTING.md`, `BILLING.md` | 637 lines | The current pricing page | Decided and done, transition step 4: `SSO.md`, `MODEL_GOVERNANCE.md`, `TERRAFORM.md` and `BILLING.md` are deleted — they document features that are withdrawn. `SELF_HOSTING.md` and `GRAFANA.md` carry a banner saying the hosted control plane is not maintained, and follow the cloud code decision |
 | WES leaderboard charter | 168 lines | The measurement-lab idea | Keep if that idea continues |
 
 Order of work for these removals:

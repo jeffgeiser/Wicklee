@@ -84,13 +84,13 @@ curl -s http://node-b:7700/api/runtime-config?model=llama3.2:8b > b.json
 diff <(jq -S . a.json) <(jq -S . b.json)
 ```
 
-**2. Audit fleet-wide configs.** For Team and Business tiers running multiple nodes, the cloud aggregator (with opt-in full sharing) can answer "show me every node running Llama 3.2 with a context length different from 8192." Useful for compliance and for catching configuration drift before it becomes a performance mystery.
+**2. Audit fleet-wide configs.** Across multiple paired nodes, the cloud aggregator (with opt-in full sharing) can answer "show me every node running Llama 3.2 with a context length different from 8192." Useful for compliance and for catching configuration drift before it becomes a performance mystery.
 
 **3. Build a config-history view.** Wicklee captures `captured_at_ms` on every snapshot. With DuckDB enabled (default on glibc Linux and macOS builds), you can query "what was the config 3 days ago, when WES was 23% higher?" The data is local; the queries are SQL.
 
 ## Available now
 
-Runtime Config Surface ships in [v0.9.0](https://github.com/jeffgeiser/Wicklee/releases/tag/v0.9.0). All tiers, no upgrade required, no configuration to enable. The harvesters auto-detect each runtime via the same process scanner Wicklee already uses for Ollama/vLLM/llama.cpp.
+Runtime Config Surface ships in [v0.9.0](https://github.com/jeffgeiser/Wicklee/releases/tag/v0.9.0). Nothing to enable and no configuration to write. The harvesters auto-detect each runtime via the same process scanner Wicklee already uses for Ollama/vLLM/llama.cpp.
 
 To upgrade an existing install:
 

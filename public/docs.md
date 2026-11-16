@@ -1,7 +1,8 @@
 # Wicklee Documentation
 
-> Sovereign GPU fleet monitor for self-hosted AI inference — on-prem, private cloud, or colo.
-> One Rust binary per node, React dashboard at localhost:7700, fleet aggregation at wicklee.dev.
+> The evidence layer for self-hosted AI inference.
+> One Rust binary per host, reached over localhost. It answers what is happening with your local inference, what will run right now, and what to change and how to verify it helped.
+> There are no paid plans and no account.
 
 ---
 
@@ -22,13 +23,30 @@ Dashboard opens at **http://localhost:7700**. The `--install-service` step copie
 
 ## CLI Reference
 
+**Diagnostics.** Five subcommands over the `/v1` routes of a running agent.
+Add `--json` to any of them for the route's body verbatim.
+
+| Command | Description |
+|---------|-------------|
+| `wicklee inspect [--since 24h]` | Findings, readiness and what to change, in one report |
+| `wicklee ready [MODEL]` | Readiness only: `ready_now`, `requires_loading`, `would_displace` or `cannot_determine` |
+| `wicklee findings [--all]` | Findings alone; `--all` includes resolved ones |
+| `wicklee fingerprint MODEL [--cold]` | A consented measurement run that establishes a baseline |
+| `wicklee verify FINDING_ID` | Re-run a finding's own test and compare against the first run |
+
+**Service and status.**
+
 | Command | Description |
 |---------|-------------|
 | `sudo wicklee --install-service` | Install as system service (auto-start on boot) |
 | `sudo wicklee --uninstall-service` | Remove service |
 | `wicklee --status` | Health check (queries running agent) |
-| `wicklee --pair` | Pair with fleet (interactive) |
 | `wicklee --version` | Print version |
+| `wicklee --no-cloud` | Run with every outbound fleet request off. Use it for any agent you start by hand on a paired host, which is otherwise a second writer under the installed node's id |
+
+`PORT`, `WICKLEE_OLLAMA_PORT` and `WICKLEE_DATA_DIR` move the listener, the
+runtime it talks to and the metrics store, which is how you run a second agent
+without disturbing an installed one.
 
 ---
 
@@ -74,7 +92,7 @@ All four WES surfaces — KPI hero (Intelligence), Fleet Status row, Model Fit A
 
 Big-iron GPUs (H100, A100, DGX Spark / GB10) running batch=1 small workloads will show **persistently low WES** because their idle baseline power dominates per-token energy cost. A Spark drawing ~64W idle on a 32B FP8 model decoded at the memory-bandwidth ceiling produces tok/W ≈ 0.10 — that's physics, not a misconfiguration.
 
-The `bandwidth_ceiling_reached` Pro pattern (#19) detects this case explicitly and fires an *info*-severity observation explaining *"you're at the physics ceiling for this hardware/quant pair."* The Model Fit Analysis fleet headline reflects the same nuance: low efficiency rows are tagged "informational" rather than "needs attention" — the latter is reserved for genuine memory risk (OOM / swap pressure).
+The `bandwidth_ceiling_reached` pattern (#19) detects this case explicitly and fires an *info*-severity observation explaining *"you're at the physics ceiling for this hardware/quant pair."* The Model Fit Analysis fleet headline reflects the same nuance: low efficiency rows are tagged "informational" rather than "needs attention" — the latter is reserved for genuine memory risk (OOM / swap pressure).
 
 ---
 
@@ -366,14 +384,14 @@ Every variant in the response includes a ready-to-run pull command:
 ```
 The Model Discovery panel shows a copy button; the raw command is also in the API response.
 
-### Tiered access
+### Where discovery runs
 
-| Tier | Feature | Endpoint |
+| Scope | Feature | Endpoint |
 |------|---------|----------|
-| Community | Local discovery — scored against this machine | `GET /api/model-candidates` |
-| Community | Fleet discovery — scored against every online node | `GET /api/fleet/model-candidates` (JWT) |
-| Pro | Hardware simulation — "what if I had a 4090?" | `GET /api/v1/models/discover?simulate_hw=nvidia_4090` |
-| Team | Fleet matching — which nodes can run this model? | `GET /api/v1/models/discover?fleet=true&model_id=` |
+| This machine | Local discovery — scored against this machine | `GET /api/model-candidates` |
+| This machine | Fleet discovery — scored against every online node | `GET /api/fleet/model-candidates` (JWT) |
+| Simulated | Hardware simulation — "what if I had a 4090?" | `GET /api/v1/models/discover?simulate_hw=nvidia_4090` |
+| Fleet | Fleet matching — which nodes can run this model? | `GET /api/v1/models/discover?fleet=true&model_id=` |
 
 Available simulation profiles: `m4`, `m4_pro_24gb`, `m4_max_36gb`, `m4_max_64gb`, `m4_ultra_128gb`, `nvidia_4060`, `nvidia_4070`, `nvidia_4080`, `nvidia_4090`, `nvidia_a100_40gb`, `nvidia_a100_80gb`, `nvidia_h100`
 
@@ -394,7 +412,7 @@ The fleet headline at the top of the Model Fit Analysis card distinguishes two f
 - **Needs attention** (red) — memory-poor only. Real OOM / swap risk. Action required.
 - **Fair** (amber) — model fits but warrants a check (memory-fair OR efficiency-acceptable).
 - **Optimal** (green) — both dimensions clean.
-- **Low efficiency (informational)** (gray pill) — WES is low *but memory is fine*. Common on big-iron GPUs running batch=1 small workloads where idle baseline power dominates per-token energy cost. Not a fix-now signal — see the [`bandwidth_ceiling_reached`](#19-observation-patterns--6-fleet-alerts) Pro pattern, which fires when a node is at the physics ceiling for its hardware/quant pair.
+- **Low efficiency (informational)** (gray pill) — WES is low *but memory is fine*. Common on big-iron GPUs running batch=1 small workloads where idle baseline power dominates per-token energy cost. Not a fix-now signal — see the [`bandwidth_ceiling_reached`](#20-observation-patterns--5-fleet-alerts) pattern, which fires when a node is at the physics ceiling for its hardware/quant pair.
 
 ### MCP tool: `get_model_fit`
 
@@ -410,13 +428,15 @@ Returns `memory_fit`, `efficiency`, `context_runway`, `quant_recommendation`, an
 
 ---
 
-## 20 Observation Patterns + 6 Fleet Alerts
+## 20 Observation Patterns + 5 Fleet Alerts
 
 ### Agent-Evaluated (18 patterns, 10-min DuckDB buffer, every 10s)
 
-**Community (9):** `thermal_drain`, `phantom_load`, `wes_velocity_drop`, `memory_trajectory`, `power_jitter`, `swap_io_pressure`, `clock_drift`, `pcie_lane_degradation`, `vram_overcommit`
+All eighteen are evaluated on every host; there is no gating.
 
-**Pro (9 agent-evaluated):** `power_gpu_decoupling`, `bandwidth_saturation`, `efficiency_drag`, `nvidia_thermal_redline`, `vllm_kv_cache_saturation`, `ttft_regression`, `latency_spike`, `vllm_queue_saturation`, `bandwidth_ceiling_reached`
+**Nine:** `thermal_drain`, `phantom_load`, `wes_velocity_drop`, `memory_trajectory`, `power_jitter`, `swap_io_pressure`, `clock_drift`, `pcie_lane_degradation`, `vram_overcommit`
+
+**Nine more:** `power_gpu_decoupling`, `bandwidth_saturation`, `efficiency_drag`, `nvidia_thermal_redline`, `vllm_kv_cache_saturation`, `ttft_regression`, `latency_spike`, `vllm_queue_saturation`, `bandwidth_ceiling_reached`
 
 > **`pcie_lane_degradation`** — fires when the negotiated PCIe link width (e.g. x8) is below the card's rated maximum (e.g. x16), indicating a wrong-slot installation or failed lane. Detected via NVML `current_pcie_link_width` / `max_pcie_link_width` — **NVIDIA only, no root required**. Returns no data on virtualised GPUs (cloud instances, VMs) where PCIe info is unavailable.
 
@@ -424,12 +444,12 @@ Returns `memory_fit`, `efficiency`, `context_runway`, `quant_recommendation`, an
 
 ### Cloud-Evaluated (2 patterns)
 
-`fleet_load_imbalance` (Pro) — node WES > 20% below best healthy peer.
+`fleet_load_imbalance` — node WES > 20% below best healthy peer.
 
-> **`wes_long_term_drift`** *(Pro, severity: warning)* — fires when penalized WES drops ≥15 % between the prior 6-day baseline and the most recent 24 hours. Detects gradual degradation that short-window patterns miss: dust accumulation in fans / heatsinks, thermal paste degradation on long-deployed hardware, driver / firmware regression after an OS update, or new background process load. Evaluated every 6 hours per Pro+ node against the 7-day Postgres rollup (`metrics_5min`). Requires ≥100 baseline samples (~8 h) and ≥30 recent samples (~2.5 h) before firing — sparse fleets won't trip false positives. Cooldown: 24 h. The 7-day WES history chart in Insights → Performance shows a matching drift annotation when the same condition is detected client-side, so chart and observation card stay in agreement.
+> **`wes_long_term_drift`** *(severity: warning)* — fires when penalized WES drops ≥15 % between the prior 6-day baseline and the most recent 24 hours. Detects gradual degradation that short-window patterns miss: dust accumulation in fans / heatsinks, thermal paste degradation on long-deployed hardware, driver / firmware regression after an OS update, or new background process load. Evaluated every 6 hours per node against the 7-day Postgres rollup (`metrics_5min`). Requires ≥100 baseline samples (~8 h) and ≥30 recent samples (~2.5 h) before firing — sparse fleets won't trip false positives. Cooldown: 24 h. The 7-day WES history chart in Insights → Performance shows a matching drift annotation when the same condition is detected client-side, so chart and observation card stay in agreement.
 
-### Fleet Alerts (6, cloud, 60s cadence)
-`zombied_engine`, `thermal_redline`, `oom_warning`, `wes_cliff`, `agent_version_mismatch`, `fleet_load_imbalance`
+### Fleet Alerts (5, cloud, 60s cadence)
+`zombied_engine`, `thermal_redline`, `oom_warning`, `wes_cliff`, `agent_version_mismatch`
 
 ---
 
@@ -447,18 +467,18 @@ The three levers move together: `density_scale` multiplies the evidence-window d
 
 **API (localhost, no auth):** `GET /api/deployment-profile` returns the active profile plus the selectable set with each one's tuning; `PUT /api/deployment-profile` with `{ "profile": "sovereign_dev" | "dedicated_server" | "production_fleet" }` switches it.
 
-### Fleet config management (Pro+ per node, Team+ by tag)
+### Fleet config management
 
 Set profiles centrally instead of per machine. The cloud stores a **desired profile** per node; every telemetry response carries it back to the agent, which applies it within one push cycle (~2 seconds — shared state + `config.toml`) and reports its **actual** profile in every frame, so the dashboard always shows truth, not intent.
 
 - **Per node:** the Profile column in Settings → Node Configuration (or `PATCH /api/nodes/:id` with `{ "desired_profile": "production_fleet" }`; empty string clears — the agent keeps its local choice).
-- **By tag (Team+):** `POST /api/fleet/config` with `{ "tag": "env:prod", "desired_profile": "production_fleet" }` applies to every node bearing the tag and returns the affected count. Audited as `fleet_config.applied`.
+- **By tag:** `POST /api/fleet/config` with `{ "tag": "env:prod", "desired_profile": "production_fleet" }` applies to every node bearing the tag and returns the affected count. Audited as `fleet_config.applied`.
 
 Old agents ignore the response body — fleet config activates per node as agents upgrade.
 
 ---
 
-## Environments & Tags (Pro+)
+## Environments & Tags
 
 Group nodes with free-form, comma-separated tags — set them in **Settings → Node Configuration** (Tags column) or `PATCH /api/nodes/:id` with `{ "tags": "env:prod, gpu, rack-2" }`. The `env:` prefix is the reserved convention for environments (`env:prod`, `env:staging`).
 
@@ -476,19 +496,18 @@ Tag values used for scoping are restricted to letters, digits, and `: - _ .` (ma
 
 When observations or fleet alerts fire, Wicklee delivers notifications to external channels.
 
-| Channel | Configuration | Tier |
+| Channel | Configuration |
 |---------|--------------|------|
-| **Slack** | Incoming Webhook URL | Pro+ |
-| **Email** | Any email address (via Resend) | Pro+ |
-| **PagerDuty** | Integration Key (Routing Key) — Events API v2 with auto-resolve | Team+ |
-
+| **Slack** | Incoming Webhook URL |
+| **Email** | Any email address (via Resend) |
+| **PagerDuty** | Integration Key (Routing Key) — Events API v2 with auto-resolve |
 Setup: Settings → Alerts → Add Channel → choose type → Test → Create Rules.
 
 PagerDuty uses dedup keys (`wicklee-{node_id}-{event_type}`) for incident lifecycle — incidents auto-resolve when the condition clears.
 
-Community tier: observations appear on the dashboard but no outbound notifications.
+Without a notification channel configured, observations appear on the dashboard and nothing is sent.
 
-### Silences & Maintenance Windows (Pro+)
+### Silences & Maintenance Windows
 
 Suppress alert rules **and** threshold webhooks for a duration — so a planned driver upgrade doesn't page everyone. A silence targets any combination of node, tag, and event type (blank = all); a future start time makes it a scheduled maintenance window. Org members share silences (tenant-scoped). Managed in Settings → Alerts → Silences, or:
 
@@ -502,7 +521,7 @@ Silence creation and deletion are audit-logged. Suppression is enforced inside b
 
 ---
 
-## SLOs & Error Budgets (Team+)
+## SLOs & Error Budgets
 
 Declare objectives over the fleet's sampled telemetry — *"p95 TTFT ≤ 500 ms for 99% of 5-minute windows over a rolling 30 days"* — scoped to the whole fleet, a tag (`env:prod`), or a single node. The cloud evaluates one **time-slice verdict** per SLO every 5 minutes (windows with no inference activity aren't counted), so monthly compliance survives raw-telemetry retention. When the error budget crosses **50% / 90% / 100% burn**, the SLO creator's notification channels are alerted — once per crossing, resetting as the rolling window ages bad slices out.
 
@@ -518,21 +537,21 @@ Managed in Settings → SLOs & Error Budgets (compliance %, budget burn bar, lat
 
 ---
 
-## Chargeback & Showback (Team+)
+## Chargeback & Showback
 
 Cost and token attribution from **measured** telemetry — energy (watts × time) priced at your kWh rate, tokens estimated from sampled throughput — yielding **$ per 1M tokens by team tag, model, and node**, plus a daily trend. Generic LLM-observability tools see tokens *or* watts; Wicklee has both in one store, so this report exists nowhere else.
 
 `GET /api/v1/fleet/chargeback?days=30&kwh_rate=0.16` returns totals plus `by_tag` / `by_model` / `by_node` / `daily` groupings; each row carries `energy_kwh`, `cost_usd`, `tokens_m`, `usd_per_mtok`, `hours_covered`. Window 1–90 days (5-min rollup + raw trailing-day tail, same energy conventions as Cost by Model). Add `&format=csv&group=tag|model|node|daily` for a finance-ready CSV (formula-injection-hardened, audit-logged as `chargeback.exported`).
 
-### Capacity Planner — procurement scenarios (Team+)
+### Capacity Planner — procurement scenarios
 
 `GET /api/v1/fleet/capacity?target_tok_s=200` — "Reach 200 tok/s sustained: 2× RTX 4090 vs 1× H100." Scenarios are priced from your fleet's **own measured tok/W** per hardware class (Apple vs NVIDIA, observed over the window) — never vendor benchmarks — and every scenario states its estimate basis. Default target is 2× current sustained throughput. Rendered on Insights → Performance with a target input and Apple/NVIDIA filter.
 
-### Idle Waste & Right-Sizing (Team+)
+### Idle Waste & Right-Sizing
 
 `GET /api/v1/fleet/idle-waste?days=30` — "your fleet burned $X on idle loaded models last 30d; these changes recover $Y/mo." Phantom load = a model held in memory while the node is not inferring, split from active energy via per-sample `inference_state` (raw) and `inference_duty_pct` (rollups). Recovery actions: unload idle models (with monthly recovery estimates) and consolidate nodes inferring <10% of the window. The Insights → Performance card includes a **weekly email digest** opt-in (`GET/PUT /api/digest`, Resend-delivered, audited) — idle burn, energy share, and top recoveries in your inbox every week.
 
-### Model Migration Advisor (Team+)
+### Model Migration Advisor
 
 `GET /api/v1/fleet/migration-advisor` — compares each actively-inferring node's live WES against every peer's 7-day demonstrated WES and free memory (NVIDIA VRAM or Apple unified). Recommends moves with ≥20% estimated gain where the model fits with 1.2× headroom: "llama3.1:70b on WK-A1B2 (WES 8.2) → WK-C3D4 (7d WES 12.1), +47%." Rendered on Insights → Performance.
 
@@ -547,16 +566,16 @@ Wicklee uniquely has hardware telemetry, inference metrics, model identity, and 
 ### Inference Profiler
 `GET /api/profile?minutes=60` — correlated timeline of TTFT, tok/s, KV cache %, queue depth, thermal penalty, and power on a single time axis. Resolution auto-scales (1s raw at 10min, 60s buckets at 24h).
 
-### Inference SLA Monitor (Pro)
+### Inference SLA Monitor
 `GET /api/sla?window_min=60&target_ttft_ms=500&model=` — p50/p95/p99/max for TTFT, end-to-end latency, and TPOT computed via DuckDB `quantile_cont()` over the per-request `inference_traces` table. Compliance percentage against a configurable TTFT target, the 20 most-recent violations, and per-model breakdown. Window: 1–1440 minutes (24 h hard ceiling — that's the trace retention). Optional `model` filter narrows percentiles to one model.
 
 Surfaced on the Performance tab as an SLA Monitor card with 1h / 6h / 24h windows, 250 ms / 500 ms / 1 s / 2 s target presets, color-coded compliance pill (≥99% emerald, ≥95% green, ≥90% yellow, <90% red), per-model p95 table, and a recent-violations list.
 
-### Threshold Webhooks (Pro)
+### Threshold Webhooks
 
 Push notifications for state transitions and threshold crossings. Replaces polling for users running NRO / agent automation loops that need sub-second reaction to fleet state changes.
 
-**CRUD endpoints (Pro+, JWT auth):**
+**CRUD endpoints (JWT auth):**
 
 | Method | Endpoint | Description |
 |---|---|---|
@@ -614,7 +633,7 @@ For threshold-crossing events (`wes_below`, `wes_above`), the body uses `previou
 
 Manage subscriptions in **Settings → Threshold Webhooks**. The HMAC secret is shown **once** at creation — store it in your secrets manager before dismissing.
 
-### Thermal Budget Calculator (Pro)
+### Thermal Budget Calculator
 `GET /api/v1/thermal-budget?node_id=X` — predicts when pushing a node harder backfires. Walks the 7-day `metrics_5min` rollup, identifies sustained Normal-thermal blocks and Normal→Fair transitions, then computes:
 
 - **`sustainable_tps`** — max tok/s observed during any Normal block ≥ 30 min long. The rate you can hold indefinitely.
@@ -635,7 +654,7 @@ Surfaced on the Performance tab as the Thermal Budget card alongside the WES his
 ### Model Comparison
 `GET /api/model-comparison?hours=168` — side-by-side efficiency data for every model that has run on this node. Shows WES, tok/s, watts, TTFT, cost/hr. Answers "which model is most efficient on my hardware?" with real measured data.
 
-Cloud MCP tools: `get_inference_profile` and `explain_slowdown` available for Team+ tier.
+Cloud MCP tools: `get_inference_profile` and `explain_slowdown`.
 
 ### Runtime Config Surface (v0.9.0)
 `GET /api/runtime-config?model=<name>` — returns the cached launch-time configuration for a model across all three supported runtimes:
@@ -683,17 +702,39 @@ The Fleet Event Timeline on the Observability tab is a third, separate surface �
 ## Localhost API
 
 Base URL: `http://localhost:7700`
-Auth: None required.
+Auth: none on a loopback bind. A non-loopback `bind_address` refuses to start
+without an inbound token, and the refusal names the key to set.
+
+### `/v1` — what is loaded, what can run, what is wrong
+
+Every statement these return carries the evidence behind it and a label saying
+what kind of claim it is: `observed` (Wicklee saw it), `inferred` (a likely
+cause, always hedged) or `verified` (measured, with a range). Where something
+could not be checked they say so, instead of returning an empty result that
+reads like a clean bill of health.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | /v1/state | Every installed model: residency, the context it is running at, measured footprint, whether any of it sits outside accelerator memory, when a real caller last used it, plus a capability record of which fields this runtime actually returns |
+| GET | /v1/readiness?model=X | `ready_now`, `requires_loading`, `would_displace` or `cannot_determine` per model, with headroom and what the answer rests on. `requires_loading` plus `coexistence: "unverified"` fits by accounting only — measurement has shown that is not the same as safe |
+| GET | /v1/inspect?since=24h | Findings, readiness and what was not checked. Nine rules plus the nineteen hardware patterns through one evidence-labelled view |
+| GET | /v1/findings?all=true | The findings alone. Resolution is observed, not scheduled: a finding resolves because an evaluation ran and did not produce it |
+| GET | /v1/receipts?model=X | Stored per-request measurements with a median and range |
+| POST | /v1/receipts | Hand back your runtime's own final-response metadata as a receipt. **Refuses any payload containing `prompt`, `response`, `messages` or `context` with a 400 naming the field** — metadata only |
+| POST | /v1/fingerprint | A consented test run: warm, cold or a sequence. Fixed prompt, temperature zero, fixed seed, always passing the model's running `num_ctx`. No `"consent": true`, no run |
+| POST | /v1/verify | Re-runs a finding's test and compares: medians, ranges, what differed, and one of `improved`, `worse` or `no measurable change`. A verdict needs non-overlapping ranges, three receipts a side and a 5% difference in the medians |
+
+### Telemetry and history
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | /api/metrics | SSE stream — 1 Hz telemetry |
 | GET | /ws | WebSocket — 1 Hz telemetry (same payload as SSE, fallback transport) |
-| GET | /api/observations | 17 observation patterns with per-observation `routing_hint` (steer_away/reduce_batch/monitor) + node-level `routing_hint` + `routing_hint_source` |
+| GET | /api/observations | 18 observation patterns with per-observation `routing_hint` (steer_away/reduce_batch/monitor) + node-level `routing_hint` + `routing_hint_source` |
 | GET | /api/profile?minutes=60 | Inference Profiler — correlated TTFT/KV/queue/thermal/power timeline |
 | GET | /api/sla?window_min=60&target_ttft_ms=500 | Inference SLA Monitor — p50/p95/p99 for TTFT/E2E/TPOT, compliance vs target, per-model breakdown, recent violations |
-| GET | /api/v1/thermal-budget?node_id=X | Thermal Budget Calculator (Pro+, cloud) — predicts when pushing harder backfires. Sustainable rate, push threshold, time-to-Fair, penalized rate, plain-English advice |
-| POST | /api/v1/webhooks | Threshold Webhooks (Pro+) — register a subscription for state-transition push notifications. HMAC-SHA256 signed |
+| GET | /api/v1/thermal-budget?node_id=X | Thermal Budget Calculator (cloud) — predicts when pushing harder backfires. Sustainable rate, push threshold, time-to-Fair, penalized rate, plain-English advice |
+| POST | /api/v1/webhooks | Threshold Webhooks (cloud) — register a subscription for state-transition push notifications. HMAC-SHA256 signed |
 | GET | /api/v1/webhooks | List your webhook subscriptions |
 | DELETE | /api/v1/webhooks/:id | Remove a subscription |
 | POST | /api/v1/webhooks/:id/test | Fire a synthetic payload to test the URL |
@@ -724,25 +765,29 @@ curl "http://localhost:7700/api/history?node_id=$NODE_ID" | jq '.samples | lengt
 
 ## Fleet API v1
 
+**The hosted fleet backend is being shut down.** It still runs, and this
+section describes it accurately, but it serves the product that has been
+withdrawn: there are no paid plans and nothing here is tier-gated any more. The
+localhost agent above is the supported surface.
+
 Base URL: `https://wicklee.dev/api/v1`
 Auth: `X-API-Key: wk_live_...` header.
 
-**Key scopes:** keys are **personal** (see only your own nodes) or **org-wide** (see the whole organization fleet and inherit the org's subscription tier — for CI and automation that shouldn't ride on an individual's account). Org keys are minted and revoked by org Admins (`POST /api/v1/keys` with `"scope": "org"`); every member can see them in the key list. All key lifecycle events are captured in the audit log.
+**Key scopes:** keys are **personal** (see only your own nodes) or **org-wide** (see the whole organization fleet and see the whole organization fleet — for CI and automation that shouldn't ride on an individual's account). Org keys are minted and revoked by org Admins (`POST /api/v1/keys` with `"scope": "org"`); every member can see them in the key list. All key lifecycle events are captured in the audit log.
 
-| Method | Endpoint | Description | Tier |
-|--------|----------|-------------|------|
-| GET | /api/v1/fleet | All nodes with full MetricsPayload | All |
-| GET | /api/v1/fleet/wes | WES scores ranked | All |
-| GET | /api/v1/nodes/{id} | Single node deep dive | All |
-| GET | /api/v1/route/best | Routing recommendation | All |
-| GET | /api/v1/fleet/model-comparison?hours=168 | Fleet-wide per-model rollup (WES, tok/s, watts, TTFT, cost). Reads `metrics_5min`. 1–720h window. | All |
-| GET | /api/v1/fleet/model-switches?hours=24 | Cross-node model swap events via LAG over `metrics_raw`. 1–168h, capped at 200 rows. | All |
-| GET | /api/v1/fleet/cost-by-model?hours=24 | Fleet-wide per-model power cost at $0.16/kWh. 1–168h. | All |
-| GET | /api/v1/insights/latest | Fleet intelligence snapshot | Team+ |
-| GET | /metrics | Prometheus scrape endpoint | Team+ |
-| GET | /api/otel/config | OTel export configuration | Team+ |
-| PUT | /api/otel/config | Update OTel settings | Team+ |
-
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | /api/v1/fleet | All nodes with full MetricsPayload |
+| GET | /api/v1/fleet/wes | WES scores ranked |
+| GET | /api/v1/nodes/{id} | Single node deep dive |
+| GET | /api/v1/route/best | Routing recommendation |
+| GET | /api/v1/fleet/model-comparison?hours=168 | Fleet-wide per-model rollup (WES, tok/s, watts, TTFT, cost). Reads `metrics_5min`. 1–720h window. |
+| GET | /api/v1/fleet/model-switches?hours=24 | Cross-node model swap events via LAG over `metrics_raw`. 1–168h, capped at 200 rows. |
+| GET | /api/v1/fleet/cost-by-model?hours=24 | Fleet-wide per-model power cost at $0.16/kWh. 1–168h. |
+| GET | /api/v1/insights/latest | Fleet intelligence snapshot |
+| GET | /metrics | Prometheus scrape endpoint |
+| GET | /api/otel/config | OTel export configuration |
+| PUT | /api/otel/config | Update OTel settings |
 ---
 
 ## Teams & Organizations
@@ -769,15 +814,15 @@ Node removal is Admin-only. Unknown custom roles map to Member (never Admin). So
 
 ---
 
-## Audit Logging (Business+)
+## Audit Logging
 
-An immutable, append-only record of sensitive fleet operations — for SOC 2 / ISO change-management evidence and answering "who changed what, when." Backed by a Postgres `audit_log` table with **no UPDATE or DELETE path anywhere in the codebase**. Events are recorded for **every** tier; reading the trail is gated to **Business+**. Org members share one org-wide trail (tenant-scoped from the verified JWT — never a client header).
+An immutable, append-only record of sensitive fleet operations — for SOC 2 / ISO change-management evidence and answering "who changed what, when." Backed by a Postgres `audit_log` table with **no UPDATE or DELETE path anywhere in the codebase**. Org members share one org-wide trail (tenant-scoped from the verified JWT — never a client header).
 
 Recording is fire-and-forget: it runs off the request path and never delays or fails the operation being audited. The actor's email is resolved server-side, so callers only pass IDs.
 
 **Recorded actions (9):** `node.paired`, `node.removed`, `node.updated`, `alert_rule.created`, `alert_channel.created`, `webhook.created`, `api_key.created`, `api_key.deleted`, `stream_tokens.revoked`.
 
-**Endpoint:** `GET /api/audit-log` (Clerk JWT, Business+). Query params: `limit` (default 50, max 200), `before` (ts_ms cursor for pagination), `action` (exact-match filter). Returns `{ entries: [...], next_before }` where each entry carries `ts`, `actor_email`, `action`, `target`, and a JSON `details` object.
+**Endpoint:** `GET /api/audit-log` (Clerk JWT). Query params: `limit` (default 50, max 200), `before` (ts_ms cursor for pagination), `action` (exact-match filter). Returns `{ entries: [...], next_before }` where each entry carries `ts`, `actor_email`, `action`, `target`, and a JSON `details` object.
 
 ### Export
 
@@ -914,7 +959,7 @@ curl -X POST http://localhost:7700/mcp \
   -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"get_node_status"},"id":1}'
 ```
 
-### Cloud MCP Server (Team+)
+### Cloud MCP Server
 
 Fleet-aggregated MCP at `POST wicklee.dev/mcp`. Clerk JWT auth. 8 tools + 2 resources:
 
@@ -1075,9 +1120,14 @@ sudo systemctl restart wicklee
 
 Verify the proxy is active — your dashboard will show `proxy: :11434 → :11435` in the Diagnostics rail.
 
-### Tier note
+### Where the proxy's numbers show up
 
-The proxy works locally on any install. Proxy-derived metrics (E2E latency, request count, production tok/s) are visible in the fleet dashboard for **Pro tier and above**.
+The proxy works locally on any install, and its metrics (E2E latency, request
+count, production tok/s) are on the local dashboard and in the telemetry a
+paired node pushes. `POST /v1/receipts` is the other way to get exact
+per-request numbers without a proxy, and on a default macOS install it is the
+only one that works, because the proxy cannot bind 11434 while Ollama holds
+it.
 
 ### Runtime coverage
 
@@ -1095,7 +1145,7 @@ The proxy works locally on any install. Proxy-derived metrics (E2E latency, requ
 
 ## OpenTelemetry & Prometheus
 
-**Team tier required.**
+Both are cloud-side, and the hosted backend is being shut down.
 
 ### OpenTelemetry Export
 
@@ -1146,7 +1196,7 @@ Wicklee is sovereign by default:
 - No outbound connections by default — structural guarantee
 - Local dashboard at localhost:7700 works with zero configuration
 
-**Self-hosted control plane (Enterprise):** the entire fleet backend — ingest, dashboard, alerting, SLOs, cost governance — runs on your infrastructure via `deploy/self-hosted/docker-compose.yml` or the Helm chart at `deploy/helm/wicklee` (TimescaleDB + one Rust binary + nginx frontend, the same images behind wicklee.dev). Bring your own Clerk app for auth, pair agents against your URL, and nothing ships to wicklee.dev. Requires an Enterprise license (`WICKLEE_LICENSE_KEY`; evaluation mode without one). Full guide: `docs/SELF_HOSTING.md` in the repo, including a network-egress inventory for firewall policy.
+**Self-hosted control plane:** not maintained. `deploy/self-hosted/docker-compose.yml` and the Helm chart at `deploy/helm/wicklee` are frozen in the repository and are not tested against a current release; `docs/SELF_HOSTING.md` describes what they do and says so. A self-hostable coordinator is a later roadmap item and is not this code. The agent needs none of it: unpaired, nothing leaves the machine.
 
 ---
 
@@ -1177,26 +1227,10 @@ Wicklee is sovereign by default:
 
 ## Pricing
 
-| | Community | Team | Enterprise |
-|---|---|---|---|
-| Price | Free | $99/mo (10 nodes) · $200/mo (25 nodes) | Custom |
-| Local nodes | Unlimited | Unlimited | Unlimited |
-| Nodes in cloud fleet view | 3 | 10 or 25 | Unlimited |
-| History | 24h | 90 days | 12 months |
-| Patterns | 9 | 18 | 18 |
-| Local API + MCP | ✅ | ✅ | ✅ |
-| Fleet API (`/api/v1/*`) | — | ✅ | ✅ |
-| Cloud MCP | — | ✅ | ✅ |
-| OTel + Prometheus | — | ✅ | ✅ |
-| Alerts | — | Slack, Email, PagerDuty | All + SIEM |
-| Cost & chargeback reports | — | ✅ | ✅ |
-| Idle-waste + capacity planner | — | ✅ | ✅ |
-| SLOs with error budgets | — | ✅ | ✅ |
-| Audit log export + SIEM drain | — | — | ✅ |
-| SSO / SAML | — | — | ✅ |
-| Self-hosted control plane | — | — | ✅ |
-
-Contact for Team or Enterprise: jeff@wicklee.dev
+There are no paid plans today. The tiers introduced earlier are withdrawn
+pending a monetization plan grounded in actual usage, and the payment
+integration is being shut down with the rest of the hosted backend. The agent
+is open source under Apache 2.0 and needs no account.
 
 ---
 

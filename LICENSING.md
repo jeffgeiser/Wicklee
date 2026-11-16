@@ -21,7 +21,7 @@ The fleet control plane and the public website:
 
 - `cloud/` — the control-plane backend
 - `src/cloud/` — control-plane screens (organizations, SSO, audit log, SLOs,
-  chargeback, fleet history and the rest of the paid fleet features)
+  chargeback, fleet history and the rest of the fleet features)
 - `src/site/` — the wicklee.dev website
 - `deploy/helm/`, `deploy/self-hosted/` — control-plane deployment
 

@@ -1,5 +1,15 @@
 # Grafana + Prometheus
 
+> **The hosted control plane is not maintained.** Wicklee v0.15.0 is a single
+> binary on one host, reached over localhost; the paid tiers behind this
+> document are withdrawn (`docs/STRATEGY.md` §14) and the hosted backend, its
+> database and the payment integration are being shut down rather than left
+> running. `cloud/`, `src/cloud/` and the control-plane deployment files are
+> frozen in the repository, and whether they are deleted or kept as the Stage 4
+> starting point is step 7 of `docs/TRANSITION_PLAN.md`. Nothing below is
+> tested against a current release. It is kept as a description of what the
+> frozen code does, not as something to deploy.
+
 Wicklee already exposes a Prometheus scrape endpoint, so getting fleet
 efficiency into Grafana needs no plugin — just a scrape job and a dashboard
 import.
@@ -129,7 +139,7 @@ argument for measuring watts alongside tokens.
   (`/api/v1/fleet/cost-by-model`, `/api/v1/fleet/model-comparison`) or the
   chargeback endpoint.
 
-## Status of the rest of item 14
+## What was never built
 
 - **Prebuilt dashboards** — done (this file).
 - **Grafana datasource plugin** — not built. It would let Grafana query Wicklee's
@@ -137,8 +147,14 @@ argument for measuring watts alongside tokens.
   Prometheus gauges don't carry) instead of going through Prometheus. That is a
   signed plugin in its own repository with its own release cycle, not something
   that can live here.
-- **Terraform provider** — not built. See `docs/TERRAFORM.md` for what it would
-  manage and why it needs a separate repo.
+- **Terraform provider** — not built, and the API is the reason. The six
+  collection resources a provider would manage (alert channels, alert rules,
+  silences, SLOs, webhooks, model policies) are create/list/delete only: no
+  `GET /:id` and no `PATCH`, so every edit becomes destroy-then-create. That
+  means coverage gaps mid-apply, and webhook HMAC secrets silently rotating on
+  any unrelated field change, since the secret is returned only at creation.
+  Fixing the API comes first. The longer write-up was `docs/TERRAFORM.md`,
+  deleted with the other paid-tier documents; it is in git history.
 
 Listing this dashboard on
 [grafana.com/grafana/dashboards](https://grafana.com/grafana/dashboards) is a

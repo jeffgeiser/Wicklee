@@ -119,10 +119,10 @@ Run the bench scripts, commit the raw transcripts, add the host comparison to `d
 
 | # | Step | Status |
 | --- | --- | --- |
-| 1 | Release v0.15.0 | PR #105 open, two CI jobs failing |
+| 1 | Release v0.15.0 | **Waiting on the Maintainer.** PR #105 is green on all six checks and mergeable. Merge, then tag v0.15.0 from `main` |
 | 2 | Turn off payments | Not started |
 | 3 | Rewrite the public site | Not started |
-| 4 | Rewrite the public markdown | README done in PR #105 |
+| 4 | Rewrite the public markdown | Done in PR #106, stacked on #105. `GRAFANA.md` and `SELF_HOSTING.md` are bannered rather than deleted, pending step 7 |
 | 5 | Remove the demo | Not started |
 | 6 | Shut down Railway | Not started |
 | 7 | Decide the frozen cloud code | Not started |
