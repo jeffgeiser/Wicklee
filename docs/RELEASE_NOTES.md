@@ -31,7 +31,7 @@ Wicklee answers three questions about local inference, from the command line,
 HTTP and MCP: what is happening to my models, which ones can run safely right
 now, and did a change actually help. One binary, localhost, no account.
 
-### Four commands
+### Five commands
 
 ```bash
 wicklee inspect              # what is happening, what can run, what to change
