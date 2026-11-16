@@ -26,7 +26,7 @@ The component-level decisions are in the "Deployed infrastructure" section of `d
 | # | Step | Owner | Depends on |
 | --- | --- | --- | --- |
 | 1 | Release v0.15.0 | Claude Code, then Maintainer | Nothing |
-| 2 | Turn off payments | Maintainer | Nothing |
+| 2 | Turn off payments | **Done, 2026-11-16.** All Paddle products archived, no active subscriptions, and `PADDLE_CHECKOUT_ENABLED` set false on Railway — `/api/billing/status` now answers `{"checkout_enabled":false}`. Step 3's deploy removed the route as well: `wicklee.dev/pricing` serves the landing shell with no Subscribe button, no price and no Paddle reference |
 | 3 | Rewrite the public site | Claude Code | 2 |
 | 4 | Rewrite the public markdown | Claude Code | Nothing |
 | 5 | Remove the demo | Maintainer, then Claude Code | Nothing |
@@ -129,6 +129,6 @@ Run the bench scripts, commit the raw transcripts, add the host comparison to `d
 | 3 | Rewrite the public site | **Done in PR #108.** `PricingPage` and the checkout deleted, `LandingPage` rewritten around find/fix/verify, `DesignPartnersPage` deleted (its whole offer was a withdrawn tier), `TrustPage` reduced to the data boundary, five hosted-only sections out of `DocsPage`, billing terms out of `LegalPage`, Paddle out of the CSP. Both credibility errors fixed. `Team+` strings survive only in frozen `src/cloud/` chunks, which step 6 stops shipping |
 | 4 | Rewrite the public markdown | Done in PR #106, stacked on #105. `GRAFANA.md` and `SELF_HOSTING.md` are bannered rather than deleted, pending step 7 |
 | 5 | Remove the demo | Not started |
-| 6 | Shut down Railway | Not started |
+| 6 | Shut down Railway | **Unblocked** — step 3 is live. Item 1 is Claude Code's and the audit is done: `cloud_push.rs` fails silently (no log spam) but retries at 1 Hz with no backoff and never gives up, because a failed POST leaves `last_pushed_state` stale, which keeps `state_changed` true and bypasses the 2s throttle on every frame. Needs fixing before Railway stops |
 | 7 | Decide the frozen cloud code | Not started. Four documents wait on it: `LICENSING.md`, `CONTRIBUTING.md`, `GRAFANA.md`, `SELF_HOSTING.md` |
 | 8 | Second-host validation | Not started |
