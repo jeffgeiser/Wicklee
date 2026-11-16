@@ -455,11 +455,7 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
 
   if (!IS_AGENT && !isLoggedIn) {
     return (
-      <LandingPage
-        onSignIn={() => navigate('/sign-in')}
-        onSignUp={() => navigate('/sign-up')}
-        onNavigate={navigate}
-      />
+      <LandingPage onNavigate={navigate} />
     );
   }
 

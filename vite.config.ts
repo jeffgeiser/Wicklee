@@ -89,7 +89,6 @@ const STATIC_ROUTES: { path: string; priority: string }[] = [
   { path: '/',        priority: '1.0' },
   { path: '/docs',    priority: '0.8' },
   { path: '/blog',    priority: '0.8' },
-  { path: '/pricing', priority: '0.7' },
   // The metrics reference lives at /metrics-reference — bare /metrics is the
   // Prometheus scrape endpoint on wicklee.dev (nginx exact match), so it must
   // never appear here or crawlers would fetch scrape text.

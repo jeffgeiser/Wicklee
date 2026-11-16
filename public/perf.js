@@ -1,5 +1,5 @@
 /* Load-diagnostics overlay. Loaded by /fonts.js only when the URL carries
- * `perf` (e.g. https://wicklee.dev/pricing?perf=1); ordinary visitors never
+ * `perf` (e.g. https://wicklee.dev/docs?perf=1); ordinary visitors never
  * fetch this file.
  *
  * Phones have no Web Inspector, but every browser keeps a performance timeline

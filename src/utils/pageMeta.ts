@@ -17,10 +17,11 @@ const SITE_NAME   = 'Wicklee';
 /** Social/link-preview card (1200×630). Regenerate via scripts/gen-og-image.mjs. */
 const OG_IMAGE_URL = `${SITE_ORIGIN}/og-image.png`;
 
-export const DEFAULT_TITLE       = 'Wicklee — Private AI, finally observable.';
+export const DEFAULT_TITLE       = 'Wicklee — stop guessing why your local AI is slow.';
 export const DEFAULT_DESCRIPTION =
-  'Routing intelligence. True inference cost. Thermal state. Live, across every node. ' +
-  'Built for Ollama and vLLM. Install in 60 seconds — nothing to configure.';
+  'Evidence-based diagnostics, model readiness and performance verification for self-hosted ' +
+  'AI inference. Find what is wrong, see what will run now without displacing a loaded model, ' +
+  'and measure whether a change helped. One binary over localhost, for Ollama, vLLM and llama.cpp.';
 
 export interface PageMeta {
   title:       string;
