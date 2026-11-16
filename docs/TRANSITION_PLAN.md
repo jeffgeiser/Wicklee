@@ -101,13 +101,18 @@ Only after step 3 is live, so no public page links to the backend.
 2. **Maintainer:** export anything worth keeping from Postgres.
 3. **Maintainer:** stop both Railway services and the database.
 4. **Claude Code:** delete the root `Dockerfile`, `nginx.conf`, `entrypoint.sh` and `railway.toml`. Narrow the Cloudflare Pages build to `src/site/` so dashboard routes are no longer shipped to the static site.
-5. **Maintainer:** check wicklee.dev end to end, then close the Railway project.
+5. **Claude Code:** sweep the two repository files that go false the moment the backend stops, neither of which any earlier step names. `README.md` was marked handled in PR #105, but that PR removed only the pricing table and the Fleet View section — Cloud MCP Tools, the Enterprise Bridge and fleet mode are still described as things you can use. `SECURITY.md` lists "the fleet backend at `wicklee.dev`" in scope for vulnerability reports, which is a promise to a reporter about a service that will not exist.
+6. **Maintainer:** check wicklee.dev end to end, then close the Railway project.
 
-- **Done when:** wicklee.dev loads every page with Railway stopped, and the built site contains no dashboard code.
+- **Done when:** wicklee.dev loads every page with Railway stopped, the built site contains no dashboard code, and no tracked file tells a reader to use or report against the hosted backend.
 
 ### 7. Decide the frozen cloud code
 
 Maintainer. Once Railway is gone, `cloud/`, `src/cloud/`, `cloud_push.rs`, `pairing.rs`, `deploy/helm/` and `deploy/self-hosted/` have no deployment to talk to. Either delete them, which is the simpler position and is recoverable from git history, or keep them as the starting point for the self-hostable coordinator in Stage 4. Record the decision in `docs/STRATEGY.md`.
+
+Four documents follow whichever way it goes, and Claude Code picks them up once the decision is recorded. `LICENSING.md` splits the repository between Apache 2.0 and FSL-1.1-Apache-2.0 by directory; deleting those directories leaves a licence document with a second half that has no referent, and that is a legal statement rather than a wording fix — flag it rather than rewriting it unasked. `CONTRIBUTING.md` opens by telling a contributor the control plane is source-available, for the same reason. `GRAFANA.md` and `SELF_HOSTING.md` carry a banner from step 4 saying the control plane is not maintained; they were kept rather than deleted precisely so this decision would have the description of the code to decide about, so deleting the code means deleting them too.
+
+- **Done when:** the decision is in `docs/STRATEGY.md`, and no document describes a licence boundary or a deployment that the repository no longer has.
 
 ### 8. Second-host validation
 
@@ -125,5 +130,5 @@ Run the bench scripts, commit the raw transcripts, add the host comparison to `d
 | 4 | Rewrite the public markdown | Done in PR #106, stacked on #105. `GRAFANA.md` and `SELF_HOSTING.md` are bannered rather than deleted, pending step 7 |
 | 5 | Remove the demo | Not started |
 | 6 | Shut down Railway | Not started |
-| 7 | Decide the frozen cloud code | Not started |
+| 7 | Decide the frozen cloud code | Not started. Four documents wait on it: `LICENSING.md`, `CONTRIBUTING.md`, `GRAFANA.md`, `SELF_HOSTING.md` |
 | 8 | Second-host validation | Not started |
