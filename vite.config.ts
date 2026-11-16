@@ -94,7 +94,6 @@ const STATIC_ROUTES: { path: string; priority: string }[] = [
   // never appear here or crawlers would fetch scrape text.
   { path: '/metrics-reference', priority: '0.5' },
   { path: '/trust',           priority: '0.6' },
-  { path: '/design-partners', priority: '0.6' },
   { path: '/terms',   priority: '0.2' },
   { path: '/privacy', priority: '0.2' },
   { path: '/refund',  priority: '0.2' },

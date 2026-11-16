@@ -64,7 +64,6 @@ const MetricsPage        = React.lazy(() => import('./pages/MetricsPage'));
 const DocsPage           = IS_AGENT ? Absent : React.lazy(() => import('./site/DocsPage'));
 const LegalPage          = IS_AGENT ? Absent : React.lazy(() => import('./site/LegalPage'));
 const TrustPage          = IS_AGENT ? Absent : React.lazy(() => import('./site/TrustPage'));
-const DesignPartnersPage = IS_AGENT ? Absent : React.lazy(() => import('./site/DesignPartnersPage'));
 import PairingModal from './components/PairingModal';
 const AddNodeModal = IS_AGENT ? Absent : React.lazy(() => import('./cloud/AddNodeModal'));
 import { usePermissions } from './hooks/usePermissions';
@@ -401,9 +400,6 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
     if (currentPath === '/trust' || currentPath === '/trust/') {
       return lazyPage(<TrustPage onNavigate={navigate} />);
     }
-    if (currentPath === '/design-partners' || currentPath === '/design-partners/') {
-      return lazyPage(<DesignPartnersPage onNavigate={navigate} />);
-    }
 
     // Legal routes — public, no auth required
     if (currentPath === '/terms' || currentPath === '/terms/') {
@@ -419,11 +415,7 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
     // Blog routes — public, no auth required
     if (currentPath === '/blog' || currentPath === '/blog/') {
       return lazyPage(
-        <BlogListing
-          onNavigate={navigate}
-          onSignIn={() => navigate('/sign-in')}
-          onSignUp={() => navigate('/sign-up')}
-        />,
+        <BlogListing onNavigate={navigate} />,
       );
     }
     // Trailing-slash tolerant — the prerendered static pages live at
@@ -431,12 +423,7 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
     const blogPostMatch = currentPath.match(/^\/blog\/([^/]+?)\/?$/);
     if (blogPostMatch) {
       return lazyPage(
-        <BlogPost
-          slug={blogPostMatch[1]}
-          onNavigate={navigate}
-          onSignIn={() => navigate('/sign-in')}
-          onSignUp={() => navigate('/sign-up')}
-        />,
+        <BlogPost slug={blogPostMatch[1]} onNavigate={navigate} />,
       );
     }
   }

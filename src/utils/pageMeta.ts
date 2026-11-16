@@ -108,16 +108,9 @@ export const STATIC_PAGE_META: Record<string, PageMeta> = {
   },
   '/trust': {
     title:       'Trust & Security — Wicklee',
-    description: 'What leaves a node (hardware telemetry) vs what never does (prompts, templates). ' +
-                 'Tenancy, RBAC, append-only audit with SIEM streaming, and the self-hosted control plane.',
+    description: 'What leaves a node (hardware telemetry) vs what never does (prompts, responses, ' +
+                 'templates). Unpaired, the agent makes no outbound connection at all.',
     path:        '/trust',
-  },
-  '/design-partners': {
-    title:       'Design Partner Program — Wicklee',
-    description: 'Running private AI in production? A small number of design partners get ' +
-                 'the Enterprise tier free for 12 months — SSO, RBAC, audit export, SLOs and cost ' +
-                 'governance on your real fleet — for a logo, a case study, and monthly feedback.',
-    path:        '/design-partners',
   },
   '/terms': {
     title:       'Terms of Service — Wicklee',

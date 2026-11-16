@@ -1,18 +1,15 @@
 /**
- * TrustPage — /trust — the enterprise credibility page (GTM Rock 6).
+ * TrustPage — /trust — what the agent does and does not send.
  *
- * Answers the three questions a security reviewer asks before replying to
- * an outreach email: what data leaves my machines, who can touch it, and
- * what happens when we can't ship telemetry off-prem at all. Copy is drawn
- * from the June 2026 security reviews and docs/SELF_HOSTING.md — every claim
- * here is shipped behavior, not aspiration.
+ * Answers the question a security reviewer actually asks about a binary
+ * running on their hardware: what leaves this machine. The sections on
+ * tenancy, RBAC, the audit trail and the two deployment models were removed
+ * with the hosted control plane — they described a service being shut down.
+ * Every claim left here is behaviour of the agent in the current release.
  */
 
 import React, { useEffect } from 'react';
-import {
-  ArrowLeft, ShieldCheck, Server, Cloud, Lock, Eye, EyeOff,
-  FileText, Network, KeyRound, Building2,
-} from 'lucide-react';
+import { ArrowLeft, ShieldCheck, Lock, Eye, EyeOff, Network } from 'lucide-react';
 import { CONTACT_EMAIL, mailto } from './utils/contact';
 
 interface TrustPageProps {
@@ -99,84 +96,10 @@ const TrustPage: React.FC<TrustPageProps> = ({ onNavigate }) => {
         </Section>
 
         {/* Access control */}
-        <Section icon={KeyRound} title="Who can touch it: tenancy, RBAC, and keys">
-          <ul className="text-sm text-gray-400 space-y-2.5 list-disc pl-5 leading-relaxed">
-            <li>
-              <strong className="text-white">Tenancy from verified claims, never client headers.</strong>{' '}
-              Organization identity comes exclusively from the signed JWT's org claim — membership is
-              verified by the identity provider, and cross-tenant reads via forged headers are
-              structurally impossible.
-            </li>
-            <li>
-              <strong className="text-white">Role-based access control.</strong> Admin / Member / Viewer roles
-              enforced server-side at every mutating endpoint — Viewers get 403 on all writes, node
-              removal is Admin-only, unknown custom roles never escalate.
-            </li>
-            <li>
-              <strong className="text-white">SSO/SAML.</strong> Authentication is delegated to Clerk
-              and the backend reads only the user and org role from the session token, so an
-              SSO login carries the same RBAC and audit behaviour as any other. On a
-              self-hosted control plane you bring your own Clerk application and configure
-              enterprise SAML/OIDC in your own tenant against your own IdP — identity never
-              transits our infrastructure. On hosted wicklee.dev, SSO is available to Enterprise
-              on request, configured per organization.
-            </li>
-            <li>
-              <strong className="text-white">Scoped API keys.</strong> Personal keys see only your nodes;
-              org-scoped keys (Admin-minted, fully audited) see the org fleet. Key lifecycle events are
-              audit-logged with scope.
-            </li>
-            <li>
-              <strong className="text-white">Hardened pairing.</strong> 64-bit node identities, CSPRNG session
-              tokens, single-use expiring pair codes with atomic redemption, and rate-limited pairing
-              endpoints — findings from the June 2026 security review, all shipped.
-            </li>
-          </ul>
-        </Section>
-
-        {/* Audit */}
-        <Section icon={FileText} title="Audit trail: append-only, exportable, streamable">
-          <p className="text-sm text-gray-400 leading-relaxed">
-            Every sensitive operation — node pairing/removal, alert and webhook changes, API-key
-            lifecycle, config changes, exports themselves — lands in an <strong className="text-white">append-only
-            audit log</strong> (no update or delete paths exist in the codebase). Business+ tenants can read it
-            in-app, export the full history as CSV/JSON (formula-injection-hardened), or stream it
-            continuously to a SIEM via HMAC-signed webhook batches with automatic tier re-verification
-            and delivery-failure cutoff. Retention: unlimited — audit entries are never pruned.
-          </p>
-        </Section>
-
-        {/* Deployment options */}
-        <Section icon={Server} title="Two deployment models — including fully yours">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="rounded-2xl border border-gray-700 bg-gray-800/40 p-5 space-y-2">
-              <div className="flex items-center gap-2 text-sm font-semibold text-white">
-                <Cloud className="w-4 h-4 text-blue-400" /> wicklee.dev (hosted)
-              </div>
-              <p className="text-sm text-gray-400 leading-relaxed">
-                Hardware telemetry only, stored in Postgres on Railway, tenant-isolated as described
-                above. The health endpoint deliberately exposes zero platform statistics.
-              </p>
-            </div>
-            <div className="rounded-2xl border border-gray-700 bg-gray-800/40 p-5 space-y-2">
-              <div className="flex items-center gap-2 text-sm font-semibold text-white">
-                <Building2 className="w-4 h-4 text-emerald-400" /> Self-hosted control plane (Enterprise)
-              </div>
-              <p className="text-sm text-gray-400 leading-relaxed">
-                The entire backend — ingest, dashboard, alerting, SLOs, cost governance — on your
-                infrastructure via Docker Compose or Helm. Same images that run wicklee.dev.
-                No telemetry crosses your network boundary.
-              </p>
-            </div>
-          </div>
-        </Section>
-
-        {/* Compliance honesty */}
         <Section icon={ShieldCheck} title="Compliance posture — the honest version">
           <ul className="text-sm text-gray-400 space-y-2 list-disc pl-5 leading-relaxed">
             <li>Independent security review completed June 2026 (auth/tenancy, agent concurrency, frontend); all required findings shipped — the review write-ups live in the public repo's engineering journal.</li>
-            <li>Wicklee is <strong className="text-white">not yet SOC 2 certified</strong>. The control surface that certification audits — RBAC, append-only audit, SIEM export, tenancy isolation — is built and documented above; certification is planned when a customer engagement requires it.</li>
-            <li>The agent that runs on your nodes is open source (Apache 2.0) and the control plane is source-available, both on GitHub — verify any claim on this page against the code.</li>
+            <li>The agent that runs on your nodes is open source (Apache 2.0) on GitHub — verify any claim on this page against the code.</li>
           </ul>
         </Section>
 
@@ -187,13 +110,8 @@ const TrustPage: React.FC<TrustPageProps> = ({ onNavigate }) => {
             <h2 className="text-base font-bold text-white">Evaluating for your organization?</h2>
           </div>
           <p className="text-sm text-gray-400 leading-relaxed">
-            Security questionnaires, architecture review calls, or a self-hosted evaluation license:{' '}
+            Security questionnaires or an architecture review call:{' '}
             <a href={mailto(CONTACT_EMAIL)} className="text-emerald-400 underline">{CONTACT_EMAIL}</a>.
-            Running private AI in a regulated environment? Our{' '}
-            <button onClick={() => onNavigate('/design-partners')} className="text-emerald-400 underline">
-              design-partner program
-            </button>{' '}
-            gives a small number of companies Enterprise free for a year.
           </p>
         </div>
       </div>

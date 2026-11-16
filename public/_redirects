@@ -23,7 +23,6 @@
 # leaves the URL alone, so App.tsx sees the real path.
 
 /trust              /   200
-/design-partners    /   200
 /metrics-reference  /   200
 /terms              /   200
 /privacy            /   200
