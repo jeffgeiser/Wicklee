@@ -1,5 +1,5 @@
 import React from 'react';
-import { ArrowLeft, Terminal, Zap, Settings, Cpu, Globe, Info, Lightbulb, Shield, Activity, Clock, BarChart2, Users, Bell, Stethoscope } from 'lucide-react';
+import { ArrowLeft, Terminal, Zap, Settings, Cpu, Globe, Info, Lightbulb, Shield, Activity, Clock, BarChart2, Stethoscope } from 'lucide-react';
 import Logo from '../components/Logo';
 import { CopyButton } from '../components/shared/CopyButton';
 
@@ -87,17 +87,12 @@ const NAV = [
   { id: 'multi-model', label: 'Multi-Model' },
   { id: 'model-discovery', label: 'Model Discovery' },
   { id: 'intelligence', label: 'Pattern Intelligence' },
-  { id: 'alerts',      label: 'Alerts & Notifications' },
   { id: 'event-feeds', label: 'Event Feeds' },
   { id: 'runtime-config', label: 'Runtime Config' },
   { id: 'deep-intel',   label: 'Deep Intelligence' },
   { id: 'api-local',   label: 'Localhost API' },
-  { id: 'api-fleet',   label: 'Fleet API v1' },
-  { id: 'teams',       label: 'Teams & Orgs' },
-  { id: 'audit-log',   label: 'Audit Log' },
   { id: 'mcp',         label: 'MCP Server' },
   { id: 'proxy',       label: 'Inline Proxy' },
-  { id: 'otel',        label: 'OTel & Prometheus' },
   { id: 'config',      label: 'Configuration' },
   { id: 'sovereignty', label: 'Sovereignty' },
   { id: 'data-flow',   label: 'Data Flow' },
@@ -260,12 +255,6 @@ const DocsPage: React.FC<DocsPageProps> = ({ onNavigate }) => {
               </NoteBox>
             </div>
 
-            {/* Fleet pairing */}
-            <div>
-              <p className="font-semibold text-white mb-2">Connect to your fleet dashboard</p>
-              <p>To add a node to your hosted fleet at wicklee.dev, generate a 6-digit pairing code from the agent UI and enter it at <span className="text-gray-300">wicklee.dev → Pair a node</span>. No SSH, no firewall changes — the agent initiates the outbound connection.</p>
-            </div>
-
             {/* Upgrading */}
             <div>
               <p className="font-semibold text-white mb-2">Upgrading Wicklee</p>
@@ -346,7 +335,7 @@ sudo ~/.wicklee/bin/wicklee --install-service   # re-install as daemon`}</Code>
                   </tr>
                   <tr>
                     <td className="py-3 pr-6 font-mono text-xs text-indigo-300 align-top">wicklee --pair</td>
-                    <td className="py-3 text-gray-400 align-top">Start the agent and generate a 6-digit pairing code — the agent runs normally while displaying the code. Useful for headless servers (SSH session). Enter the code at <span className="text-gray-300">wicklee.dev → Pair a node</span>.</td>
+                    <td className="py-3 text-gray-400 align-top">Start the agent and generate a 6-digit code for pairing with the hosted fleet view. That service is being shut down, so the flag has no destination to pair with; nothing on a single host needs it.</td>
                   </tr>
                   <tr>
                     <td className="py-3 pr-6 font-mono text-xs text-indigo-300 align-top">wicklee --version</td>
@@ -397,7 +386,7 @@ sudo ~/.wicklee/bin/wicklee --install-service   # re-install as daemon`}</Code>
                     <tr>
                       <td className="py-3 pr-6 font-mono text-xs text-amber-300 align-top">WICKLEE_CLOUD_URL</td>
                       <td className="py-3 pr-6 font-mono text-xs text-gray-500 align-top">hosted wicklee.dev</td>
-                      <td className="py-3 text-gray-400 align-top">Override the fleet cloud endpoint the agent pairs with and pushes telemetry to. Set it before pairing for self-hosted or dev fleet deployments.</td>
+                      <td className="py-3 text-gray-400 align-top">Override the fleet endpoint the agent pushes telemetry to. Only relevant to a paired node, and the hosted fleet view is being shut down.</td>
                     </tr>
                     <tr>
                       <td className="py-3 pr-6 font-mono text-xs text-amber-300 align-top">WICKLEE_OLLAMA_PORT</td>
@@ -414,14 +403,6 @@ sudo ~/.wicklee/bin/wicklee --install-service   # re-install as daemon`}</Code>
               </div>
             </div>
 
-            {/* Pairing without localhost */}
-            <NoteBox>
-              <span>
-                <strong className="text-white">Headless pairing</strong> — on a remote server where you can't open a browser, run{' '}
-                <code className="font-mono text-xs text-gray-300">wicklee --pair</code>{' '}
-                and the 6-digit code prints directly to your terminal. You have 5 minutes to enter it at wicklee.dev.
-              </span>
-            </NoteBox>
           </Section>
 
 
@@ -739,7 +720,7 @@ Not checked: cpu_split (this host has unified memory, so there is no accelerator
                 Big-iron GPUs (H100, A100, DGX Spark / GB10) running batch=1 small workloads will show <strong className="text-gray-200">persistently low WES</strong> because their idle baseline power dominates per-token energy cost. A Spark drawing ~64W idle on a 32B FP8 model decoded at the memory-bandwidth ceiling produces tok/W ≈ 0.10 — that's physics, not a misconfiguration.
               </p>
               <p className="text-xs text-gray-400 leading-relaxed mt-2">
-                The <code className="text-gray-300 font-mono text-[11px]">bandwidth_ceiling_reached</code> Team-tier pattern fires an <em>info</em>-severity observation when a node is at the physics ceiling for its hardware/quant pair. The Model Fit Analysis fleet headline reflects the same nuance: low-efficiency rows are tagged "informational" — the red <strong className="text-red-400">"needs attention"</strong> bucket is reserved for genuine memory risk (OOM / swap pressure).
+                The <code className="text-gray-300 font-mono text-[11px]">bandwidth_ceiling_reached</code> pattern fires an <em>info</em>-severity observation when a node is at the physics ceiling for its hardware/quant pair. The Model Fit Analysis fleet headline reflects the same nuance: low-efficiency rows are tagged "informational" — the red <strong className="text-red-400">"needs attention"</strong> bucket is reserved for genuine memory risk (OOM / swap pressure).
               </p>
             </div>
 
@@ -834,7 +815,7 @@ WES Version:     2
                 Reports are available as <code className="text-gray-300 font-mono text-xs bg-gray-800 px-1.5 py-0.5 rounded">.md</code> (human-readable) and <code className="text-gray-300 font-mono text-xs bg-gray-800 px-1.5 py-0.5 rounded">.json</code> (machine-readable). The JSON format includes all fields above plus a full provenance record — runtime, quantization, thermal source, and WES version — so comparisons across hardware remain unambiguous.
               </p>
               <p>
-                The WES Trend chart (Mission Control, Team+) also includes a per-node <strong className="text-white">Export</strong> button that snapshots the most recent history point from the selected time window.
+                The WES Trend chart also includes a per-node <strong className="text-white">Export</strong> button that snapshots the most recent history point from the selected time window.
               </p>
             </div>
           </Section>
@@ -1180,7 +1161,6 @@ WES Version:     2
               <table className="w-full mt-3">
                 <thead>
                   <tr className="text-left text-[10px] text-gray-500 uppercase tracking-widest border-b border-gray-700">
-                    <th className="pb-2 pr-4">Tier</th>
                     <th className="pb-2 pr-4">When it fires</th>
                     <th className="pb-2 pr-4">Range</th>
                     <th className="pb-2">Source</th>
@@ -1281,22 +1261,18 @@ WES Version:     2
                 </thead>
                 <tbody className="text-xs divide-y divide-gray-800/50">
                   <tr>
-                    <td className="py-2 pr-4 text-gray-300">Community</td>
                     <td className="py-2 pr-4 text-gray-400">Local discovery — scored against this machine</td>
                     <td className="py-2 text-gray-500 font-mono">GET /api/model-candidates</td>
                   </tr>
                   <tr>
-                    <td className="py-2 pr-4 text-gray-300">Community</td>
                     <td className="py-2 pr-4 text-gray-400">Fleet discovery — scored against every online node</td>
                     <td className="py-2 text-gray-500 font-mono">GET /api/fleet/model-candidates (JWT)</td>
                   </tr>
                   <tr>
-                    <td className="py-2 pr-4 text-gray-300">Team</td>
                     <td className="py-2 pr-4 text-gray-400">Hardware simulation — "what if I had a 4090?"</td>
                     <td className="py-2 text-gray-500 font-mono">GET /api/v1/models/discover?simulate_hw=</td>
                   </tr>
                   <tr>
-                    <td className="py-2 pr-4 text-gray-300">Team</td>
                     <td className="py-2 pr-4 text-gray-400">Fleet matching — which nodes can run this model?</td>
                     <td className="py-2 text-gray-500 font-mono">GET /api/v1/models/discover?fleet=true</td>
                   </tr>
@@ -1382,12 +1358,12 @@ WES Version:     2
               The Insights → Triage tab runs a time-windowed pattern engine against your node's telemetry history. Patterns require a sustained evidence window before firing — single-frame spikes never produce an alert. Each observation includes actionable commands tailored to your platform (macOS, Linux, or NVIDIA).
             </p>
             <p>
-              Wicklee evaluates 20 observation patterns plus 5 fleet health alerts. The Rust agent evaluates 18 patterns locally against a 10-minute DuckDB buffer every 10 seconds. Two patterns (<code className="text-gray-400 font-mono text-xs">fleet_load_imbalance</code>, <code className="text-gray-400 font-mono text-xs">wes_long_term_drift</code>) require multi-node fleet context or 7-day historical data and run in the cloud evaluator. When paired with wicklee.dev, agent observations are pushed to the cloud automatically for fleet-wide visibility. On the local dashboard all 18 agent patterns are free. In the cloud fleet view, Community accounts see the 9 Community agent patterns plus fleet load imbalance; the other 10 require Team.
+              The Rust agent evaluates 18 patterns against a 10-minute DuckDB buffer every 10 seconds. All 18 run on every host; there is no gating. <code className="text-gray-400 font-mono text-xs">GET /v1/inspect</code> carries the same conditions with each statement labelled by its evidence, which is the supported way to read them.
             </p>
 
             {/* ── Agent-evaluated observations ── */}
             <p className="text-xs font-bold text-emerald-400 uppercase tracking-wider mt-4">Agent Observations (18 patterns)</p>
-            <p className="text-xs text-gray-500 mb-2">Evaluated by the Rust agent against the local 10-minute DuckDB buffer via <code className="text-gray-400 font-mono text-xs">GET /api/observations</code>. Pushed to the fleet cloud when paired. No fleet connection required for localhost.</p>
+            <p className="text-xs text-gray-500 mb-2">Evaluated by the Rust agent against the local 10-minute DuckDB buffer via <code className="text-gray-400 font-mono text-xs">GET /api/observations</code>, or with evidence labels via <code className="text-gray-400 font-mono text-xs">GET /v1/inspect</code>. No network connection of any kind is required.</p>
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
@@ -1396,7 +1372,6 @@ WES Version:     2
                     <Th>What it detects</Th>
                     <Th>Primary action</Th>
                     <Th>Window</Th>
-                    <Th>Tier</Th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1405,190 +1380,113 @@ WES Version:     2
                     <Td>Sustained throttle state reducing tok/s vs. the node's own Normal-temperature baseline (&gt; 8% degradation)</Td>
                     <Td><code className="text-[10px] text-gray-500">sudo powermetrics --samplers gpu_power</code></Td>
                     <Td mono>5 min</Td>
-                    <Td>Community</Td>
                   </tr>
                   <tr>
                     <Td><code className="font-medium text-violet-400">phantom_load</code></Td>
                     <Td>Model loaded + power &gt; 5W + tok/s &lt; 0.5 — idle model burning electricity with no inference</Td>
                     <Td><code className="text-[10px] text-gray-500">ollama stop &lt;model&gt;</code></Td>
                     <Td mono>5 min</Td>
-                    <Td>Community</Td>
                   </tr>
                   <tr>
                     <Td><code className="font-medium text-indigo-400">wes_velocity_drop</code></Td>
                     <Td>Efficiency score declining &gt; 10% over a sustained period before thermal state has changed — early warning</Td>
                     <Td><code className="text-[10px] text-gray-500">curl localhost:7700/api/metrics/snapshot</code></Td>
                     <Td mono>10 min</Td>
-                    <Td>Community</Td>
                   </tr>
                   <tr>
                     <Td><code className="font-medium text-cyan-400">memory_trajectory</code></Td>
                     <Td>Memory pressure rising &gt; 1 pct/min sustained — projected to hit critical threshold before operator can react</Td>
                     <Td><code className="text-[10px] text-gray-500">ollama ps</code></Td>
                     <Td mono>10 min</Td>
-                    <Td>Community</Td>
                   </tr>
                   <tr>
                     <Td><code className="font-medium text-yellow-400">power_jitter</code></Td>
                     <Td>Mean power &gt; 30W with active inference and coefficient of variation &gt; 20% — unstable power delivery or erratic batch scheduling</Td>
                     <Td><code className="text-[10px] text-gray-500">Reduce batch concurrency</code></Td>
                     <Td mono>5 min</Td>
-                    <Td>Community</Td>
                   </tr>
                   <tr>
                     <Td><code className="font-medium text-rose-400">swap_io_pressure</code></Td>
                     <Td>Swap write rate &gt; 2 MB/s sustained — model layers spilling to disk, degrading throughput. Escalates to "Swap Storm" at &gt; 10 MB/s</Td>
                     <Td><code className="text-[10px] text-gray-500">ollama ps</code></Td>
                     <Td mono>5 min</Td>
-                    <Td>Community</Td>
                   </tr>
                   <tr>
                     <Td><code className="font-medium text-lime-400">clock_drift</code></Td>
                     <Td>Clock throttle &gt; 15% during inference with Normal thermal state — power cap or driver limit constraining clocks, not heat</Td>
                     <Td><code className="text-[10px] text-gray-500">nvidia-smi -q -d CLOCK</code> / <code className="text-[10px] text-gray-500">sudo cpupower frequency-info</code></Td>
                     <Td mono>5 min</Td>
-                    <Td>Community</Td>
                   </tr>
                   <tr>
                     <Td><code className="font-medium text-red-400">nvidia_thermal_redline</code></Td>
                     <Td>GPU temperature &gt; 85°C sustained or &gt; 90°C instantaneous — driver will aggressively throttle clocks. NVIDIA only</Td>
                     <Td><code className="text-[10px] text-gray-500">nvidia-smi -q -d TEMPERATURE</code></Td>
                     <Td mono>2 min</Td>
-                    <Td>Team</Td>
                   </tr>
                   <tr>
                     <Td><code className="font-medium text-emerald-400">vram_overcommit</code></Td>
                     <Td>Loaded model consumes &gt; 90% of VRAM/unified memory — no headroom for KV cache, context, or concurrency</Td>
                     <Td><code className="text-[10px] text-gray-500">ollama ps</code> / <code className="text-[10px] text-gray-500">nvidia-smi</code></Td>
                     <Td mono>instant</Td>
-                    <Td>Community</Td>
                   </tr>
                   <tr>
                     <Td><code className="font-medium text-purple-400">power_gpu_decoupling</code></Td>
                     <Td>High power draw (&gt; 50W) with active inference but GPU utilization &lt; 20% — layers running on CPU instead of GPU</Td>
                     <Td><code className="text-[10px] text-gray-500">ollama ps</code></Td>
                     <Td mono>5 min</Td>
-                    <Td>Team</Td>
                   </tr>
                   <tr>
                     <Td><code className="font-medium text-teal-400">bandwidth_saturation</code></Td>
                     <Td>GPU utilization &lt; 40% but VRAM &gt; 80% full with WES dropping — memory bandwidth bottleneck, not compute</Td>
                     <Td><code className="text-[10px] text-gray-500">Switch to smaller quantization</code></Td>
                     <Td mono>5 min</Td>
-                    <Td>Team</Td>
                   </tr>
                   <tr>
                     <Td><code className="font-medium text-fuchsia-400">efficiency_drag</code></Td>
                     <Td>WES penalty_avg &gt; 30% loss with Normal thermal state, active GPU, and no memory pressure — hidden context/batch inefficiency</Td>
                     <Td><code className="text-[10px] text-gray-500">Reduce context length / batch</code></Td>
                     <Td mono>5 min</Td>
-                    <Td>Team</Td>
                   </tr>
                   <tr>
                     <Td><code className="font-medium text-orange-400">pcie_lane_degradation</code></Td>
                     <Td>PCIe link width below rated maximum (e.g. x8 in x16 slot) — bandwidth loss affecting GPU ↔ CPU transfers. NVIDIA only, no root required. Not available on virtualised GPUs.</Td>
                     <Td><code className="text-[10px] text-gray-500">nvidia-smi -q -d PCIE</code></Td>
                     <Td mono>5 min</Td>
-                    <Td>Community</Td>
                   </tr>
                   <tr>
                     <Td><code className="font-medium text-pink-400">vllm_kv_cache_saturation</code></Td>
                     <Td>vLLM KV cache &gt; 90% full — scheduler cannot admit new sequences, requests will queue or return 503</Td>
                     <Td><code className="text-[10px] text-gray-500">curl localhost:8000/metrics | grep cache</code></Td>
                     <Td mono>3 min</Td>
-                    <Td>Team</Td>
                   </tr>
                   <tr>
                     <Td><code className="font-medium text-pink-400">ttft_regression</code></Td>
                     <Td>Time to first token growing &gt; +5 ms/min with mean TTFT &gt; 100 ms — queue contention, model swap, or prompt complexity increase</Td>
                     <Td><code className="text-[10px] text-gray-500">curl localhost:7700/api/metrics/snapshot | jq .vllm_requests_waiting</code></Td>
                     <Td mono>10 min</Td>
-                    <Td>Team</Td>
                   </tr>
                   <tr>
                     <Td><code className="font-medium text-red-300">latency_spike</code></Td>
                     <Td>Recent E2E latency &gt; 1.5x baseline and &gt; 500 ms — inference pipeline bottleneck</Td>
                     <Td><code className="text-[10px] text-gray-500">Reduce batch concurrency</code></Td>
                     <Td mono>10 min</Td>
-                    <Td>Team</Td>
                   </tr>
                   <tr>
                     <Td><code className="font-medium text-violet-300">vllm_queue_saturation</code></Td>
                     <Td>vLLM requests_waiting avg &gt; 3 sustained — incoming requests exceed engine capacity, needs horizontal scaling or routing</Td>
                     <Td><code className="text-[10px] text-gray-500">curl localhost:8000/metrics | grep vllm_num_requests</code></Td>
                     <Td mono>5 min</Td>
-                    <Td>Team</Td>
                   </tr>
                   <tr>
                     <Td><code className="font-medium text-blue-300">bandwidth_ceiling_reached</code></Td>
                     <Td><span className="text-blue-300 font-medium">[info]</span> Sustained tok/s ≥ 65% of theoretical memory-bandwidth ceiling for the loaded model + quant, with GPU &lt; 95% — explains "Low" tok/W as physics, not pathology. Per-chip bandwidth lookup (Apple M-series, NVIDIA H100/H200/A100/RTX, DGX Spark/GB10).</Td>
                     <Td><code className="text-[10px] text-gray-500">Switch to smaller quant or raise batch size</code></Td>
                     <Td mono>5 min</Td>
-                    <Td>Team</Td>
                   </tr>
                 </tbody>
               </table>
             </div>
 
-            {/* ── Fleet observations (cloud-evaluated) ── */}
-            <p className="text-xs font-bold text-blue-400 uppercase tracking-wider mt-6">Fleet Observations + Cloud Alerts (6)</p>
-            <p className="text-xs text-gray-500 mb-2">Evaluated by the cloud backend every 60 seconds. Require fleet pairing with wicklee.dev. <code className="text-gray-400 font-mono text-xs">fleet_load_imbalance</code> is a cross-node observation pattern; the other 5 are fleet health alerts that monitor node liveness and stability.</p>
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr>
-                    <Th>Alert ID</Th>
-                    <Th>What it detects</Th>
-                    <Th>Threshold</Th>
-                    <Th>Tier</Th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <Td><code className="font-medium text-sky-400">fleet_load_imbalance</code></Td>
-                    <Td>Node thermally stressed or WES &gt; 20% below best healthy peer while a cooler node has spare capacity</Td>
-                    <Td>2+ thermal ticks or 20% WES gap</Td>
-                    <Td>Team</Td>
-                  </tr>
-                  <tr>
-                    <Td><code className="font-medium text-indigo-300">wes_long_term_drift</code></Td>
-                    <Td>Penalized WES has drifted ≥15% between the prior 6-day baseline and the most recent 24h. Detects gradual degradation: dust, thermal paste aging, driver regression, background process creep. The 7-day WES history chart shows a matching drift annotation when this fires.</Td>
-                    <Td>≥15% drop · 6h evaluation cadence · ≥100 baseline samples + ≥30 recent · 24h cooldown</Td>
-                    <Td>Team</Td>
-                  </tr>
-                  <tr>
-                    <Td><code className="font-medium text-red-400">zombied_engine</code></Td>
-                    <Td>Inference engine stuck in "busy" state — no tokens produced despite sustained GPU reservation</Td>
-                    <Td>10+ consecutive 60s ticks</Td>
-                    <Td>All</Td>
-                  </tr>
-                  <tr>
-                    <Td><code className="font-medium text-orange-400">thermal_redline</code></Td>
-                    <Td>Node in "Critical" thermal state — hardware will aggressively throttle or shut down</Td>
-                    <Td>2+ consecutive 60s ticks</Td>
-                    <Td>All</Td>
-                  </tr>
-                  <tr>
-                    <Td><code className="font-medium text-amber-400">oom_warning</code></Td>
-                    <Td>Memory pressure exceeds 95% — system at risk of OOM kill or swap storm</Td>
-                    <Td>2+ consecutive 60s ticks</Td>
-                    <Td>All</Td>
-                  </tr>
-                  <tr>
-                    <Td><code className="font-medium text-yellow-400">wes_cliff</code></Td>
-                    <Td>WES dropped below 35% of 24h baseline during active inference — efficiency collapse</Td>
-                    <Td>&lt; 35% baseline AND &lt; 3.0 absolute</Td>
-                    <Td>All</Td>
-                  </tr>
-                  <tr>
-                    <Td><code className="font-medium text-gray-400">agent_version_mismatch</code></Td>
-                    <Td>Node running a different agent version than the fleet majority — potential compatibility issue</Td>
-                    <Td>Version differs from majority</Td>
-                    <Td>All</Td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
 
             <div className="bg-gray-900 border border-violet-500/20 rounded-xl p-4 space-y-2 mt-4">
               <p className="text-xs font-bold text-violet-400 uppercase tracking-wider">Alert lifecycle</p>
@@ -1628,93 +1526,10 @@ WES Version:     2
                 API (localhost, no auth): <code className="text-gray-300 font-mono text-[10px]">GET/PUT /api/deployment-profile</code>.
               </p>
               <p className="text-xs text-gray-400 leading-relaxed">
-                <strong className="text-white">Fleet config management:</strong> set profiles centrally — the Profile column in Settings → Node Configuration (<code className="text-gray-300 font-mono text-[10px]">PATCH /api/nodes/:id</code>, Team+) or bulk by tag with <code className="text-gray-300 font-mono text-[10px]">POST /api/fleet/config</code> (Team+, e.g. all <code className="text-gray-300 font-mono text-[10px]">env:prod</code> nodes → <code className="text-gray-300 font-mono text-[10px]">production_fleet</code>). The desired profile rides every telemetry response; agents apply it within ~2s and report their actual profile in every frame, so the dashboard shows truth, not intent. Bulk applies are audited.
               </p>
             </div>
           </Section>
 
-          {/* ── Alerts & Notifications ── */}
-          <Section
-            id="alerts"
-            icon={<Bell className="w-5 h-5" />}
-            accent="border-red-500/20"
-            title="Alerts & Notifications"
-          >
-            <p>
-              When an observation pattern fires or a fleet alert triggers, Wicklee can deliver notifications to external channels. Alerts are configured in Settings → Alerts on the cloud dashboard.
-            </p>
-
-            <p className="text-xs text-gray-400 leading-relaxed mt-2">
-              <strong className="text-white">Scoping:</strong> a rule can target the whole fleet, a single node, and/or a <strong className="text-white">tag</strong> — e.g. <code className="text-gray-300 font-mono text-[10px]">env:prod</code> to alert only on production nodes. Tags are comma-separated per node (Settings → Node Configuration, Team+), matched case- and space-insensitively; the <code className="text-gray-300 font-mono text-[10px]">env:</code> prefix is the environment convention. Threshold webhooks accept the same optional tag scope.
-            </p>
-
-            <p className="text-xs text-gray-400 leading-relaxed mt-2">
-              <strong className="text-white">Silences &amp; maintenance windows (Team+):</strong> suppress alert rules and threshold webhooks for a duration — by node, tag, and/or event type — so a planned driver upgrade doesn't page everyone. A future start time makes it a scheduled maintenance window. Managed in Settings → Alerts → Silences (<code className="text-gray-300 font-mono text-[10px]">POST/GET/DELETE /api/alerts/silences</code>); org members share silences, and every create/delete is audit-logged.
-            </p>
-
-            <p className="text-xs font-bold text-red-400 uppercase tracking-wider mt-4">Notification Channels by Tier</p>
-            <div className="overflow-x-auto mt-2">
-              <table className="w-full">
-                <thead>
-                  <tr>
-                    <Th>Channel</Th>
-                    <Th>Configuration</Th>
-                    <Th>Tier</Th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <Td><span className="font-medium text-indigo-400">Slack</span></Td>
-                    <Td>Incoming Webhook URL from your Slack workspace. Create one at <code className="text-gray-400 font-mono text-xs">api.slack.com/messaging/webhooks</code>.</Td>
-                    <Td>Team+</Td>
-                  </tr>
-                  <tr>
-                    <Td><span className="font-medium text-blue-400">Email</span></Td>
-                    <Td>Any email address. Delivered via Resend (alerts@wicklee.dev sender).</Td>
-                    <Td>Team+</Td>
-                  </tr>
-                  <tr>
-                    <Td><span className="font-medium text-green-400">PagerDuty</span></Td>
-                    <Td>Integration Key (Routing Key) from a PagerDuty service. In PagerDuty: Services → select service → Integrations → Add Integration → Events API v2 → copy the <strong className="text-white">Integration Key</strong>. Uses <a href="https://developer.pagerduty.com/docs/events-api-v2/overview/" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">Events API v2</a>. Incidents auto-resolve when the condition clears.</Td>
-                    <Td>Team+</Td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-
-            <p className="text-xs font-bold text-red-400 uppercase tracking-wider mt-6">Setup</p>
-            <div className="space-y-3 mt-2">
-              <div className="flex gap-3">
-                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-red-600 text-white text-xs font-bold shrink-0">1</span>
-                <div>
-                  <p className="text-sm text-gray-200 font-medium">Create a notification channel</p>
-                  <p className="text-xs text-gray-500">Settings → Alerts → Add Channel. Choose Slack, Email, or PagerDuty and provide the webhook URL, email address, or routing key.</p>
-                </div>
-              </div>
-              <div className="flex gap-3">
-                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-red-600 text-white text-xs font-bold shrink-0">2</span>
-                <div>
-                  <p className="text-sm text-gray-200 font-medium">Test the channel</p>
-                  <p className="text-xs text-gray-500">Click "Test" next to the channel to send a test alert. Verify it arrives before creating rules.</p>
-                </div>
-              </div>
-              <div className="flex gap-3">
-                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-red-600 text-white text-xs font-bold shrink-0">3</span>
-                <div>
-                  <p className="text-sm text-gray-200 font-medium">Create alert rules</p>
-                  <p className="text-xs text-gray-500">Settings → Alerts → Add Rule. Choose an event type (e.g. <code className="text-gray-400 font-mono text-[10px]">thermal_redline</code>, <code className="text-gray-400 font-mono text-[10px]">oom_warning</code>, <code className="text-gray-400 font-mono text-[10px]">ttft_regression</code>), select a channel, and optionally scope to a specific node.</p>
-                </div>
-              </div>
-            </div>
-
-            <NoteBox>
-              <strong className="text-white">PagerDuty incident lifecycle:</strong> When an alert fires, Wicklee creates a PagerDuty incident with a dedup key (<code className="text-gray-400 font-mono text-[10px]">wicklee-WK-XXXX-event_type</code>). When the condition clears, Wicklee sends a resolve event to the same dedup key — PagerDuty automatically resolves the incident. No manual acknowledge needed for self-healing conditions.
-            </NoteBox>
-
-            <NoteBox>
-              <strong className="text-white">Community tier:</strong> Observations appear on the dashboard but no outbound notifications are sent. Upgrade to Team for Slack, Email and PagerDuty notifications.
-            </NoteBox>
-          </Section>
 
           {/* ── Event Feeds ── */}
           <Section
@@ -1818,12 +1633,7 @@ WES Version:     2
               <code className="text-gray-300 font-mono text-[10px]">GET /api/profile?minutes=60</code> — A correlated timeline of TTFT, tok/s, KV cache utilization, queue depth, thermal penalty, and power draw on a single time axis. Like Chrome DevTools for inference — see exactly what your hardware was doing at the moment latency spiked. Resolution auto-scales from 1-second raw data (10-minute window) to 60-second buckets (24-hour window). The Performance tab renders this as an interactive multi-series chart with toggleable metrics.
             </p>
 
-            <p className="text-xs font-bold text-emerald-400 uppercase tracking-wider mt-4">SLOs &amp; Error Budgets <span className="ml-1.5 text-[9px] text-emerald-400 normal-case tracking-normal">Team+</span></p>
-            <p className="text-xs text-gray-400 leading-relaxed mt-1">
-              Declare fleet-level objectives — <em>"p95 TTFT ≤ 500 ms for 99% of 5-minute windows over 30 days"</em> — scoped to the whole fleet, a tag (<code className="text-gray-300 font-mono text-[10px]">env:prod</code>), or a node. The cloud writes one time-slice verdict per SLO every 5 minutes (idle windows aren't counted) and alerts your notification channels once per 50/90/100% error-budget burn crossing. Three v1 metrics: p95 TTFT (≤), median tok/s (≥), median WES (≥). Managed in Settings → SLOs (<code className="text-gray-300 font-mono text-[10px]">POST/GET/DELETE /api/slo</code>); create/delete audited. Per-request percentiles remain on each node's SLA Monitor below.
-            </p>
-
-            <p className="text-xs font-bold text-amber-400 uppercase tracking-wider mt-4">Inference SLA Monitor <span className="ml-1.5 text-[9px] text-blue-400 normal-case tracking-normal">Team</span></p>
+            <p className="text-xs font-bold text-amber-400 uppercase tracking-wider mt-4">Inference SLA Monitor</p>
             <p className="text-xs text-gray-400 leading-relaxed">
               <code className="text-gray-300 font-mono text-[10px]">GET /api/sla?window_min=60&amp;target_ttft_ms=500</code> — p50/p95/p99/max for TTFT, end-to-end latency, and TPOT computed via DuckDB <code className="text-gray-300 font-mono text-[10px]">quantile_cont()</code> over per-request <code className="text-gray-300 font-mono text-[10px]">inference_traces</code>. Compliance percentage against a configurable TTFT target, the 20 most-recent violations, and per-model breakdown. Window: 1–1440 minutes (24h hard ceiling — that's the trace retention). Surfaces on the Performance tab as an SLA Monitor card with 1h / 6h / 24h windows, color-coded compliance pill (≥99% emerald, ≥95% green, ≥90% yellow, &lt;90% red), and recent-violations list. Built for the "is my local inference meeting SLA?" question that operators ask before exposing a Wicklee node as an internal API.
             </p>
@@ -1844,7 +1654,7 @@ WES Version:     2
             </p>
 
             <NoteBox>
-              <strong className="text-white">MCP integration:</strong> Every local MCP tool returns live data. <code className="text-gray-300 font-mono text-[10px]">get_active_models</code> includes <code className="text-gray-300 font-mono text-[10px]">context_length</code> and <code className="text-gray-300 font-mono text-[10px]">parameter_count</code> from Ollama's <code className="text-gray-300 font-mono text-[10px]">/api/show</code> (refreshed on model change). Inference Profiler and Slowdown Explainer are also available as Cloud MCP tools for Team+ tier.
+              <strong className="text-white">MCP integration:</strong> Every local MCP tool returns live data. <code className="text-gray-300 font-mono text-[10px]">get_active_models</code> includes <code className="text-gray-300 font-mono text-[10px]">context_length</code> and <code className="text-gray-300 font-mono text-[10px]">parameter_count</code> from Ollama's <code className="text-gray-300 font-mono text-[10px]">/api/show</code> (refreshed on model change). 
             </NoteBox>
           </Section>
 
@@ -2014,248 +1824,6 @@ curl "http://localhost:7700/api/history?node_id=$NODE_ID" | jq '.samples | lengt
             </NoteBox>
           </Section>
 
-          {/* ── Fleet API v1 ── */}
-          <Section
-            id="api-fleet"
-            icon={<Globe className="w-5 h-5" />}
-            accent="border-cyan-500/20"
-            title="Fleet API v1"
-          >
-            <p>The Fleet API provides cross-node intelligence, routing recommendations, and fleet-wide telemetry. Authenticate with an API key — create one in <strong className="text-white">Settings → API Keys</strong> in your fleet dashboard.</p>
-
-            <div className="bg-gray-900 border border-gray-700 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center gap-3">
-              <div>
-                <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Base URL</p>
-                <code className="font-mono text-sm text-cyan-300">https://wicklee.dev</code>
-              </div>
-              <div className="sm:ml-auto">
-                <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Auth header</p>
-                <code className="font-mono text-sm text-gray-300">X-API-Key: wk_live_...</code>
-              </div>
-            </div>
-
-            <Code lang="shell">{`# Example: fetch all nodes with live metrics
-curl https://wicklee.dev/api/v1/fleet \\
-  -H "X-API-Key: wk_live_<your_key>"`}</Code>
-
-            <p className="text-xs font-bold text-cyan-400 uppercase tracking-wider mt-4">Fleet Status &amp; Routing</p>
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr>
-                    <Th>Endpoint</Th>
-                    <Th>Description</Th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <Td mono>GET /api/v1/fleet</Td>
-                    <Td>All nodes — node_id, hostname, online status, full MetricsPayload, WES score</Td>
-                  </tr>
-                  <tr>
-                    <Td mono>GET /api/v1/fleet/wes</Td>
-                    <Td>WES leaderboard — node_id, WES score, and online status for every node</Td>
-                  </tr>
-                  <tr>
-                    <Td mono>GET /api/v1/nodes/:id</Td>
-                    <Td>Single node deep dive — full MetricsPayload with all hardware and runtime fields</Td>
-                  </tr>
-                  <tr>
-                    <Td mono>GET /api/v1/route/best</Td>
-                    <Td>Routing recommendation — returns two candidates: <code className="text-gray-400 text-xs">latency</code> (highest tok/s) and <code className="text-gray-400 text-xs">efficiency</code> (highest WES). Optional <code className="text-gray-400 text-xs">?model=qwen2.5:7b</code> for per-model routing. Default: efficiency.</Td>
-                  </tr>
-                  <tr>
-                    <Td mono>GET /api/v1/models/discover</Td>
-                    <Td>Model discovery — browse (<code className="text-gray-400 text-xs">?search=</code>), hardware simulation (<code className="text-gray-400 text-xs">?simulate_hw=nvidia_4090</code>, Team+), fleet matching (<code className="text-gray-400 text-xs">?fleet=true&amp;model_id=X</code>, Team+)</Td>
-                  </tr>
-                  <tr>
-                    <Td mono>GET /api/v1/fleet/model-comparison?hours=168</Td>
-                    <Td>Fleet-wide per-model rollup — WES, tok/s, watts, TTFT, cost. Reads <code className="text-gray-400 text-xs">metrics_5min</code>. 1–720 hour window.</Td>
-                  </tr>
-                  <tr>
-                    <Td mono>GET /api/v1/fleet/model-switches?hours=24</Td>
-                    <Td>Cross-node model swap events. LAG window function over <code className="text-gray-400 text-xs">metrics_raw</code>, 1–168 hour window, capped at 200 rows.</Td>
-                  </tr>
-                  <tr>
-                    <Td mono>GET /api/v1/fleet/chargeback?days=30</Td>
-                    <Td>Chargeback/showback — cost + $/1M-token attribution by team tag / model / node + daily trend, from measured watts × sampled throughput. <code className="text-gray-400 text-xs">&amp;format=csv&amp;group=</code> for finance export (audited). <span className="text-emerald-400">Team+</span></Td>
-                  </tr>
-                  <tr>
-                    <Td mono>GET /api/v1/fleet/cost-by-model?hours=24</Td>
-                    <Td>Fleet-wide per-model power cost at $0.16/kWh default. 1–168 hour window.</Td>
-                  </tr>
-                  <tr>
-                    <Td mono>GET /api/v1/fleet/capacity?target_tok_s=200</Td>
-                    <Td>Capacity planner with procurement scenarios — "reach 200 tok/s: 2× RTX 4090 vs 1× H100" priced from your fleet's own measured tok/W per hardware class, never vendor benchmarks. Each scenario states its estimate basis. <span className="text-emerald-400">Team+</span></Td>
-                  </tr>
-                  <tr>
-                    <Td mono>GET /api/v1/fleet/migration-advisor</Td>
-                    <Td>Cross-node model migration — live WES vs peers' 7-day demonstrated WES + free memory; moves with ≥20% estimated gain and 1.2× headroom. <span className="text-emerald-400">Team+</span></Td>
-                  </tr>
-                  <tr>
-                    <Td mono>GET /api/v1/fleet/idle-waste?days=30</Td>
-                    <Td>Idle-waste & right-sizing report — phantom-load cost (models loaded while not inferring) + recovery actions (unload idle model, consolidate low-duty nodes) with projected $/mo recovery. Weekly email digest via <code className="text-gray-400 text-xs">GET/PUT /api/digest</code> (Resend, audited). <span className="text-emerald-400">Team+</span></Td>
-                  </tr>
-                  <tr>
-                    <Td mono>GET /api/v1/insights/latest</Td>
-                    <Td>Fleet intelligence snapshot — fleet summary (online count, avg WES, fleet tok/s) + findings array (thermal stress, memory pressure, offline nodes, WES below baseline, low throughput)</Td>
-                  </tr>
-                  <tr>
-                    <Td mono>POST /api/v1/keys</Td>
-                    <Td>Create a new API key — returns the raw key once (prefix <code className="text-gray-400 text-xs">wk_live_</code>). Stored as SHA-256 hash at rest. <code className="text-gray-400 text-xs">scope: "personal" | "org"</code> — org keys see the whole org fleet, inherit the org's tier, and are minted by org Admins only.</Td>
-                  </tr>
-                  <tr>
-                    <Td mono>GET /api/v1/keys</Td>
-                    <Td>List API keys — your personal keys plus the active org's keys (each entry carries its scope). Hash is never exposed.</Td>
-                  </tr>
-                  <tr>
-                    <Td mono>DELETE /api/v1/keys/:key_id</Td>
-                    <Td>Revoke an API key by ID. Personal keys: owner only. Org keys: any Admin of the key's org. Takes effect immediately.</Td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-
-            <div className="bg-gray-900 border border-gray-700 rounded-xl p-4">
-              <p className="text-xs font-bold text-white mb-2">Route response shape</p>
-              <Code lang="json">{`{
-  "latency":    { "node": "WK-99E9", "tok_s": 31.9, "wes": 3.3,  "reason": "Highest throughput" },
-  "efficiency": { "node": "WK-XXXX", "tok_s": 19.5, "wes": 56.0, "reason": "Highest WES" },
-  "default":    "efficiency"
-}`}</Code>
-            </div>
-
-            <div className="bg-gray-900 border border-gray-700 rounded-xl p-4">
-              <p className="text-xs font-bold text-white mb-2">Insights response shape</p>
-              <Code lang="json">{`{
-  "generated_at_ms": 1774624251478,
-  "fleet": { "online_count": 3, "total_count": 3, "avg_wes": 9.9, "fleet_tok_s": 79.0 },
-  "findings": [
-    {
-      "node_id": "WK-99E9", "hostname": "spark-c559",
-      "severity": "low", "pattern": "wes_below_baseline",
-      "title": "WES below fleet average on spark-c559",
-      "detail": "WES 3.3 vs fleet average 9.9",
-      "value": 3.3, "unit": "WES"
-    }
-  ]
-}`}</Code>
-            </div>
-
-            <TipBox>
-              <span>
-                <strong className="text-white">Implementation tip — <code className="font-mono text-xs">/api/v1/route/best</code>:</strong>{' '}
-                Use this to feed your existing load balancer or LangChain router with real-time health data. Poll at 1–5s intervals and forward the <code className="font-mono text-xs text-gray-300">default</code> node recommendation upstream — no custom scoring logic required.
-              </span>
-            </TipBox>
-
-            <div>
-              <p className="font-semibold text-white mb-1">Rate limits</p>
-              <p>Community: 60 req/min &nbsp;·&nbsp; Team and Enterprise: 600 req/min. Rate limits are operational throttles, not feature gates.</p>
-            </div>
-          </Section>
-
-          {/* ── Teams & Organizations ── */}
-          <Section
-            id="teams"
-            icon={<Users className="w-5 h-5" />}
-            accent="border-amber-500/20"
-            title="Teams & Organizations"
-          >
-            <p>
-              Wicklee uses <a href="https://clerk.com/docs/organizations/overview" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">Clerk Organizations</a> for shared fleet access. When you create an organization, every member of that org sees the same fleet dashboard — nodes, observations, alerts, and history are all shared.
-            </p>
-
-            <p className="text-xs font-bold text-amber-400 uppercase tracking-wider mt-4">How It Works</p>
-            <div className="space-y-3 mt-2">
-              <div className="flex gap-3">
-                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-bold shrink-0">1</span>
-                <div>
-                  <p className="text-sm text-gray-200 font-medium">Create an organization</p>
-                  <p className="text-xs text-gray-500">Go to Settings → Team Management and create a new organization. This is powered by Clerk — no separate account needed.</p>
-                </div>
-              </div>
-              <div className="flex gap-3">
-                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-bold shrink-0">2</span>
-                <div>
-                  <p className="text-sm text-gray-200 font-medium">Invite team members</p>
-                  <p className="text-xs text-gray-500">Use the built-in invite flow to add colleagues by email. They'll receive an invitation and can join with their existing Clerk account or by creating a new one.</p>
-                </div>
-              </div>
-              <div className="flex gap-3">
-                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-bold shrink-0">3</span>
-                <div>
-                  <p className="text-sm text-gray-200 font-medium">Pair nodes while the org is active</p>
-                  <p className="text-xs text-gray-500">Any node paired while your organization is selected belongs to the org — all members can see it. Nodes paired before the org was created remain personal.</p>
-                </div>
-              </div>
-              <div className="flex gap-3">
-                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-bold shrink-0">4</span>
-                <div>
-                  <p className="text-sm text-gray-200 font-medium">Shared everything</p>
-                  <p className="text-xs text-gray-500">Fleet dashboard, observations, alerts, notification channels, and metric history are all scoped to the organization. Every member sees the same data.</p>
-                </div>
-              </div>
-            </div>
-
-            <NoteBox>
-              <strong className="text-white">Tier inheritance:</strong> The organization inherits the subscription tier of its creator. If you upgrade to Team (from $99/mo), the org unlocks the plan's node cap — 10 or 25 nodes — in the fleet view, 90-day history, PagerDuty alerts, and Cloud MCP. All members benefit from the org's tier — they don't need individual subscriptions.
-            </NoteBox>
-
-            <NoteBox>
-              <strong className="text-white">Solo users:</strong> Organizations are optional. Users who don't need shared access can continue using Wicklee as a single-user dashboard — nothing changes.
-            </NoteBox>
-
-            <div className="bg-gray-900 border border-amber-500/20 rounded-xl p-4 space-y-2 mt-2">
-              <p className="text-xs font-bold text-amber-400 uppercase tracking-wider">Roles (RBAC)</p>
-              <p className="text-xs text-gray-400 leading-relaxed">
-                Fleet permissions follow your Clerk organization role, verified from the signed session token on every request. <strong className="text-white">Admin</strong> (<code className="text-gray-300">org:admin</code>) can do everything, including removing nodes. <strong className="text-white">Member</strong> (<code className="text-gray-300">org:member</code> and custom roles) handles day-to-day operations — pairing and renaming nodes, alert rules and channels, webhooks, acknowledging observations. <strong className="text-white">Viewer</strong> (a custom <code className="text-gray-300">org:viewer</code> role you create in Clerk) is read-only — every mutation returns 403. Unknown roles map to Member, never Admin; solo users keep full control of their own resources.
-              </p>
-            </div>
-          </Section>
-
-          {/* ── Audit Log ── */}
-          <Section
-            id="audit-log"
-            icon={<Shield className="w-5 h-5" />}
-            accent="border-amber-500/20"
-            title="Audit Logging"
-          >
-            <p>
-              An immutable, append-only record of sensitive fleet operations — for SOC 2 / ISO change-management evidence and answering <em>"who changed what, when."</em> Backed by a Postgres <code className="text-gray-300">audit_log</code> table with no UPDATE or DELETE path anywhere in the codebase. Events are recorded for <strong className="text-white">every</strong> tier; reading the trail is gated to <strong className="text-white">Enterprise</strong>. Organization members share one org-wide trail, scoped from the verified session claim — never a client-supplied header.
-            </p>
-
-            <p className="text-xs text-gray-400 leading-relaxed mt-3">
-              Recording is fire-and-forget: it runs off the request path and never delays or fails the operation being audited. The actor's email is resolved server-side, so callers only pass IDs.
-            </p>
-
-            <p className="text-xs font-bold text-amber-400 uppercase tracking-wider mt-4">Recorded actions (9)</p>
-            <p className="text-xs text-gray-400 leading-relaxed mt-1">
-              <code className="text-gray-300">node.paired</code>, <code className="text-gray-300">node.removed</code>, <code className="text-gray-300">node.updated</code>, <code className="text-gray-300">alert_rule.created</code>, <code className="text-gray-300">alert_channel.created</code>, <code className="text-gray-300">webhook.created</code>, <code className="text-gray-300">api_key.created</code>, <code className="text-gray-300">api_key.deleted</code>, <code className="text-gray-300">stream_tokens.revoked</code>.
-            </p>
-
-            <div className="bg-gray-900 border border-amber-500/20 rounded-xl p-4 space-y-2 mt-4">
-              <p className="text-xs font-bold text-amber-400 uppercase tracking-wider">Endpoint <span className="ml-1.5 text-[9px] text-emerald-400 normal-case tracking-normal">Enterprise</span></p>
-              <p className="text-xs text-gray-400 leading-relaxed">
-                <code className="text-gray-300 font-mono text-[10px]">GET /api/audit-log</code> (Clerk JWT). Query params: <code className="text-gray-300 font-mono text-[10px]">limit</code> (default 50, max 200), <code className="text-gray-300 font-mono text-[10px]">before</code> (ts_ms cursor), <code className="text-gray-300 font-mono text-[10px]">action</code> (exact-match filter). Returns <code className="text-gray-300 font-mono text-[10px]">{'{ entries, next_before }'}</code> — each entry carries <code className="text-gray-300 font-mono text-[10px]">ts</code>, <code className="text-gray-300 font-mono text-[10px]">actor_email</code>, <code className="text-gray-300 font-mono text-[10px]">action</code>, <code className="text-gray-300 font-mono text-[10px]">target</code>, and a JSON <code className="text-gray-300 font-mono text-[10px]">details</code> object.
-              </p>
-            </div>
-
-            <div className="bg-gray-900 border border-amber-500/20 rounded-xl p-4 space-y-2 mt-3">
-              <p className="text-xs font-bold text-amber-400 uppercase tracking-wider">Export &amp; SIEM Drain</p>
-              <p className="text-xs text-gray-400 leading-relaxed">
-                <code className="text-gray-300 font-mono text-[10px]">GET /api/audit-log/export?format=csv|json</code> downloads the full trail (chronological, up to 100k rows; optional <code className="text-gray-300 font-mono text-[10px]">action</code>/<code className="text-gray-300 font-mono text-[10px]">from</code>/<code className="text-gray-300 font-mono text-[10px]">to</code> filters). CSV is formula-injection hardened. Every export is itself audited.
-              </p>
-              <p className="text-xs text-gray-400 leading-relaxed">
-                The <strong className="text-white">SIEM drain</strong> (<code className="text-gray-300 font-mono text-[10px]">PUT /api/audit-log/drain</code>, org Admins) streams new events to your collector — Splunk, Datadog, any HTTPS receiver — as HMAC-signed JSON batches within ~1 minute (<code className="text-gray-300 font-mono text-[10px]">X-Wicklee-Signature</code>, secret shown once). Auto-disables after 20 consecutive failures; re-save to rotate the secret or re-enable. Retention: unlimited — audit entries are never pruned.
-              </p>
-            </div>
-
-            <NoteBox>
-              Surfaced as the <strong className="text-white">Audit Log</strong> section in Settings — action filter, load-more pagination, CSV/JSON export, SIEM drain configuration, and an upgrade nudge on lower tiers. Because events are recorded on every tier, upgrading to Enterprise reveals the trail retroactively.
-            </NoteBox>
-          </Section>
-
           {/* ── MCP Server ── */}
           <Section
             id="mcp"
@@ -2400,9 +1968,9 @@ notepad "$env:APPDATA\\Claude\\claude_desktop_config.json"`}
             </div>
 
             {/* Cloud MCP */}
-            <p className="text-xs font-bold text-cyan-400 uppercase tracking-wider mt-6">Cloud MCP Server (Team+)</p>
+            <p className="text-xs font-bold text-cyan-400 uppercase tracking-wider mt-6">Cloud MCP Server</p>
             <p className="text-xs text-gray-500 mb-2">
-              Team+ subscribers also get a fleet-aggregated MCP server at <code className="text-gray-400 font-mono text-xs">wicklee.dev/mcp</code>. Unlike the local agent MCP (single-node), the cloud MCP provides multi-node fleet context — routing recommendations, cross-node WES comparison, and fleet-wide observations.
+              A fleet-aggregated MCP server also runs at <code className="text-gray-400 font-mono text-xs">wicklee.dev/mcp</code>. Unlike the local agent MCP (single-node), the cloud MCP provides multi-node fleet context — routing recommendations, cross-node WES comparison, and fleet-wide observations.
             </p>
 
             <div>
@@ -2462,7 +2030,7 @@ notepad "$env:APPDATA\\Claude\\claude_desktop_config.json"`}
 #   "text":"{\"latency\":{\"node\":\"WK-A1B2\",\"tok_s\":45.2},
 #            \"efficiency\":{\"node\":\"WK-C3D4\",\"wes\":12.1}}"}]}}`}
               </pre>
-              <p className="text-gray-500 text-xs mt-1">Manifest at <code className="text-gray-400 font-mono text-xs">GET wicklee.dev/mcp/manifest</code>. Community users receive a 402 response.</p>
+              <p className="text-gray-500 text-xs mt-1">Manifest at <code className="text-gray-400 font-mono text-xs">GET wicklee.dev/mcp/manifest</code>.</p>
             </div>
           </Section>
 
@@ -2558,36 +2126,12 @@ sudo systemctl restart wicklee`}
             </div>
 
             <NoteBox>
-              The proxy works locally on any install. Proxy-derived metrics (E2E latency, request count, production tok/s) are visible in the fleet dashboard for <strong className="text-gray-300">Team tier and above</strong>.
+              The proxy works locally on any install, and its metrics (E2E latency, request count, production tok/s) are on the local dashboard. <code className="text-gray-300 font-mono text-[11px]">POST /v1/receipts</code> is the other way to get exact per-request numbers, and on a default macOS install the only one that works, because the proxy cannot bind 11434 while Ollama holds it.
             </NoteBox>
 
             <div>
               <p className="font-semibold text-white mb-2">Why Ollama only?</p>
               <p>vLLM already exposes production latency histograms natively via its <code className="text-gray-300 font-mono text-xs bg-gray-800 px-1.5 py-0.5 rounded">/metrics</code> Prometheus endpoint — no proxy needed. Ollama doesn't expose request-level timing, so the proxy fills that gap.</p>
-            </div>
-          </Section>
-
-          {/* ── OTel & Prometheus ── */}
-          <Section
-            id="otel"
-            icon={<BarChart2 className="w-5 h-5" />}
-            accent="border-amber-500/20"
-            title="OpenTelemetry & Prometheus"
-          >
-            <p>Export fleet telemetry to enterprise observability platforms. <strong className="text-white">Team tier required.</strong></p>
-
-            <div>
-              <p className="font-semibold text-white mb-2">OpenTelemetry Export</p>
-              <p>The cloud backend pushes OTLP JSON metrics to any OpenTelemetry-compatible collector (Datadog, Grafana Cloud, New Relic). Configure in <strong className="text-white">Settings → OpenTelemetry Export</strong>.</p>
-              <p className="mt-2">8 gauges per node: <code>wicklee.gpu.utilization</code>, <code>wicklee.power.watts</code>, <code>wicklee.inference.tokens_per_second</code>, <code>wicklee.wes.score</code>, <code>wicklee.thermal.penalty</code>, <code>wicklee.memory.pressure</code>, <code>wicklee.inference.ttft_ms</code>, <code>wicklee.inference.state</code></p>
-            </div>
-
-            <div>
-              <p className="font-semibold text-white mb-2">Prometheus Endpoint</p>
-              <p>Pull-based scrape endpoint on the cloud at <code>GET https://wicklee.dev/metrics</code> (Team tier; not served by the local agent) with API-key authentication (<code>X-API-Key</code> or <code>Authorization: Bearer</code>). Returns standard Prometheus text format with the same 7 gauges, labeled by node_id and hostname.</p>
-              <pre className="bg-gray-800 rounded-lg p-3 text-xs font-mono overflow-x-auto mt-2">
-{`curl -H "X-API-Key: wk_live_..." https://wicklee.dev/metrics`}
-              </pre>
             </div>
           </Section>
 
@@ -2618,52 +2162,6 @@ sudo systemctl restart wicklee`}
               </ul>
             </div>
 
-            <div>
-              <p className="font-semibold text-white mb-2">Tiers &amp; fleet limits</p>
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr>
-                      <Th>Tier</Th>
-                      <Th>Nodes in fleet view</Th>
-                      <Th>Patterns</Th>
-                      <Th>History</Th>
-                      <Th>Alerts</Th>
-                      <Th>Extras</Th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr>
-                      <Td><span className="text-gray-300 font-medium">Community</span></Td>
-                      <Td>3</Td>
-                      <Td>9</Td>
-                      <Td>24h</Td>
-                      <Td>Dashboard only</Td>
-                      <Td>Local API + MCP, Ollama proxy</Td>
-                    </tr>
-                    <tr>
-                      <Td><span className="text-blue-400 font-medium">Team ($99/mo · $200/mo)</span></Td>
-                      <Td>10 · 25</Td>
-                      <Td>20</Td>
-                      <Td>90 day</Td>
-                      <Td>Slack + Email + PagerDuty</Td>
-                      <Td>Shared dashboard, Fleet API, Cloud MCP, OTel, chargeback, idle-waste, capacity planner, SLOs</Td>
-                    </tr>
-                    <tr>
-                      <Td><span className="text-purple-400 font-medium">Enterprise (custom)</span></Td>
-                      <Td>Unlimited</Td>
-                      <Td>20</Td>
-                      <Td>12 month</Td>
-                      <Td>All + SIEM</Td>
-                      <Td>Self-hosted control plane (Compose or Helm), SSO/SAML, audit log export, custom SLA</Td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-              <p className="mt-2 text-xs text-gray-500">
-                All tiers include the full localhost dashboard (1h DuckDB history), Agent API, and sovereign hardware patterns. The local agent stores metric history in DuckDB; the cloud uses Postgres — independent stores for different roles.
-              </p>
-            </div>
 
             <p>For optional production-grade inference metrics, see the <a href="#proxy" className="text-blue-400 hover:text-blue-300 underline underline-offset-2">Inline Proxy</a> section.</p>
           </Section>
