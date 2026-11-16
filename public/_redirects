@@ -18,13 +18,11 @@
 # The rewrite target is `/`, NOT `/index.html`. Pages canonicalises HTML paths
 # ("pretty URLs": /about/index.html → /about/), so a 200 rewrite to /index.html
 # hits that canonicalisation and comes back to the browser as a 308 with
-# `Location: /`, i.e. every direct hit on /pricing, /terms, … landed on the
+# `Location: /`, i.e. every direct hit on /trust, /terms, … landed on the
 # homepage. Rewriting to `/` serves the same root index.html with a 200 and
 # leaves the URL alone, so App.tsx sees the real path.
 
-/pricing            /   200
 /trust              /   200
-/design-partners    /   200
 /metrics-reference  /   200
 /terms              /   200
 /privacy            /   200

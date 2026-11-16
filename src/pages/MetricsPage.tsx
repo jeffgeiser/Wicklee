@@ -352,14 +352,14 @@ const MetricsPage: React.FC<MetricsPageProps> = ({ onNavigate }) => {
               id="w-1k"
               name="W/1K TKN — Wattage Per 1K Tokens"
               formula="(Watts / tok/s) × 1000"
-              description="The energy cost of generating 1,000 tokens on this node right now. Lower is more energy-efficient. No universal range — compare nodes within your fleet and against cloud API pricing."
+              description="Joules per thousand tokens generated on this node right now — watts divided by throughput. Lower is more energy-efficient. No universal range: compare nodes against each other, and use Cost/1M below to turn it into money, since this is energy rather than a price."
             />
 
             <MetricCard
               id="cost-1k"
               name="COST/1M TOKENS"
-              formula="(W/1K TKN × (kWh_rate / 1000)) × 1000"
-              description="Dollar cost of generating 1 million tokens based on your configured electricity rate (default $0.12/kWh). Shown per-million so you can compare directly against cloud API pricing (e.g. GPT-4o at ~$5/1M). Configure your electricity rate in Settings → Cost & Energy for accurate figures."
+              formula="(W/1K TKN × kWh_rate ÷ 3,600,000) × 1,000"
+              description="Dollar cost of generating 1 million tokens based on your configured electricity rate (default $0.12/kWh). W/1K TKN is joules per thousand tokens, so the ÷ 3,600,000 converts joules to kWh (1 kWh = 1,000 W × 3,600 s) and the × 1,000 scales a per-1k cost to per-million. At 36 W and 56 tok/s on a $0.12/kWh rate that is $0.021 per million tokens, against roughly $5 per million for a frontier cloud API. Configure your rate in Settings → Cost & Energy."
             />
 
           </div>

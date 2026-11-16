@@ -23,7 +23,6 @@ const Header: React.FC<HeaderProps> = ({ activeTab, pairingInfo, onOpenPairing, 
   const titles: Record<string, string> = {
     [DashboardTab.TEAM]:         'Team & Memberships',
     [DashboardTab.API_KEYS]:     'Manage API Keys',
-    [DashboardTab.PRICING]:      'Fleet Pricing',
   };
 
   return (

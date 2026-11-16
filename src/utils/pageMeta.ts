@@ -17,10 +17,11 @@ const SITE_NAME   = 'Wicklee';
 /** Social/link-preview card (1200×630). Regenerate via scripts/gen-og-image.mjs. */
 const OG_IMAGE_URL = `${SITE_ORIGIN}/og-image.png`;
 
-export const DEFAULT_TITLE       = 'Wicklee — Private AI, finally observable.';
+export const DEFAULT_TITLE       = 'Wicklee — stop guessing why your local AI is slow.';
 export const DEFAULT_DESCRIPTION =
-  'Routing intelligence. True inference cost. Thermal state. Live, across every node. ' +
-  'Built for Ollama and vLLM. Install in 60 seconds — nothing to configure.';
+  'Evidence-based diagnostics, model readiness and performance verification for self-hosted ' +
+  'AI inference. Find what is wrong, see what will run now without displacing a loaded model, ' +
+  'and measure whether a change helped. One binary over localhost, for Ollama, vLLM and llama.cpp.';
 
 export interface PageMeta {
   title:       string;
@@ -105,25 +106,11 @@ export const STATIC_PAGE_META: Record<string, PageMeta> = {
                  'thermal throttling, quantization, and hardware-aware fleet operations.',
     path:        '/blog',
   },
-  '/pricing': {
-    title:       'Pricing — Wicklee',
-    description: 'Community free forever — unlimited local nodes, 3 in the cloud fleet view. ' +
-                 'Team from $99/mo (10 nodes) or $200/mo (25 nodes) adds 90-day history, the Fleet API, ' +
-                 'chargeback and capacity planning. Enterprise is self-hosted, with SSO and audit export.',
-    path:        '/pricing',
-  },
   '/trust': {
     title:       'Trust & Security — Wicklee',
-    description: 'What leaves a node (hardware telemetry) vs what never does (prompts, templates). ' +
-                 'Tenancy, RBAC, append-only audit with SIEM streaming, and the self-hosted control plane.',
+    description: 'What leaves a node (hardware telemetry) vs what never does (prompts, responses, ' +
+                 'templates). Unpaired, the agent makes no outbound connection at all.',
     path:        '/trust',
-  },
-  '/design-partners': {
-    title:       'Design Partner Program — Wicklee',
-    description: 'Running private AI in production? A small number of design partners get ' +
-                 'the Enterprise tier free for 12 months — SSO, RBAC, audit export, SLOs and cost ' +
-                 'governance on your real fleet — for a logo, a case study, and monthly feedback.',
-    path:        '/design-partners',
   },
   '/terms': {
     title:       'Terms of Service — Wicklee',

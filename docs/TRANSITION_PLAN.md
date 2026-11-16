@@ -126,7 +126,7 @@ Run the bench scripts, commit the raw transcripts, add the host comparison to `d
 | --- | --- | --- |
 | 1 | Release v0.15.0 | **Done, 2026-11-16.** PRs #105 and #106 merged, `v0.15.0` tagged from `main` and published: four platform binaries plus `SHA256SUMS`, marked latest, release body carrying the displacement known-issue. `v0.14.0` unmoved. No musl asset — that one was retired in v0.8.2 (`install.sh`, `agent/src/update.rs`), so the four are the full set |
 | 2 | Turn off payments | **Partly done, 2026-11-16.** All Paddle products archived, so no archived price can complete a purchase. Not yet done: `wicklee.dev/pricing` still renders a live **Subscribe — $99/mo** button, because `/api/billing/status` reads `checkout_enabled: true` from three Railway env vars that are still set. Setting `PADDLE_CHECKOUT_ENABLED=false` flips it immediately and the card falls back to the contact CTA. Until then the page invites a purchase it can no longer complete |
-| 3 | Rewrite the public site | Not started |
+| 3 | Rewrite the public site | **Done in PR #108.** `PricingPage` and the checkout deleted, `LandingPage` rewritten around find/fix/verify, `DesignPartnersPage` deleted (its whole offer was a withdrawn tier), `TrustPage` reduced to the data boundary, five hosted-only sections out of `DocsPage`, billing terms out of `LegalPage`, Paddle out of the CSP. Both credibility errors fixed. `Team+` strings survive only in frozen `src/cloud/` chunks, which step 6 stops shipping |
 | 4 | Rewrite the public markdown | Done in PR #106, stacked on #105. `GRAFANA.md` and `SELF_HOSTING.md` are bannered rather than deleted, pending step 7 |
 | 5 | Remove the demo | Not started |
 | 6 | Shut down Railway | Not started |

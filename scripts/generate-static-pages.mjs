@@ -164,58 +164,62 @@ function injectContent(html, { jsonLd, bodyHtml, wrapStyle }) {
  * surface that changes rarely. No claims here that aren't on the live page.
  */
 function landingBodyHtml() {
-  const features = [
-    ['Stop paying for idle hardware', 'Find models sitting in memory drawing power while nothing is using them — priced per node, with what you’d recover by unloading or consolidating.'],
-    ['Know which node to trust', 'Catch a box that is thermally throttling, memory-starved for the model you want to run, or simply the wrong place to send the next request — before users feel it.'],
-    ['Answer the cost question', 'Real cost per model and per million tokens, measured from actual watts and actual throughput on your own hardware — not a vendor TDP figure or a cloud price list.'],
+  const steps = [
+    ['Find — wicklee inspect', 'Named findings with the evidence behind every line: a model reloading at the runtime’s 4096 default after running larger, models clearing each other before their keep-alives expire, part of a model sitting outside accelerator memory, a model that has lost ground against its own measured baseline. A rule that could not run says so, with the reason.'],
+    ['Fix — wicklee ready MODEL', 'Before a job starts rather than after it fails: ready now, requires loading, may require eviction, or cannot determine — with the memory headroom, where the footprint figure came from, and what a load would displace.'],
+    ['Verify — wicklee verify FINDING', 'Re-runs the finding’s own test and prints both runs: medians, ranges, what differed. A verdict needs non-overlapping ranges, three receipts a side and medians at least 5% apart — otherwise it says no measurable change, and why.'],
   ];
-  const featureHtml = features.map(([t, d]) =>
-    `<li style="margin-bottom:1rem"><strong style="color:#f9fafb">${esc(t)}</strong> — ${esc(d)}</li>`
+  const stepHtml = steps.map(([t2, d]) =>
+    `<li style="margin-bottom:1rem"><strong style="color:#f9fafb">${esc(t2)}</strong> — ${esc(d)}</li>`
   ).join('\n');
 
   return `
 <main>
-  <p style="font-size:0.8rem;font-weight:700;letter-spacing:0.2em;text-transform:uppercase;color:#22d3ee;margin:0 0 0.75rem">Hardware-aware observability for private AI fleets</p>
-  <h1 style="font-size:2rem;font-weight:800;color:#f9fafb;line-height:1.15">Know your fleet&rsquo;s health, efficiency, and true cost.</h1>
+  <p style="font-size:0.8rem;font-weight:700;letter-spacing:0.2em;text-transform:uppercase;color:#22d3ee;margin:0 0 0.75rem">Inference evidence and readiness intelligence</p>
+  <h1 style="font-size:2rem;font-weight:800;color:#f9fafb;line-height:1.15">Stop guessing why your local AI is slow.</h1>
   <p style="font-size:1.05rem;color:#9ca3af;line-height:1.6;margin:1rem 0 1rem">
-    Wicklee measures watts and tokens together on every node — so you catch a box working harder
-    for the same output, find hardware burning power while nothing is using it, and get real cost
-    per model. Installs in 60 seconds — no sudo, no account, nothing to configure.
+    Wicklee finds what is wrong with inference on your own hardware, tells you what will run
+    right now without displacing what is already loaded, and measures whether a change actually
+    helped. One binary, over localhost. No account.
   </p>
   <p style="margin:0 0 2rem">
     <code style="background:#1f2937;border:1px solid #374151;border-radius:0.375rem;padding:0.5rem 0.75rem;color:#f9fafb;font-family:ui-monospace,monospace;font-size:0.875rem">curl -fsSL https://wicklee.dev/install.sh | bash</code>
   </p>
-  <h2 style="font-size:1.4rem;font-weight:700;color:#f9fafb;margin-top:2.5rem">What Wicklee does</h2>
+  <h2 style="font-size:1.4rem;font-weight:700;color:#f9fafb;margin-top:2.5rem">Find it, fix it, prove the fix worked</h2>
   <ul style="list-style:none;padding:0;color:#9ca3af;line-height:1.6">
-${featureHtml}
+${stepHtml}
   </ul>
-  <h2 style="font-size:1.4rem;font-weight:700;color:#f9fafb;margin-top:2.5rem">Start local, add a fleet when you need one</h2>
+  <h2 style="font-size:1.4rem;font-weight:700;color:#f9fafb;margin-top:2.5rem">Every line says what kind of claim it is</h2>
   <p style="color:#9ca3af;line-height:1.6">
-    The agent is open source, free forever and works on its own: full dashboard at localhost:7700, unlimited
-    local nodes, per-model cost attribution. Pair nodes into a fleet view for chargeback by node,
-    model and team, idle-waste recovery and capacity planning. Enterprise runs the entire control
-    plane on your own infrastructure.
+    OBSERVED is a transition, sample or receipt Wicklee recorded, and never states a cause.
+    INFERRED is a likely explanation, always hedged, and only ever on top of something observed.
+    VERIFIED means exact per-request measurements, with a median and a range. The labels are
+    enforced where statements are built, so a finding whose statements are all inference is never
+    shown. Anything that could not be checked is listed with the reason, which is why an empty
+    result means every rule ran and found nothing rather than silence.
   </p>
-  <h2 style="font-size:1.4rem;font-weight:700;color:#f9fafb;margin-top:2.5rem">What leaves the machine</h2>
+  <h2 style="font-size:1.4rem;font-weight:700;color:#f9fafb;margin-top:2.5rem">What it will not do</h2>
   <p style="color:#9ca3af;line-height:1.6">
-    Prompts and responses are never read, stored or transmitted — by default Wicklee is not in the
-    request path at all. Hardware telemetry stays local until you explicitly pair a node. The
-    optional inline proxy records only timing and the model name, never request or response
-    bodies. Built to complement your existing Prometheus / Grafana / Datadog stack rather than
-    replace it.
+    The receipt route refuses any payload carrying prompt, response, messages or context, with a
+    400 naming the field, rather than storing the body minus them. Only fingerprint and verify
+    send inference requests, both ask first and both are local-only. Wicklee is not in the request
+    path by default, and it does not route or schedule — it publishes evidence and leaves the
+    decision to whatever is making it.
   </p>
-  <h2 style="font-size:1.4rem;font-weight:700;color:#f9fafb;margin-top:2.5rem">Built for agents &amp; LLMs</h2>
+  <h2 style="font-size:1.4rem;font-weight:700;color:#f9fafb;margin-top:2.5rem">Known wrong, and published</h2>
   <p style="color:#9ca3af;line-height:1.6">
-    Best-node selection API, reactive automation webhooks, performance CI/CD, and an MCP server so
-    AI agents can query your fleet's status, efficiency, and model fit directly.
+    On a 16 GB M4, six ordered pairs of models with the first in use: readiness said the second
+    would fit without displacing anything every time, and the runtime evicted the resident model
+    in five of six. The decisive pair coexists in one load order and evicts in the other, so no
+    safety margin reproduces it, and nothing was patched. Those answers carry
+    coexistence: "unverified" until it is measured on more than one machine. Method and raw
+    transcripts are in the repository.
   </p>
   <p style="margin-top:2.5rem">
-    <a href="https://demo.wicklee.dev" style="color:#60a5fa">Live demo</a> ·
     <a href="/docs" style="color:#60a5fa">Documentation</a> ·
-    <a href="/pricing" style="color:#60a5fa">Pricing</a> ·
     <a href="/blog" style="color:#60a5fa">Blog</a> ·
+    <a href="https://github.com/jeffgeiser/Wicklee" style="color:#60a5fa">GitHub</a> ·
     <a href="/metrics-reference" style="color:#60a5fa">Metrics reference</a> ·
-    <a href="/design-partners" style="color:#60a5fa">Design partners</a> ·
     <a href="/trust" style="color:#60a5fa">Trust &amp; security</a>
   </p>
 </main>`.trim();
@@ -237,7 +241,7 @@ let shell = await readFile(join(DIST, 'index.html'), 'utf8');
 // first render, and App then lazy-loads CloudApp. Vite only preloads a dynamic
 // import's dependencies at the moment the import() runs, so on a cold load
 // those two chunks are fetched one after another, AFTER the entry has
-// downloaded and executed: three serial round-trips before /pricing can paint.
+// downloaded and executed: three serial round-trips before a cloud route can paint.
 // Preloading them from the HTML lets all three download in parallel.
 //
 // Chunk names are hashed, so they are discovered here rather than authored:
@@ -285,7 +289,7 @@ let shell = await readFile(join(DIST, 'index.html'), 'utf8');
     name: SITE_NAME,
     applicationCategory: 'DeveloperApplication',
     operatingSystem: 'macOS, Linux, Windows',
-    description: 'Hardware-aware observability for private AI fleets. Know your fleet\u2019s health, efficiency, and true cost: watts and tokens measured together on every node — thermal early warning, phantom-load detection and real cost per model for Ollama, vLLM and llama.cpp.',
+    description: 'Evidence-based diagnostics, model readiness and performance verification for self-hosted AI inference. Find what is wrong, see what will run now without displacing a loaded model, and measure whether a change helped — one binary over localhost, for Ollama, vLLM and llama.cpp.',
     url: ORIGIN,
     offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
   };

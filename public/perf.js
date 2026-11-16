@@ -1,5 +1,5 @@
 /* Load-diagnostics overlay. Loaded by /fonts.js only when the URL carries
- * `perf` (e.g. https://wicklee.dev/pricing?perf=1); ordinary visitors never
+ * `perf` (e.g. https://wicklee.dev/docs?perf=1); ordinary visitors never
  * fetch this file.
  *
  * Phones have no Web Inspector, but every browser keeps a performance timeline
@@ -10,7 +10,7 @@
  * Copy and Share buttons, so the numbers from the actual device on the actual
  * network can be pasted into a chat or an issue.
  *
- * Cross-origin resources (Clerk, Paddle, Google Fonts) expose start and end
+ * Cross-origin resources (Clerk, Google Fonts) expose start and end
  * times but hide sizes and wait/download split unless they send
  * Timing-Allow-Origin — those show as `?`. The waterfall shape is still there.
  */

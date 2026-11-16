@@ -708,7 +708,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
         onNavigateToPricing={onNavigateToPricing}
       />
 
-      {/* ── ④⅝ SLOs & ERROR BUDGETS (Team+) ──────────────────────────────── */}
+      {/* ── ④⅝ SLOs & ERROR BUDGETS (cloud) ──────────────────────────────── */}
       {isCloudMode && (
         <SLOSection
           subscriptionTier={subscriptionTier}
@@ -1077,7 +1077,7 @@ const AlertsSection: React.FC<{
     );
   }
 
-  // ── Locked — Community tier ───────────────────────────────────────────────
+  // ── No outbound alerting on this account ──────────────────────────────────
   if (!isProOrAbove) {
     return (
       <Section id="alerts" title="Alerts & Notifications" icon={Bell} iconBg="bg-rose-500/10" iconCls="text-rose-400">
@@ -1085,9 +1085,11 @@ const AlertsSection: React.FC<{
           <div className="rounded-xl bg-indigo-500/5 border border-indigo-500/20 px-5 py-4 flex items-start gap-3">
             <Bell size={14} className="text-indigo-400 mt-0.5 shrink-0" />
             <div className="space-y-1">
-              <p className="text-xs font-semibold text-gray-200">Alerts &amp; Notifications — Team+</p>
+              <p className="text-xs font-semibold text-gray-200">Alerts &amp; Notifications</p>
               <p className="text-[11px] text-gray-500 leading-relaxed">
-                Custom alert thresholds, stateful alerting, and unlimited Slack, Email &amp; PagerDuty channels.
+                Outbound alerting — Slack, Email and PagerDuty — is delivered by the hosted
+                fleet backend, which is being shut down. Observations are still evaluated on
+                this node and readable from <code className="font-mono">/v1/inspect</code>.
               </p>
             </div>
           </div>
@@ -1101,18 +1103,12 @@ const AlertsSection: React.FC<{
               </div>
             ))}
           </div>
-          <button
-            onClick={() => onNavigateToPricing?.()}
-            className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition-colors"
-          >
-            Upgrade to Team — from $99/mo
-          </button>
         </div>
       </Section>
     );
   }
 
-  // Pro channel limit: 1 Slack channel. Team+: unlimited.
+  // Some accounts are limited to one Slack channel; the cloud enforces it.
   const channelLimit = isTeam ? Infinity : 1;
   const canAddChannel = channels.length < channelLimit;
 
@@ -1143,7 +1139,7 @@ const AlertsSection: React.FC<{
                   ? 'border-gray-200 dark:border-gray-700 text-gray-500 hover:border-indigo-400/50 hover:text-indigo-400'
                   : 'border-gray-700 text-gray-600 cursor-not-allowed'
               }`}
-              title={canAddChannel ? undefined : 'Pro plan: 1 channel max. Upgrade to Team for unlimited.'}
+              title={canAddChannel ? undefined : 'This account is limited to one channel.'}
             >
               <Plus size={11} /> {canAddChannel ? 'Add channel' : 'Channel limit reached'}
             </button>
@@ -1798,7 +1794,7 @@ const NodeOverrideRow: React.FC<{
   );
 };
 
-// ── OpenTelemetry Export Section (Team+ only) ────────────────────────────────
+// ── OpenTelemetry Export Section (cloud) ─────────────────────────────────────
 
 const OtelExportSection: React.FC<{
   getToken: () => Promise<string | null>;

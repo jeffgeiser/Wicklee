@@ -523,8 +523,6 @@ export enum DashboardTab {
   AI_INSIGHTS = 'ai_insights',
   TEAM = 'team',
   API_KEYS = 'api_keys',
-  PRICING = 'pricing',
-  BILLING = 'billing',
   SETTINGS = 'settings',
 }
 

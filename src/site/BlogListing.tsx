@@ -16,11 +16,9 @@ interface PostCard {
 
 interface BlogListingProps {
   onNavigate: (path: string) => void;
-  onSignIn: () => void;
-  onSignUp: () => void;
 }
 
-const BlogListing: React.FC<BlogListingProps> = ({ onNavigate, onSignIn, onSignUp }) => {
+const BlogListing: React.FC<BlogListingProps> = ({ onNavigate }) => {
   const [posts, setPosts] = useState<PostCard[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -140,18 +138,6 @@ const BlogListing: React.FC<BlogListingProps> = ({ onNavigate, onSignIn, onSignU
           >
             GitHub
           </a>
-          <button
-            onClick={onSignIn}
-            className="px-4 sm:px-6 py-2 border border-gray-700 hover:border-gray-500 text-white text-sm font-bold rounded-xl transition-all"
-          >
-            Sign In
-          </button>
-          <button
-            onClick={onSignUp}
-            className="px-4 sm:px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-bold rounded-xl transition-all shadow-lg shadow-blue-500/20"
-          >
-            Get Started
-          </button>
         </div>
       </nav>
 

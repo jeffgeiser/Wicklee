@@ -468,7 +468,8 @@ interface AIInsightsProps {
   /** Navigate to the Models tab — used by model-placement cards (e.g. the
    *  Migration Advisor's "view what's loaded" handoff). */
   onNavigateToModels?: () => void;
-  /** Open /pricing — every Team/Pro upgrade CTA on this page routes there. */
+  /** Was /pricing. Left unset since the page is gone, which makes the
+   *  upgrade CTAs on the frozen cloud cards inert rather than broken. */
   onNavigateToPricing?: () => void;
 }
 
@@ -2262,7 +2263,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 />
               )}
 
-              {/* Chargeback / Showback (Team+, cloud only — watts × tokens attribution) */}
+              {/* Chargeback / Showback (cloud only — watts × tokens attribution) */}
               {!isLocalHost && getToken && (
                 <ChargebackCard
                   getToken={getToken}
@@ -2271,7 +2272,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 />
               )}
 
-              {/* Capacity Planner + Migration Advisor (Team+, cloud only — measured-WES fleet planning) */}
+              {/* Capacity Planner + Migration Advisor (cloud only — measured-WES fleet planning) */}
               {!isLocalHost && getToken && (
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                   <CapacityPlannerCard getToken={getToken} subscriptionTier={subscriptionTier} onNavigateToPricing={onNavigateToPricing} />
@@ -2279,7 +2280,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 </div>
               )}
 
-              {/* Idle Waste & right-sizing (Team+, cloud only — phantom-load cost + weekly digest) */}
+              {/* Idle Waste & right-sizing (cloud only — phantom-load cost + weekly digest) */}
               {!isLocalHost && getToken && (
                 <IdleWasteCard getToken={getToken} subscriptionTier={subscriptionTier} onNavigateToPricing={onNavigateToPricing} />
               )}
