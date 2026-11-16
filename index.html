@@ -9,7 +9,7 @@
          + the role="application" on root below mark this as an app, not
          prose — Safari skips the article scan entirely. -->
     <meta name="format-detection" content="telephone=no, address=no, email=no, date=no" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://*.paddle.com https://*.profitwell.com https://clerk.wicklee.dev https://*.clerk.accounts.dev https://challenges.cloudflare.com https://static.cloudflareinsights.com; worker-src 'self' blob:; style-src 'self' https://fonts.googleapis.com https://*.paddle.com 'unsafe-inline'; font-src https://fonts.gstatic.com; connect-src 'self' ws://localhost:* ws://127.0.0.1:* http://localhost:* http://127.0.0.1:* https://*.up.railway.app https://wicklee.dev https://api.clerk.dev https://*.clerk.accounts.dev https://clerk.wicklee.dev https://challenges.cloudflare.com https://*.paddle.com https://static.cloudflareinsights.com; img-src 'self' data: https:; frame-src https://*.paddle.com https://*.clerk.accounts.dev https://clerk.wicklee.dev https://challenges.cloudflare.com;" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://clerk.wicklee.dev https://*.clerk.accounts.dev https://challenges.cloudflare.com https://static.cloudflareinsights.com; worker-src 'self' blob:; style-src 'self' https://fonts.googleapis.com 'unsafe-inline'; font-src https://fonts.gstatic.com; connect-src 'self' ws://localhost:* ws://127.0.0.1:* http://localhost:* http://127.0.0.1:* https://*.up.railway.app https://wicklee.dev https://api.clerk.dev https://*.clerk.accounts.dev https://clerk.wicklee.dev https://challenges.cloudflare.com https://static.cloudflareinsights.com; img-src 'self' data: https:; frame-src https://*.clerk.accounts.dev https://clerk.wicklee.dev https://challenges.cloudflare.com;" />
     <title>Wicklee — stop guessing why your local AI is slow.</title>
     <meta name="description" content="Evidence-based diagnostics, model readiness and performance verification for self-hosted AI inference. Find what is wrong, see what will run now without displacing a loaded model, and measure whether a change helped. One binary over localhost, for Ollama, vLLM and llama.cpp." />
     <meta property="og:title" content="Wicklee — stop guessing why your local AI is slow." />
@@ -91,9 +91,6 @@
 </head>
   <body>
     <div id="root" role="application" aria-label="Wicklee dashboard"></div>
-  <!-- Paddle.js is not loaded here: it is only touched when a checkout opens,
-       so src/cloud/utils/loadPaddle.ts injects it on demand (CSP script-src already
-       allows https://*.paddle.com). -->
   <script type="module" src="/src/index.tsx"></script>
 </body>
 </html>
