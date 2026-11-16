@@ -187,6 +187,80 @@ measured a second way.
 
 Raw: [`bench-controller-m4-2026-11-15.md`](bench-controller-m4-2026-11-15.md).
 
+### Re-run after the interim wording
+
+The agent now marks a `requires_loading` answer `coexistence: "unverified"`
+while another model is resident, and the `wicklee` policy treats that as a
+displacement risk. Same host, same five runs per policy, randomised order:
+
+| Policy | Chose | B step ms | A latency ms | A reloads | In-use displaced | Deferrals |
+| --- | --- | --- | --- | --- | --- | --- |
+| `naive` | qwen3.5:9b ×5 | 7167 (6965–7267) | 4207 (3929–4475) | 5/5 | **5/5** | 0 |
+| `loaded_check` | qwen3.5:9b ×5 | 6709 (6667–7306) | 4205 (3996–4756) | 5/5 | **5/5** | 0 |
+| `wicklee` | qwen3.5:4b ×5 | 34742 (34445–35075) | 519 (498–535) | 0/5 | **0/5** | 5 |
+
+**The tie is gone and the direction is the one the measurement predicted.**
+`wicklee` picked the model that actually coexists, displaced the in-use model
+in none of five runs where both baselines displaced it in all five, and
+workflow A's next request came back in 519 ms instead of 4,205 — it never had
+to reload. Reading the unverified fit as a risk is what produced that; the
+previous run read it as safe and lost the held model every time.
+
+**The 28 extra seconds are the policy's, not the agent's, and they are a
+finding about this wording.** Every acceptable option now reads unsafe, so the
+policy has no way to say "least risky of the unverified": it defers, re-polls
+until its 30 s timeout expires, and only then falls through to the
+smallest-footprint fallback — which happens to be the right answer. The choice
+was available immediately. A policy that ranked unverified fits by footprint
+would have made it in milliseconds, and that is the next thing to try. Taken
+literally, "unverified" collapses a ranking into a single bucket.
+
+Raw: [`bench-controller-rerun-m4-2026-11-15.json`](bench-controller-rerun-m4-2026-11-15.json).
+
+### Re-run with the ranking, against a cheap baseline
+
+Two changes. The `wicklee` policy now ranks unverified fits by footprint and
+chooses immediately instead of deferring — the ranking is the policy's, and
+Wicklee's own output still orders nothing. And a fourth policy,
+`smallest_first`, sorts `/api/tags` by installed size and takes the smallest,
+which costs one request and no Wicklee at all. Five runs each, randomised, same
+host:
+
+| Policy | Chose | B step ms | A latency ms | A reloads | In-use displaced | Deferrals |
+| --- | --- | --- | --- | --- | --- | --- |
+| `naive` | qwen3.5:9b ×5 | 6951 (6704–7023) | 3927 (3915–4486) | 5/5 | **5/5** | 0 |
+| `loaded_check` | qwen3.5:9b ×5 | 6948 (6604–7342) | 4196 (4161–4450) | 5/5 | **5/5** | 0 |
+| `smallest_first` | qwen3.5:4b ×5 | 4655 (4409–4803) | 495 (481–528) | 0/5 | **0/5** | 0 |
+| `wicklee` | qwen3.5:4b ×5 | 4390 (4353–5356) | 488 (485–528) | 0/5 | **0/5** | 0 |
+
+**Against `smallest_first`, this is a tie, and it is the result worth
+publishing.** Identical choices, identical displacement record, and the step
+and latency medians differ by less than run-to-run variation — they chose the
+same model, so they did the same work. **Sorting `/api/tags` by installed size
+made the same decision as the whole readiness surface, in one request.** On
+this host readiness changed nothing a one-line heuristic would not have.
+
+The deferral is gone: 0 of 5 against 5 of 5 in the previous run, with the step
+down from 34,742 ms to 4,390 ms. Ranking the unverified fits recovered
+everything the 30-second wait was costing, which confirms the wait was the
+policy's artifact and not the wording's price.
+
+What the tie does and does not say. It does not say readiness was wrong — both
+policies picked the model that genuinely coexists, and readiness said why while
+the heuristic guessed. It does say the **routing** claim has no support on this
+hardware: a controller that sorts by file size gets the same outcome for a
+fraction of the work, and the honest statement of Stage 2's value here is that
+it is unproven, not demonstrated.
+
+What `smallest_first` cannot do is visible in its construction rather than in
+these numbers, and is therefore not a claim: installed size is not the resident
+footprint, it has no notion of what is in use, and nothing stops it choosing a
+smallest option that still does not fit. A host where the smallest option is
+not the one that coexists would separate the two. This one does not, and three
+machines were already the open item.
+
+Raw: [`bench-controller-4policy-m4-2026-11-15.json`](bench-controller-4policy-m4-2026-11-15.json).
+
 ---
 
 ## Two corrections to the record

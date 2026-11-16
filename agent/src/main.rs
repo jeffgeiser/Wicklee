@@ -1155,6 +1155,15 @@ async fn main() {
     #[cfg(target_env = "musl")]
     let metrics_store: Option<()> = None;
 
+    // The receipt sink for a build with no store: an in-memory buffer that
+    // lasts until this process ends, which PHASE1_SPEC makes the musl
+    // configuration's documented behaviour. The unit type elsewhere, so the
+    // routes that keep receipts take the same extension on every target.
+    #[cfg(target_env = "musl")]
+    let receipt_memory: receipts::SharedMemoryReceipts = Default::default();
+    #[cfg(not(target_env = "musl"))]
+    let receipt_memory: () = ();
+
     // Emit startup event — placed after store init so the event is persisted
     // to DuckDB on first write.  Still well before the first broadcast tick.
     push_event(
@@ -1299,6 +1308,10 @@ async fn main() {
          // GET /v1/state and step 4 gates rules on it.
          .layer(axum::extract::Extension(Arc::clone(&ollama_caps)))
          .layer(axum::extract::Extension(Arc::clone(&residency_tracker)))
+         // Where receipts go on a build with no DuckDB. The unit type on every
+         // other target, so the four routes that keep receipts have one
+         // signature everywhere — see ReceiptMemory in http_api.rs.
+         .layer(axum::extract::Extension(receipt_memory))
          .layer(cors)
          // Outermost layer: every route, including the embedded dashboard and
          // the static fallback, passes the peer-address and token check before

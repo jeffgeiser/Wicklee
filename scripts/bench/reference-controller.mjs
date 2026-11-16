@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Phase 1, step 8 — the reference controller.
 //
-// Three policies choose a model for one step of a workflow, on a host where
+// Four policies choose a model for one step of a workflow, on a host where
 // another workflow is already holding a model. The question is whether reading
 // readiness changes the decision, and whether the change is worth anything.
 // No dependencies. Node 18+ (global fetch).
@@ -24,8 +24,15 @@
 // option is loaded and one choice would evict the model the other workflow is
 // using while another would fit beside it.
 //
+// `smallest_first` is the second baseline, and the harder one. It sorts
+// /api/tags by installed size and takes the smallest, which costs one request
+// and no Wicklee. Where the smallest option is also the one that coexists,
+// that heuristic reaches the same decision readiness does — so the report
+// compares the two directly and says plainly when they tie. A readiness answer
+// can be more honest than a heuristic and still not change a decision.
+//
 // So a tie is a real and publishable outcome. On a host with enough memory for
-// every option, all three policies make the same choice and the right report
+// every option, all four policies make the same choice and the right report
 // says so. The spec is explicit that this demonstration does not gate the
 // release: a null result is a finding about whether readiness adds anything
 // beyond a loaded-model check on this hardware, and says nothing about whether
@@ -154,14 +161,64 @@ const policies = {
       : { choice: ACCEPTABLE[0], reason: "none of the acceptable options is loaded" };
   },
 
+  /// Always the smallest acceptable model, by the installed size /api/tags
+  /// reports. No Wicklee at all.
+  ///
+  /// The cheap heuristic that happens to reach the same answer as the wicklee
+  /// policy on a host where the smallest option is the one that coexists. It
+  /// is here to be beaten or to tie: if a one-line sort of /api/tags gets the
+  /// same decision, readiness earned nothing on this hardware, however
+  /// reasonable its answer was. Installed size is not the resident footprint
+  /// — it excludes KV cache and overstates the weights (V7) — so this is a
+  /// proxy, which is exactly what a controller without Wicklee has.
+  smallest_first: async () => {
+    const tags = (await j(`${OLLAMA}/api/tags`)).body.models ?? [];
+    const size = new Map(tags.map((m) => [nameOf(m), m.size]));
+    const known = ACCEPTABLE.filter((m) => typeof size.get(m.name) === "number");
+    if (!known.length) {
+      return {
+        choice: ACCEPTABLE[0],
+        reason: "/api/tags reports no size for any acceptable option, so the preferred one",
+      };
+    }
+    const ranked = [...known].sort((a, b) => size.get(a.name) - size.get(b.name));
+    const pick = ranked[0];
+    return {
+      choice: pick,
+      reason: `${pick.name} is the smallest installed (${(size.get(pick.name) / 1e9).toFixed(1)} GB on disk)`,
+      considered: { ranked: ranked.map((m) => `${m.name} ${(size.get(m.name) / 1e9).toFixed(1)}GB`) },
+    };
+  },
+
   /// Reads /v1/readiness. Skips anything that would displace a model in use,
   /// takes the best of what is left, and defers when nothing is safe.
+  ///
+  /// An unverified fit counts as a risk. Step 9 measured what the first
+  /// version of this policy assumed: `requires_loading` means it fits by
+  /// memory accounting, and on the one host tested the runtime still evicted a
+  /// resident model in five of six such cases. The agent now marks those
+  /// answers `coexistence: "unverified"`, and a policy that reads them as safe
+  /// is making exactly the prediction that measurement falsified. So while
+  /// something in use is resident, an unverified fit is unsafe.
+  ///
+  /// When every option is unverified it chooses the smallest footprint
+  /// immediately rather than deferring. The first version of this rule waited
+  /// out its full 30 s timeout on every run and then took the smallest
+  /// footprint as a fallback — the right answer, reached by letting a clock
+  /// run out, because "unverified" collapsed a ranking into one bucket.
+  /// Waiting cannot help when the thing making the answer unverified is
+  /// another workflow holding a model it is still using. The ranking lives
+  /// here, in the client: Wicklee reports footprints and does not order them.
   wicklee: async () => {
     const rows = await readiness();
     const by = new Map(rows.map((r) => [r.model, r]));
+    const heldInUse = rows
+      .filter((x) => x.readiness === "ready_now" && x.in_use === true)
+      .map((x) => x.model);
 
     const safe = [];
     const unsafe = [];
+    const unverified = [];
     for (const m of ACCEPTABLE) {
       const r = by.get(m.name);
       if (!r) {
@@ -186,6 +243,14 @@ const policies = {
           model: m,
           why: `would displace ${unknown.map((v) => v.model).join(", ")}, and this runtime reports no activity signal`,
         });
+      } else if (r.coexistence === "unverified" && heldInUse.length) {
+        // Footprint from Wicklee's own answer where it has one, declared size
+        // otherwise. Either way the ordering is this policy's, not Wicklee's.
+        unverified.push({ model: m, bytes: r.footprint?.bytes ?? (m.resident_gb ?? 0) * 1e9 });
+        unsafe.push({
+          model: m,
+          why: `fits by accounting, but co-residency with ${heldInUse.join(", ")} (in use) is unverified`,
+        });
       } else if (r.readiness === "cannot_determine") {
         unsafe.push({ model: m, why: "readiness cannot determine it" });
       } else {
@@ -206,6 +271,28 @@ const policies = {
         choice: pick.model,
         reason: `${pick.model.name} is ${pick.readiness} and displaces nothing in use`,
         considered: { safe: safe.map((s) => s.model.name), unsafe: unsafe.map((u) => `${u.model.name} (${u.why})`) },
+      };
+    }
+
+    // Nothing is verified safe, and every option that failed failed only
+    // because its co-residency is unverified. Deferring cannot change that, so
+    // choose now: the smallest footprint is the one least likely to evict
+    // anything, and the declared preference order breaks a tie.
+    if (unverified.length && unverified.length === unsafe.length) {
+      const ranked = [...unverified].sort(
+        (a, b) => a.bytes - b.bytes || ACCEPTABLE.indexOf(a.model) - ACCEPTABLE.indexOf(b.model),
+      );
+      const pick = ranked[0];
+      return {
+        choice: pick.model,
+        reason:
+          `no option's co-residency is verified, so ${pick.model.name} — the smallest footprint ` +
+          `(${(pick.bytes / 1e9).toFixed(1)} GB), which displaces the least`,
+        considered: {
+          safe: [],
+          unsafe: unsafe.map((u) => `${u.model.name} (${u.why})`),
+          ranked: ranked.map((r) => `${r.model.name} ${(r.bytes / 1e9).toFixed(1)}GB`),
+        },
       };
     }
 
@@ -254,7 +341,6 @@ async function runOnce(policyName) {
   const decision = await policies[policyName]();
   const decide_ms = Date.now() - decided;
 
-  let step_ms = null;
   let deferred_ms = 0;
 
   if (decision.deferred) {
@@ -285,7 +371,7 @@ async function runOnce(policyName) {
   }
 
   const step = await generate(decision.choice.name, { num_predict: 32 });
-  step_ms = step.wall_ms;
+  const step_ms = step.wall_ms;
 
   // Workflow A's next request. Its latency is the cost of workflow B's
   // decision: if B evicted A's model, A pays the reload here.
@@ -438,6 +524,29 @@ transcript.verdict =
           `Compare displaced_in_use and workflow_a_reloads to see whether the difference was worth it.`,
       };
 
+// The second comparison, and the one that decides whether readiness earned
+// anything here: a one-request sort of /api/tags against the whole thing.
+const cheap = byPolicy.smallest_first ?? { displaced_in_use: null, runs: 0 };
+const mine = byPolicy.wicklee ?? { displaced_in_use: null, runs: 0 };
+transcript.verdict_vs_smallest_first =
+  choices.wicklee === choices.smallest_first
+    ? {
+        outcome: "tie",
+        detail:
+          `wicklee and smallest_first made the same choices (${choices.wicklee || "none"}), and ` +
+          `displaced a model in use ${mine.displaced_in_use}/${mine.runs} against ` +
+          `${cheap.displaced_in_use}/${cheap.runs}. Sorting /api/tags by installed size reached the ` +
+          `same decision without Wicklee, so on this host readiness changed nothing a one-line ` +
+          `heuristic would not have. It says nothing about whether the answer was better founded.`,
+      }
+    : {
+        outcome: "differs",
+        detail:
+          `wicklee chose ${choices.wicklee} where smallest_first chose ${choices.smallest_first}; ` +
+          `displaced a model in use ${mine.displaced_in_use}/${mine.runs} against ` +
+          `${cheap.displaced_in_use}/${cheap.runs}.`,
+      };
+
 transcript.finished_at = new Date().toISOString();
 await fs.writeFile(OUT, JSON.stringify(transcript, null, 2));
 
@@ -461,7 +570,10 @@ const md = [
       `${s.displaced_in_use}/${s.runs} | ${fmt(s.transitions_added)} | ${s.deferrals} |`,
   ),
   "",
-  `**${transcript.verdict.outcome}.** ${transcript.verdict.detail}`,
+  `**vs loaded_check — ${transcript.verdict.outcome}.** ${transcript.verdict.detail}`,
+  "",
+  `**vs smallest_first — ${transcript.verdict_vs_smallest_first.outcome}.** ` +
+    transcript.verdict_vs_smallest_first.detail,
   "",
   `Raw results: \`${OUT}\``,
   "",

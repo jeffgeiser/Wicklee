@@ -17,6 +17,14 @@
 //! evidence references: a label or reference nothing can construct invites a
 //! reader to assume a capability exists.
 
+// Every item here exists for one of the two configurations. A build with no
+// local store has no verify route and no stored-receipt rules, so the verify
+// comparison, the `Verified` evidence path and the row conversions the store
+// needs have no caller there — present and compiled, but unreached. Allowed
+// for that target only: the default build still fails on genuinely dead code
+// in this file, and every other module keeps its dead-code check on musl too.
+#![cfg_attr(target_env = "musl", allow(dead_code))]
+
 use std::collections::BTreeMap;
 
 use serde::Serialize;
@@ -629,7 +637,10 @@ pub(crate) fn evaluate(inputs: &RuleInputs) -> Inspection {
     #[cfg(target_env = "musl")]
     not_checked.push(NotChecked {
         rule: "baseline_regression",
-        reason: "this build has no local store, so it keeps no receipts to compare".into(),
+        reason: "this build keeps receipts in memory rather than in a store, and the rules are \
+                 not evaluated against them — POST /v1/fingerprint and GET /v1/receipts still \
+                 work and report persisted: false"
+            .into(),
     });
 
     // After the rules, because a verified change is about a finding rather

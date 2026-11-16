@@ -77,6 +77,9 @@ instead of returning an empty result that reads like a clean bill of health.
 - `GET /v1/readiness[?model=X]` — `ready_now`, `requires_loading`,
   `would_displace` or `cannot_determine` per model, with memory headroom and
   what each answer rests on. `valid_for_s` says how long the answer holds.
+  `requires_loading` plus `coexistence: "unverified"` means it fits by
+  accounting while another model is resident, which measurement has shown is
+  not the same as safe — do not treat it as safe.
 - `GET /v1/inspect[?since=24h]` — findings plus readiness plus what was not
   checked. Nine rules: `cpu_split`, `context_reset`, `eviction_churn`,
   `expiry_reload`, `baseline_regression`, and the nineteen hardware patterns
@@ -214,7 +217,7 @@ Cloud-evaluated (2 patterns, Pro):
 - fleet_load_imbalance — node WES > 20% below best healthy peer
 - wes_long_term_drift — recent 24h avg ≥15% below 6-day baseline (gradual degradation)
 
-Fleet alerts (5, cloud, all tiers): zombied_engine, thermal_redline, oom_warning,
+Fleet alerts (5, cloud): zombied_engine, thermal_redline, oom_warning,
 wes_cliff, agent_version_mismatch
 
 ## Runtimes Supported

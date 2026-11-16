@@ -428,7 +428,7 @@ Returns `memory_fit`, `efficiency`, `context_runway`, `quant_recommendation`, an
 
 > **`wes_long_term_drift`** *(Pro, severity: warning)* — fires when penalized WES drops ≥15 % between the prior 6-day baseline and the most recent 24 hours. Detects gradual degradation that short-window patterns miss: dust accumulation in fans / heatsinks, thermal paste degradation on long-deployed hardware, driver / firmware regression after an OS update, or new background process load. Evaluated every 6 hours per Pro+ node against the 7-day Postgres rollup (`metrics_5min`). Requires ≥100 baseline samples (~8 h) and ≥30 recent samples (~2.5 h) before firing — sparse fleets won't trip false positives. Cooldown: 24 h. The 7-day WES history chart in Insights → Performance shows a matching drift annotation when the same condition is detected client-side, so chart and observation card stay in agreement.
 
-### Fleet Alerts (6, all tiers, cloud, 60s cadence)
+### Fleet Alerts (6, cloud, 60s cadence)
 `zombied_engine`, `thermal_redline`, `oom_warning`, `wes_cliff`, `agent_version_mismatch`, `fleet_load_imbalance`
 
 ---
@@ -798,7 +798,7 @@ Surfaced as the **Audit Log** section in Settings — action filter, load-more p
 
 ## MCP Server
 
-The agent exposes a local MCP (Model Context Protocol) server for AI agents. Available on all tiers, localhost only, no auth.
+The agent exposes a local MCP (Model Context Protocol) server for AI agents. Localhost only, no auth.
 
 **Endpoint:** `POST http://localhost:7700/mcp` (JSON-RPC 2.0)
 
@@ -1077,7 +1077,7 @@ Verify the proxy is active — your dashboard will show `proxy: :11434 → :1143
 
 ### Tier note
 
-The proxy works locally on all tiers (Community included). Proxy-derived metrics (E2E latency, request count, production tok/s) are visible in the fleet dashboard for **Pro tier and above**.
+The proxy works locally on any install. Proxy-derived metrics (E2E latency, request count, production tok/s) are visible in the fleet dashboard for **Pro tier and above**.
 
 ### Runtime coverage
 

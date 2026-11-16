@@ -23,6 +23,14 @@
 //! loudly the first time rather than quietly succeeding for months. That
 //! promise is the reason this type has no field such text could land in.
 
+// Every item here exists for one of the two configurations. A build with no
+// local store has no verify route and no stored-receipt rules, so the verify
+// comparison, the `Verified` evidence path and the row conversions the store
+// needs have no caller there — present and compiled, but unreached. Allowed
+// for that target only: the default build still fails on genuinely dead code
+// in this file, and every other module keeps its dead-code check on musl too.
+#![cfg_attr(target_env = "musl", allow(dead_code))]
+
 use serde::Serialize;
 
 /// Where a receipt came from. Not a quality ranking: all three are exact.
@@ -460,6 +468,64 @@ impl Stats {
     }
 }
 
+/// Receipts on a build with no DuckDB.
+///
+/// `PHASE1_SPEC` keeps musl a supported configuration whose receipts last
+/// until the agent restarts, so on that build they live here instead of in the
+/// store. The routes do not know which they are talking to — see the sink
+/// functions in `http_api.rs`.
+///
+/// Capped, because an unbounded buffer in a daemon is a leak rather than a
+/// feature. The cap is generous against what reads them: a comparison wants
+/// two sets of three at one model, digest and context, not a month of
+/// history.
+#[cfg(target_env = "musl")]
+pub(crate) const MEMORY_CAP: usize = 512;
+
+/// The buffer itself. Oldest first, like every receipt read.
+#[cfg(target_env = "musl")]
+#[derive(Default)]
+pub(crate) struct MemoryReceipts {
+    rows: Vec<Receipt>,
+}
+
+#[cfg(target_env = "musl")]
+impl MemoryReceipts {
+    /// Keep one. `false` when the id is already held.
+    ///
+    /// The store's primary key deduplicates a retried POST on the DuckDB
+    /// path, and a receipt id is derived from the measurement rather than from
+    /// its arrival, so the same request posted twice is one row there. This
+    /// keeps that true here.
+    pub(crate) fn push(&mut self, r: Receipt) -> bool {
+        if self.rows.iter().any(|x| x.id == r.id) {
+            return false;
+        }
+        self.rows.push(r);
+        if let Some(over) = self.rows.len().checked_sub(MEMORY_CAP) {
+            self.rows.drain(..over);
+        }
+        true
+    }
+
+    /// Oldest first, one model or all, at most `limit` of the newest.
+    pub(crate) fn query(&self, model: Option<&str>, limit: usize) -> Vec<Receipt> {
+        let mut hit: Vec<Receipt> = self
+            .rows
+            .iter()
+            .filter(|r| model.is_none_or(|m| r.model == m))
+            .cloned()
+            .collect();
+        if let Some(over) = hit.len().checked_sub(limit) {
+            hit.drain(..over);
+        }
+        hit
+    }
+}
+
+#[cfg(target_env = "musl")]
+pub(crate) type SharedMemoryReceipts = std::sync::Arc<std::sync::Mutex<MemoryReceipts>>;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -490,6 +556,65 @@ mod tests {
             "eval_duration": 4_868_000_000_u64,
             "num_ctx": 32768
         })
+    }
+
+    /// The in-memory sink a build with no store uses. Compiled and run only
+    /// where it exists, which is the musl CI job.
+    #[cfg(target_env = "musl")]
+    mod memory {
+        use super::*;
+
+        // Full paths rather than the `json!` macro: this module is compiled
+        // only on musl, where a resolution slip would surface in CI instead of
+        // here.
+        fn receipt(model: &str, n: u64) -> Receipt {
+            let mut body = spec_example();
+            body["model"] = serde_json::Value::from(model);
+            body["eval_count"] = serde_json::Value::from(n);
+            from_callback(&body, &ambient()).unwrap()
+        }
+
+        #[test]
+        fn the_same_receipt_posted_twice_is_one_row() {
+            let mut m = MemoryReceipts::default();
+            assert!(m.push(receipt("coder:14b", 298)));
+            assert!(!m.push(receipt("coder:14b", 298)), "same measurement, same id");
+            assert_eq!(m.query(None, 100).len(), 1);
+        }
+
+        #[test]
+        fn one_model_can_be_read_back_alone() {
+            let mut m = MemoryReceipts::default();
+            m.push(receipt("coder:14b", 298));
+            m.push(receipt("small:3b", 11));
+            assert_eq!(m.query(Some("small:3b"), 100).len(), 1);
+            assert_eq!(m.query(Some("absent:1b"), 100).len(), 0);
+            assert_eq!(m.query(None, 100).len(), 2);
+        }
+
+        #[test]
+        fn the_buffer_drops_the_oldest_rather_than_growing() {
+            let mut m = MemoryReceipts::default();
+            for i in 0..(MEMORY_CAP as u64 + 10) {
+                m.push(receipt("coder:14b", i + 1));
+            }
+            let held = m.query(None, MEMORY_CAP * 2);
+            assert_eq!(held.len(), MEMORY_CAP, "capped");
+            // The newest survive: the first ten pushed are the ones gone.
+            assert_eq!(held.last().unwrap().eval_count, Some(MEMORY_CAP as u64 + 10));
+        }
+
+        #[test]
+        fn a_limit_returns_the_newest() {
+            let mut m = MemoryReceipts::default();
+            for i in 0..5 {
+                m.push(receipt("coder:14b", i + 1));
+            }
+            let two = m.query(None, 2);
+            assert_eq!(two.len(), 2);
+            assert_eq!(two[0].eval_count, Some(4), "oldest first, newest two");
+            assert_eq!(two[1].eval_count, Some(5));
+        }
     }
 
     #[test]

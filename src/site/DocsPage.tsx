@@ -432,7 +432,7 @@ sudo ~/.wicklee/bin/wicklee --install-service   # re-install as daemon`}</Code>
             accent="border-blue-500/20"
             title="Diagnostics — wicklee inspect and the /v1 surface"
           >
-            <p>Three questions about local inference, answered from the CLI, HTTP and MCP by the same functions: <strong className="text-white">what is happening</strong>, <strong className="text-white">which models can run safely right now</strong>, and <strong className="text-white">what could I change and how do I verify it</strong>. Available on all tiers, no fleet connection required.</p>
+            <p>Three questions about local inference, answered from the CLI, HTTP and MCP by the same functions: <strong className="text-white">what is happening</strong>, <strong className="text-white">which models can run safely right now</strong>, and <strong className="text-white">what could I change and how do I verify it</strong>. No fleet connection required.</p>
 
             <Code>{`wicklee inspect`}</Code>
 
@@ -492,7 +492,7 @@ Not checked: cpu_split (this host has unified memory, so there is no accelerator
                 <thead><tr className="border-b border-gray-700"><Th>Endpoint</Th><Th>Returns</Th></tr></thead>
                 <tbody>
                   <tr className="border-b border-gray-700"><Td mono>GET /v1/state</Td><Td>Every installed model with residency, running context, measured footprint, placement, last real caller, plus the runtime capability record</Td></tr>
-                  <tr className="border-b border-gray-700"><Td mono>GET /v1/readiness?model=</Td><Td>ready_now / requires_loading / would_displace / cannot_determine, with headroom and the evidence</Td></tr>
+                  <tr className="border-b border-gray-700"><Td mono>GET /v1/readiness?model=</Td><Td>ready_now / requires_loading / would_displace / cannot_determine, with headroom and the evidence. A <code className="text-gray-400 font-mono text-[10px]">requires_loading</code> answer carries <code className="text-gray-400 font-mono text-[10px]">coexistence: "unverified"</code> while another model is resident — it fits by accounting, which is not the same as safe</Td></tr>
                   <tr className="border-b border-gray-700"><Td mono>GET /v1/inspect?since=24h</Td><Td>Findings, readiness and the not-checked list — what <code className="text-gray-400 font-mono text-[10px]">wicklee inspect</code> renders</Td></tr>
                   <tr className="border-b border-gray-700"><Td mono>GET /v1/findings?all=true</Td><Td>Findings alone, open or resolved</Td></tr>
                   <tr className="border-b border-gray-700"><Td mono>GET /v1/receipts?model=</Td><Td>Exact per-request measurements</Td></tr>
@@ -2010,7 +2010,7 @@ NODE_ID=$(curl -s http://localhost:7700/api/pair/status | jq -r .node_id)
 curl "http://localhost:7700/api/history?node_id=$NODE_ID" | jq '.samples | length'`}</Code>
 
             <NoteBox>
-              The localhost API is available on every tier including Community — no account, no pairing, no internet required. Ideal for local shell scripts, Ray clusters, or internal tools that need real-time node telemetry without data leaving the network.
+              The localhost API needs no account, no pairing and no internet connection. Ideal for local shell scripts, Ray clusters, or internal tools that need real-time node telemetry without data leaving the network.
             </NoteBox>
           </Section>
 
@@ -2151,7 +2151,7 @@ curl https://wicklee.dev/api/v1/fleet \\
 
             <div>
               <p className="font-semibold text-white mb-1">Rate limits</p>
-              <p>Community: 60 req/min &nbsp;·&nbsp; Team and Enterprise: 600 req/min. Rate limits are operational throttles, not feature gates — API access is available on all tiers.</p>
+              <p>Community: 60 req/min &nbsp;·&nbsp; Team and Enterprise: 600 req/min. Rate limits are operational throttles, not feature gates.</p>
             </div>
           </Section>
 
@@ -2263,7 +2263,7 @@ curl https://wicklee.dev/api/v1/fleet \\
             accent="border-cyan-500/20"
             title="MCP Server"
           >
-            <p>Wicklee exposes a local <strong className="text-white">Model Context Protocol</strong> server for AI agents (Cursor, Claude Desktop, custom agents). Available on all tiers.</p>
+            <p>Wicklee exposes a local <strong className="text-white">Model Context Protocol</strong> server for AI agents (Cursor, Claude Desktop, custom agents).</p>
 
             <div>
               <p className="font-semibold text-white mb-2">Endpoints</p>
@@ -2558,7 +2558,7 @@ sudo systemctl restart wicklee`}
             </div>
 
             <NoteBox>
-              <strong className="text-gray-300">Tier note:</strong> The proxy works locally on all tiers (Community included). Proxy-derived metrics (E2E latency, request count, production tok/s) are visible in the fleet dashboard for <strong className="text-gray-300">Team tier and above</strong>.
+              The proxy works locally on any install. Proxy-derived metrics (E2E latency, request count, production tok/s) are visible in the fleet dashboard for <strong className="text-gray-300">Team tier and above</strong>.
             </NoteBox>
 
             <div>

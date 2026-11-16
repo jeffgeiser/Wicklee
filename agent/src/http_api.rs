@@ -1058,6 +1058,20 @@ pub(crate) type MaybeStore = Option<axum::extract::Extension<store::Store>>;
 #[cfg(target_env = "musl")]
 pub(crate) type MaybeStore = Option<axum::extract::Extension<()>>;
 
+/// The receipt buffer a build with no DuckDB keeps instead of a store.
+///
+/// Same shape and same reason as [`MaybeStore`]: on musl this carries the
+/// in-memory receipts the spec says that build keeps until restart, elsewhere
+/// it is the unit type so the four receipt-bearing routes have one signature
+/// on every target. Never read directly by a handler — the sink functions
+/// below are the only things that touch it.
+#[cfg(target_env = "musl")]
+pub(crate) type ReceiptMemory =
+    axum::extract::Extension<crate::receipts::SharedMemoryReceipts>;
+/// See the musl alias above.
+#[cfg(not(target_env = "musl"))]
+pub(crate) type ReceiptMemory = axum::extract::Extension<()>;
+
 /// The hardware pattern engine's cache, where this build has one.
 ///
 /// Same shape as [`MaybeStore`] and for the same reason: the engine is
@@ -1457,7 +1471,6 @@ pub(crate) fn serve_asset(path: &str) -> Response<Body> {
 /// anything. The thermal state is from the most recent 1 Hz sample, so it is
 /// the host's state a moment before or after the request rather than during
 /// it — close enough to explain a slow run, not close enough to attribute one.
-#[cfg(not(target_env = "musl"))]
 fn ambient_for(
     model: &str,
     residency: &crate::residency::SharedTracker,
@@ -1493,12 +1506,168 @@ fn ambient_for(
 /// `context` is refused with 400 rather than stored minus those fields,
 /// because an integration that silently sends user text for months is the
 /// failure this promise exists to prevent.
+/// Why a receipt could not be kept or read, in the terms the route answers in.
+///
+/// A struct rather than an enum: each target constructs only the failures it
+/// can actually have, and an enum variant one configuration never builds is
+/// dead code the other configuration's clippy run would not see.
+pub(crate) struct SinkFailure {
+    pub(crate) status: axum::http::StatusCode,
+    pub(crate) error: &'static str,
+    pub(crate) hint: Option<&'static str>,
+}
+
+impl SinkFailure {
+    fn response(self) -> axum::response::Response {
+        use axum::response::IntoResponse;
+        let mut payload = serde_json::json!({ "error": self.error });
+        if let Some(h) = self.hint {
+            payload["hint"] = serde_json::json!(h);
+        }
+        (self.status, axum::Json(payload)).into_response()
+    }
+}
+
+/// Keep one receipt, wherever this build keeps them.
+///
+/// One pair of functions rather than two handler bodies, for the reason
+/// [`MaybeStore`] gives. A DuckDB build writes to the store; a musl build
+/// pushes onto the in-memory buffer, which lasts until the agent restarts and
+/// says so wherever it is reported.
 #[cfg(not(target_env = "musl"))]
+async fn sink_write(
+    store: &MaybeStore,
+    _mem: &ReceiptMemory,
+    node_id: &str,
+    receipt: &crate::receipts::Receipt,
+) -> Result<bool, SinkFailure> {
+    let Some(axum::extract::Extension(s)) = store else {
+        return Err(SinkFailure {
+            status: axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            error: "this agent has no local store, so a receipt cannot be kept",
+            hint: Some("GET /api/health reports why the store did not open"),
+        });
+    };
+    let s = s.clone();
+    let node_id = node_id.to_string();
+    let to_write = receipt.clone();
+    // store.rs's rule: blocking database calls run off the async thread.
+    match tokio::task::spawn_blocking(move || s.write_receipt(&node_id, &to_write)).await {
+        Ok(Ok(())) => Ok(true),
+        Ok(Err(e)) => {
+            eprintln!("[receipts] could not store a receipt: {e}");
+            Err(SinkFailure {
+                status: axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                error: "the receipt could not be stored",
+                hint: None,
+            })
+        }
+        Err(e) => {
+            eprintln!("[receipts] store task failed: {e}");
+            Err(SinkFailure {
+                status: axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                error: "the receipt could not be stored",
+                hint: None,
+            })
+        }
+    }
+}
+
+/// See the DuckDB version above. `false` means the id was already held, which
+/// is the deduplication the store's primary key does there.
+#[cfg(target_env = "musl")]
+async fn sink_write(
+    _store: &MaybeStore,
+    mem: &ReceiptMemory,
+    _node_id: &str,
+    receipt: &crate::receipts::Receipt,
+) -> Result<bool, SinkFailure> {
+    match mem.0.lock() {
+        Ok(mut m) => Ok(m.push(receipt.clone())),
+        Err(_) => Err(SinkFailure {
+            status: axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            error: "the in-memory receipt buffer is unusable in this process",
+            hint: None,
+        }),
+    }
+}
+
+/// Read receipts back, oldest first.
+#[cfg(not(target_env = "musl"))]
+async fn sink_read(
+    store: &MaybeStore,
+    _mem: &ReceiptMemory,
+    node_id: &str,
+    model: Option<String>,
+    limit: usize,
+) -> Result<Vec<crate::receipts::Receipt>, SinkFailure> {
+    let Some(axum::extract::Extension(s)) = store else {
+        return Err(SinkFailure {
+            status: axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            error: "this agent has no local store, so it has no receipts to show",
+            hint: Some("GET /api/health reports why the store did not open"),
+        });
+    };
+    let s = s.clone();
+    let node_id = node_id.to_string();
+    match tokio::task::spawn_blocking(move || s.query_receipts(&node_id, model.as_deref(), limit))
+        .await
+    {
+        Ok(Ok(rows)) => Ok(rows),
+        Ok(Err(e)) => {
+            eprintln!("[receipts] could not read receipts: {e}");
+            Err(SinkFailure {
+                status: axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                error: "the receipts could not be read",
+                hint: None,
+            })
+        }
+        Err(e) => {
+            eprintln!("[receipts] read task failed: {e}");
+            Err(SinkFailure {
+                status: axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                error: "the receipts could not be read",
+                hint: None,
+            })
+        }
+    }
+}
+
+/// See the DuckDB version above.
+#[cfg(target_env = "musl")]
+async fn sink_read(
+    _store: &MaybeStore,
+    mem: &ReceiptMemory,
+    _node_id: &str,
+    model: Option<String>,
+    limit: usize,
+) -> Result<Vec<crate::receipts::Receipt>, SinkFailure> {
+    match mem.0.lock() {
+        Ok(m) => Ok(m.query(model.as_deref(), limit)),
+        Err(_) => Err(SinkFailure {
+            status: axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            error: "the in-memory receipt buffer is unusable in this process",
+            hint: None,
+        }),
+    }
+}
+
+/// Whether what kept a receipt will still have it after a restart.
+///
+/// Said in the answer rather than implied, because a baseline that quietly
+/// disappears on restart is worse than one the operator knew was temporary.
+#[cfg(not(target_env = "musl"))]
+const RECEIPTS_SURVIVE_RESTART: bool = true;
+/// See above: this build keeps receipts in memory only.
+#[cfg(target_env = "musl")]
+const RECEIPTS_SURVIVE_RESTART: bool = false;
+
 pub(crate) async fn handle_v1_receipts_post(
     axum::extract::Extension(residency): axum::extract::Extension<crate::residency::SharedTracker>,
     axum::extract::Extension(node_id_ext): axum::extract::Extension<NodeId>,
     axum::extract::Extension(frame): axum::extract::Extension<crate::metrics::LatestFrame>,
     store: MaybeStore,
+    mem: ReceiptMemory,
     body: Result<axum::extract::Json<serde_json::Value>, axum::extract::rejection::JsonRejection>,
 ) -> axum::response::Response {
     use axum::http::StatusCode;
@@ -1542,38 +1711,8 @@ pub(crate) async fn handle_v1_receipts_post(
         }
     };
 
-    let Some(axum::extract::Extension(store)) = store else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            axum::Json(serde_json::json!({
-                "error": "this agent has no local store, so a receipt cannot be kept",
-                "hint":  "GET /api/health reports why the store did not open",
-            })),
-        )
-            .into_response();
-    };
-
-    let node_id = node_id_ext.0.to_string();
-    let to_write = receipt.clone();
-    // store.rs's rule: blocking database calls run off the async thread.
-    match tokio::task::spawn_blocking(move || store.write_receipt(&node_id, &to_write)).await {
-        Ok(Ok(())) => {}
-        Ok(Err(e)) => {
-            eprintln!("[receipts] could not store a posted receipt: {e}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                axum::Json(serde_json::json!({ "error": "the receipt could not be stored" })),
-            )
-                .into_response();
-        }
-        Err(e) => {
-            eprintln!("[receipts] store task failed: {e}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                axum::Json(serde_json::json!({ "error": "the receipt could not be stored" })),
-            )
-                .into_response();
-        }
+    if let Err(f) = sink_write(&store, &mem, &node_id_ext.0.to_string(), &receipt).await {
+        return f.response();
     }
 
     // A posted receipt is activity: someone ran a request against this model,
@@ -1595,6 +1734,9 @@ pub(crate) async fn handle_v1_receipts_post(
             // not polled this model as loaded yet, which is worth knowing: the
             // receipt is stored either way.
             "counted_as_activity": counted_as_activity,
+            // False on a build with no store: the receipt is kept in memory
+            // and will not be there after a restart.
+            "persisted": RECEIPTS_SURVIVE_RESTART,
         })),
     )
         .into_response()
@@ -1642,83 +1784,52 @@ async fn verify_runs_for_rules(
         .unwrap_or_default()
 }
 
-/// GET /v1/receipts — stored receipts, newest first. `?model=` narrows,
-/// `?limit=` bounds (default 100).
-#[cfg(not(target_env = "musl"))]
+/// GET /v1/receipts — the receipts this build keeps, oldest first. `?model=`
+/// narrows, `?limit=` bounds (default 100).
 pub(crate) async fn handle_v1_receipts_get(
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
     axum::extract::Extension(node_id_ext): axum::extract::Extension<NodeId>,
     store: MaybeStore,
+    mem: ReceiptMemory,
 ) -> axum::response::Response {
-    use axum::http::StatusCode;
     use axum::response::IntoResponse;
-
-    let Some(axum::extract::Extension(store)) = store else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            axum::Json(serde_json::json!({
-                "error": "this agent has no local store, so it has no receipts to show",
-                "hint":  "GET /api/health reports why the store did not open",
-            })),
-        )
-            .into_response();
-    };
 
     let model = params.get("model").cloned();
     let limit = params
         .get("limit")
         .and_then(|l| l.parse::<usize>().ok())
         .unwrap_or(100);
-    let node_id = node_id_ext.0.to_string();
 
-    let rows = tokio::task::spawn_blocking(move || {
-        store.query_receipts(&node_id, model.as_deref(), limit)
-    })
-    .await;
+    let receipts = match sink_read(&store, &mem, &node_id_ext.0.to_string(), model, limit).await {
+        Ok(rows) => rows,
+        Err(f) => return f.response(),
+    };
 
-    match rows {
-        Ok(Ok(receipts)) => {
-            // The rates alongside each receipt, computed once here rather than
-            // by every consumer: a caller that divides eval_count by the wrong
-            // duration gets a plausible wrong answer.
-            let enriched: Vec<serde_json::Value> = receipts
-                .iter()
-                .map(|r| {
-                    let mut v = serde_json::to_value(r).unwrap_or_default();
-                    if let Some(obj) = v.as_object_mut() {
-                        obj.insert("decode_tps".into(), serde_json::json!(r.decode_tps()));
-                        obj.insert("prompt_tps".into(), serde_json::json!(r.prompt_tps()));
-                    }
-                    v
-                })
-                .collect();
-            let decode: Vec<f64> = receipts.iter().filter_map(|r| r.decode_tps()).collect();
-            axum::Json(serde_json::json!({
-                "receipts": enriched,
-                "count": enriched.len(),
-                // A range rather than a mean, for the reason Stats documents:
-                // three inference runs are not normally distributed.
-                "decode_tps": crate::receipts::Stats::of(&decode),
-            }))
-            .into_response()
-        }
-        Ok(Err(e)) => {
-            eprintln!("[receipts] could not read receipts: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                axum::Json(serde_json::json!({ "error": "the receipts could not be read" })),
-            )
-                .into_response()
-        }
-        Err(e) => {
-            eprintln!("[receipts] read task failed: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                axum::Json(serde_json::json!({ "error": "the receipts could not be read" })),
-            )
-                .into_response()
-        }
-    }
+    // The rates alongside each receipt, computed once here rather than by
+    // every consumer: a caller that divides eval_count by the wrong duration
+    // gets a plausible wrong answer.
+    let enriched: Vec<serde_json::Value> = receipts
+        .iter()
+        .map(|r| {
+            let mut v = serde_json::to_value(r).unwrap_or_default();
+            if let Some(obj) = v.as_object_mut() {
+                obj.insert("decode_tps".into(), serde_json::json!(r.decode_tps()));
+                obj.insert("prompt_tps".into(), serde_json::json!(r.prompt_tps()));
+            }
+            v
+        })
+        .collect();
+    let decode: Vec<f64> = receipts.iter().filter_map(|r| r.decode_tps()).collect();
+    axum::Json(serde_json::json!({
+        "receipts": enriched,
+        "count": enriched.len(),
+        // A range rather than a mean, for the reason Stats documents: three
+        // inference runs are not normally distributed.
+        "decode_tps": crate::receipts::Stats::of(&decode),
+        // So a caller knows whether what it is reading will be here tomorrow.
+        "persisted": RECEIPTS_SURVIVE_RESTART,
+    }))
+    .into_response()
 }
 
 // ── /v1/fingerprint ───────────────────────────────────────────────────────────
@@ -1733,7 +1844,6 @@ pub(crate) async fn handle_v1_receipts_get(
 /// Not exposed over MCP, deliberately. This is the one route that loads
 /// models, and an agent that could trigger it would be able to move a
 /// colleague's model out of memory while answering a question about it.
-#[cfg(not(target_env = "musl"))]
 pub(crate) async fn handle_v1_fingerprint(
     axum::extract::Extension(OllamaPortRx(port_rx)): axum::extract::Extension<OllamaPortRx>,
     axum::extract::Extension(residency): axum::extract::Extension<crate::residency::SharedTracker>,
@@ -1743,6 +1853,7 @@ pub(crate) async fn handle_v1_fingerprint(
     axum::extract::Extension(node_id_ext): axum::extract::Extension<NodeId>,
     axum::extract::Extension(frame): axum::extract::Extension<crate::metrics::LatestFrame>,
     store: MaybeStore,
+    mem: ReceiptMemory,
     axum::extract::Json(body): axum::extract::Json<serde_json::Value>,
 ) -> axum::response::Response {
     use axum::http::StatusCode;
@@ -1863,23 +1974,15 @@ pub(crate) async fn handle_v1_fingerprint(
     .await;
     drop(cleared);
 
+    let node_id = node_id_ext.0.to_string();
     let mut stored = 0_usize;
-    if let Some(axum::extract::Extension(store)) = store {
-        let node_id = node_id_ext.0.to_string();
-        let to_write = receipts.clone();
-        if let Ok(n) = tokio::task::spawn_blocking(move || {
-            let mut ok = 0;
-            for r in &to_write {
-                match store.write_receipt(&node_id, r) {
-                    Ok(()) => ok += 1,
-                    Err(e) => eprintln!("[fingerprint] receipt not stored: {e}"),
-                }
+    for r in &receipts {
+        match sink_write(&store, &mem, &node_id, r).await {
+            Ok(_) => stored += 1,
+            Err(f) => {
+                eprintln!("[fingerprint] receipt not kept: {}", f.error);
+                break;
             }
-            ok
-        })
-        .await
-        {
-            stored = n;
         }
     }
 
@@ -1890,7 +1993,8 @@ pub(crate) async fn handle_v1_fingerprint(
         // were not kept still measured something, and the operator should know
         // the baseline will not be there next time.
         "receipts_stored": stored,
-        "receipts_persisted": stored == receipts.len() && !receipts.is_empty(),
+        "receipts_persisted":
+            RECEIPTS_SURVIVE_RESTART && stored == receipts.len() && !receipts.is_empty(),
     }))
     .into_response()
 }
@@ -1906,6 +2010,9 @@ pub(crate) async fn handle_v1_fingerprint(
 /// Same consent gate as `/v1/fingerprint`, because it is the same kind of
 /// run: a body without `"consent": true` gets the plan and the sentence
 /// describing it, and nothing is sent to the runtime.
+///
+/// The one `/v1` route a build with no store cannot serve — see the musl
+/// version below for why, and what it says instead.
 #[cfg(not(target_env = "musl"))]
 pub(crate) async fn handle_v1_verify(
     axum::extract::Extension(OllamaPortRx(port_rx)): axum::extract::Extension<OllamaPortRx>,
@@ -2095,6 +2202,39 @@ pub(crate) async fn handle_v1_verify(
         "verdict": comparison.as_ref().map(|c| c.verdict.as_str()),
     }))
     .into_response()
+}
+
+/// POST /v1/verify on a build with no local store — refused, with the reason.
+///
+/// Two things verify needs and this build does not have. It looks a finding up
+/// by the id a caller read off `inspect`, and without a store findings are
+/// re-evaluated per request and never written down, so there is no row to find.
+/// And its whole output is a comparison against the first run of the same
+/// test, which means a baseline that outlives the run — in memory that is one
+/// process, so after any restart every verdict would silently be "this is the
+/// baseline" again.
+///
+/// 501 and not 404: a 404 would read as a finding that does not exist on a host
+/// where it does. The route stays registered on purpose, because a caller
+/// deserves to be told which configuration it is talking to rather than
+/// guessing from a missing path.
+#[cfg(target_env = "musl")]
+pub(crate) async fn handle_v1_verify() -> axum::response::Response {
+    use axum::response::IntoResponse;
+    (
+        axum::http::StatusCode::NOT_IMPLEMENTED,
+        axum::Json(serde_json::json!({
+            "error": "verify needs a stored finding to look up by id and a stored first run to \
+                      compare against. This build has no local store: findings are re-evaluated \
+                      on every request rather than written down, and nothing survives a restart, \
+                      so a verdict would have nothing durable to be a verdict about",
+            "instead": "POST /v1/fingerprint measures a model now and returns the receipts. This \
+                        build keeps them in memory until the agent restarts, and GET /v1/receipts \
+                        reports persisted: false so a caller knows which it has",
+            "configuration": "no local store (musl build)",
+        })),
+    )
+        .into_response()
 }
 
 #[cfg(test)]

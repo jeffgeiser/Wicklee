@@ -80,14 +80,23 @@ statement each finding produced so the words can be read rather than trusted:
 - **missed** — induced, and nothing caught it. A failure. The transcript holds
   the whole `/v1/inspect` body so it can be worked out without re-running.
 
-`reference-controller.mjs` compares three policies, and the baseline that
-matters is `loaded_check`, not `naive`. Any careful integration already reads
-`/api/ps` before choosing, so beating `naive` proves nothing. Readiness should
-win only where `/api/ps` cannot see the answer: when no acceptable option is
-loaded, and one choice would evict the model the other workflow is using while
-another would fit beside it.
+`reference-controller.mjs` compares four policies against two baselines that
+matter, neither of them `naive`. Any careful integration already reads
+`/api/ps` before choosing, so beating `naive` proves nothing.
 
-**A tie is a real result.** On a host with room for every option, all three
+`loaded_check` is the first: readiness should win over it only where `/api/ps`
+cannot see the answer — when no acceptable option is loaded, and one choice
+would evict the model the other workflow is using while another would fit
+beside it.
+
+`smallest_first` is the second, and the harder one. It sorts `/api/tags` by
+installed size and takes the smallest, which costs one request and no Wicklee.
+Where the smallest option is also the one that coexists, that reaches the same
+decision readiness does, so the report compares the two directly. An answer can
+be better founded than a heuristic and still not change a decision, and the
+report is written to say so rather than to claim the win.
+
+**A tie is a real result.** On a host with room for every option, all four
 policies choose the same model and the report says `tie`. The spec is explicit
 that this demonstration does not gate the release: a null result is a finding
 about whether readiness adds anything beyond a loaded-model check on that
@@ -97,3 +106,12 @@ are separate hypotheses, judged separately.
 A deferral is counted as cost, not as a win. When the `wicklee` policy waits,
 the wait is added to the step's end-to-end time, so a policy that avoids every
 displacement by always waiting does not come out ahead for free.
+
+**An unverified fit counts as a risk.** Step 9 measured what the first version
+of the `wicklee` policy assumed: a `requires_loading` answer means the model
+fits by memory accounting, and on the one host tested the runtime still evicted
+a resident model in five of six such cases. The agent now marks those answers
+`coexistence: "unverified"`, and the policy treats one as unsafe while anything
+in use is resident. That is a harder bar than the first run cleared, and it can
+turn a choice into a deferral — which is the trade the numbers are there to
+show.

@@ -206,6 +206,14 @@ found.** Everything below this entry predates the revision and has not been
 re-prioritised against it — read the Readiness Program and GTM ordering as the
 July–September view until it is.
 
+**The paid tiers are withdrawn** (`docs/STRATEGY.md` §14), pending a
+monetization plan grounded in actual usage. The hosted backend, its database
+and the payment integration are being shut down rather than left running. So
+the Shipped pricing entries below are a record of what was built, not of what
+is on sale, and every tier gate named anywhere in this file reads as history
+until that plan exists. Nothing in Phase 1 is gated: one binary, one localhost
+surface, no account.
+
 Phase 1 answers three questions on one Ollama host, from the CLI, HTTP and MCP:
 what is happening with my local inference, which models can run safely right
 now, and what could I change and how do I verify the improvement.

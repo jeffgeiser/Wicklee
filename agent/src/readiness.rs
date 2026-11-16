@@ -72,6 +72,22 @@ pub(crate) enum Displacement {
     UnknownVictim,
 }
 
+/// Whether this model has been shown to coexist with what is already loaded.
+///
+/// One variant, deliberately. Step 9 loaded six ordered pairs of models on an
+/// M4 and the runtime evicted a resident model in five of them — including a
+/// pair that coexists when loaded in the opposite order, so eviction there is
+/// not a function of total resident size and no margin correction reproduces
+/// it (`docs/PHASE1_RESULTS.md`). Until that is measured on more than one
+/// host, "it fits" and "it will not displace anything" are different claims,
+/// and only the first is made. There is no `Verified` to grow into yet because
+/// nothing has verified it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Coexistence {
+    Unverified,
+}
+
 /// How the footprint was established.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -154,6 +170,11 @@ pub(crate) struct ModelReadiness {
     pub(crate) last_activity_ms: Option<i64>,
     /// Only present with `MayRequireEviction`.
     pub(crate) displacement: Option<Displacement>,
+    /// Only present with `RequiresLoading` while another model is resident,
+    /// and then always `Unverified`. Absent from the JSON otherwise, so an
+    /// answer about an empty host is byte-identical to before this existed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) coexistence: Option<Coexistence>,
     pub(crate) fit_basis: Option<FitBasis>,
     pub(crate) footprint: Option<Footprint>,
     pub(crate) headroom: Option<Headroom>,
@@ -342,6 +363,7 @@ fn assess_state(
     let mut statements: Vec<Statement> = Vec::new();
     let mut would_displace: Vec<Victim> = Vec::new();
     let mut displacement = None;
+    let mut coexistence = None;
 
     // The most recent transition about this model, for statements to cite.
     let own: Option<&Transition> = inputs
@@ -381,6 +403,16 @@ fn assess_state(
                 // its direction is not knowable (V7).
                 let trustworthy = f.basis == FitBasis::Measured || f.calibrated;
                 if fits && trustworthy {
+                    // Fits by accounting. On the one host that was measured
+                    // that was not enough, so when anything else is resident
+                    // the answer carries that rather than implying safety.
+                    // The classification does not change and no threshold
+                    // moves: see `Coexistence`.
+                    let resident = resident_others(inputs, state);
+                    if !resident.is_empty() {
+                        coexistence = Some(Coexistence::Unverified);
+                        describe_coexistence(&resident, inputs, &mut statements);
+                    }
                     Readiness::RequiresLoading
                 } else if fits {
                     // It appears to fit, on a number nothing has calibrated.
@@ -403,13 +435,7 @@ fn assess_state(
                     // them.
                     Readiness::CannotDetermine
                 } else {
-                    let resident: Vec<&&ModelState> = inputs
-                        .states
-                        .iter()
-                        .filter(|s| {
-                            s.residency == Residency::Loaded && s.model != state.model
-                        })
-                        .collect();
+                    let resident = resident_others(inputs, state);
                     let (level, victims) = displace(&resident, clearouts, inputs);
                     displacement = level;
                     would_displace = victims;
@@ -439,6 +465,7 @@ fn assess_state(
         in_use: mine,
         last_activity_ms: state.last_activity_ms,
         displacement,
+        coexistence,
         fit_basis: fit.as_ref().map(|f| f.basis),
         footprint: fit,
         headroom: inputs.headroom,
@@ -448,6 +475,63 @@ fn assess_state(
         observed_at_ms: inputs.now_ms,
         valid_for_s: VALID_FOR_S,
     }
+}
+
+/// Everything else the runtime currently holds.
+fn resident_others<'a>(inputs: &'a Inputs<'a>, state: &ModelState) -> Vec<&'a &'a ModelState> {
+    inputs
+        .states
+        .iter()
+        .filter(|s| s.residency == Residency::Loaded && s.model != state.model)
+        .collect()
+}
+
+/// The interim co-residency wording for a model that fits.
+///
+/// Two statements, because one of them is not allowed to stand alone: the
+/// inference that this may still displace something has to rest on an
+/// observation, and what is observed here is that those models are resident.
+/// The count in the wording is the measurement it comes from and is not a
+/// threshold — nothing in this module compares against it.
+fn describe_coexistence(
+    resident: &[&&ModelState],
+    inputs: &Inputs,
+    statements: &mut Vec<Statement>,
+) {
+    let rule = "readiness.coexistence";
+    let names: Vec<String> = resident.iter().map(|s| s.model.clone()).collect();
+    let basis: Vec<&Transition> = names
+        .iter()
+        .filter_map(|m| inputs.transitions.iter().rev().find(|t| &t.model == m))
+        .collect();
+    if names.is_empty() || basis.is_empty() {
+        return;
+    }
+    let observed = match Statement::observed_naming(
+        format!(
+            "{} {} resident.",
+            names.join(" and "),
+            if names.len() == 1 { "is" } else { "are" }
+        ),
+        &basis,
+        &names,
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("[evidence] {rule}: dropped a statement — {e}");
+            return;
+        }
+    };
+    let inferred = Statement::inferred(
+        format!(
+            "Fits by memory accounting. On the one host tested, the runtime evicted a \
+             resident model in 5 of 6 such cases, so this may still displace {}.",
+            names.join(" and ")
+        ),
+        &[&observed],
+    );
+    statements.push(observed);
+    push_statement(statements, rule, inferred);
 }
 
 /// Pick the displacement level and the victims it justifies naming.
@@ -738,6 +822,68 @@ mod tests {
         assert_eq!(r.fit_basis, Some(FitBasis::Measured));
         // The context is part of the measurement, not a label on it.
         assert_eq!(r.footprint.as_ref().unwrap().context_length, Some(4096));
+    }
+
+    /// Fits by accounting, something else is resident, so co-residency is
+    /// marked unverified. The classification does not move and nothing is
+    /// named as a victim: this is uncertainty carried in the answer, not a
+    /// displacement prediction.
+    #[test]
+    fn a_fitting_model_says_coexistence_is_unverified_when_something_is_resident() {
+        let held = loaded("coder:14b", 2 * GB, 2 * GB);
+        let mut s = blank("extractor:8b");
+        s.measured = Some(MeasuredFootprint {
+            size_bytes: 5 * GB,
+            context_length: 4096,
+            digest: Some("sha256:extractor:8b".into()),
+            observed_at_ms: T0,
+        });
+        let txs = [tr(1, T0, "coder:14b", TransitionKind::Loaded, &[])];
+        let r = assess_one(
+            &inputs(&[&s, &held], &txs, Some(Headroom { free_bytes: 8 * GB, source: "nvml" })),
+            "extractor:8b",
+        )
+        .unwrap();
+
+        assert_eq!(r.readiness, Readiness::RequiresLoading);
+        assert_eq!(r.coexistence, Some(Coexistence::Unverified));
+        assert!(r.displacement.is_none(), "no displacement is being predicted");
+        assert!(r.would_displace.is_empty(), "nothing is named as a victim");
+
+        assert_eq!(r.statements[0].label, Evidence::Observed);
+        assert!(r.statements[0].text.contains("coder:14b is resident"), "{:?}", r.statements[0].text);
+        let warning = &r.statements[1];
+        assert_eq!(warning.label, Evidence::Inferred);
+        assert!(warning.text.starts_with("Fits by memory accounting."), "{:?}", warning.text);
+        assert!(warning.text.contains("5 of 6"), "{:?}", warning.text);
+        assert!(warning.text.contains("may still displace coder:14b"), "{:?}", warning.text);
+        // An inference inherits what it was built from, so a reader can follow
+        // the warning back to the transition that put the other model there.
+        assert!(!warning.basis.is_empty());
+    }
+
+    /// With nothing else resident the answer is what it was before the warning
+    /// existed — the field is absent from the JSON, not null.
+    #[test]
+    fn an_empty_host_gets_no_coexistence_field_at_all() {
+        let mut s = blank("extractor:8b");
+        s.measured = Some(MeasuredFootprint {
+            size_bytes: 5 * GB,
+            context_length: 4096,
+            digest: Some("sha256:extractor:8b".into()),
+            observed_at_ms: T0,
+        });
+        let r = assess_one(
+            &inputs(&[&s], &[], Some(Headroom { free_bytes: 8 * GB, source: "nvml" })),
+            "extractor:8b",
+        )
+        .unwrap();
+        assert_eq!(r.readiness, Readiness::RequiresLoading);
+        assert_eq!(r.coexistence, None);
+        assert!(r.statements.is_empty());
+
+        let json = serde_json::to_value(&r).unwrap();
+        assert!(json.get("coexistence").is_none(), "{json}");
     }
 
     #[test]
