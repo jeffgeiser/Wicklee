@@ -412,7 +412,7 @@ The fleet headline at the top of the Model Fit Analysis card distinguishes two f
 - **Needs attention** (red) — memory-poor only. Real OOM / swap risk. Action required.
 - **Fair** (amber) — model fits but warrants a check (memory-fair OR efficiency-acceptable).
 - **Optimal** (green) — both dimensions clean.
-- **Low efficiency (informational)** (gray pill) — WES is low *but memory is fine*. Common on big-iron GPUs running batch=1 small workloads where idle baseline power dominates per-token energy cost. Not a fix-now signal — see the [`bandwidth_ceiling_reached`](#19-observation-patterns--6-fleet-alerts) pattern, which fires when a node is at the physics ceiling for its hardware/quant pair.
+- **Low efficiency (informational)** (gray pill) — WES is low *but memory is fine*. Common on big-iron GPUs running batch=1 small workloads where idle baseline power dominates per-token energy cost. Not a fix-now signal — see the [`bandwidth_ceiling_reached`](#20-observation-patterns--5-fleet-alerts) pattern, which fires when a node is at the physics ceiling for its hardware/quant pair.
 
 ### MCP tool: `get_model_fit`
 
@@ -428,7 +428,7 @@ Returns `memory_fit`, `efficiency`, `context_runway`, `quant_recommendation`, an
 
 ---
 
-## 20 Observation Patterns + 6 Fleet Alerts
+## 20 Observation Patterns + 5 Fleet Alerts
 
 ### Agent-Evaluated (18 patterns, 10-min DuckDB buffer, every 10s)
 
@@ -448,8 +448,8 @@ All eighteen are evaluated on every host; there is no gating.
 
 > **`wes_long_term_drift`** *(severity: warning)* — fires when penalized WES drops ≥15 % between the prior 6-day baseline and the most recent 24 hours. Detects gradual degradation that short-window patterns miss: dust accumulation in fans / heatsinks, thermal paste degradation on long-deployed hardware, driver / firmware regression after an OS update, or new background process load. Evaluated every 6 hours per node against the 7-day Postgres rollup (`metrics_5min`). Requires ≥100 baseline samples (~8 h) and ≥30 recent samples (~2.5 h) before firing — sparse fleets won't trip false positives. Cooldown: 24 h. The 7-day WES history chart in Insights → Performance shows a matching drift annotation when the same condition is detected client-side, so chart and observation card stay in agreement.
 
-### Fleet Alerts (6, cloud, 60s cadence)
-`zombied_engine`, `thermal_redline`, `oom_warning`, `wes_cliff`, `agent_version_mismatch`, `fleet_load_imbalance`
+### Fleet Alerts (5, cloud, 60s cadence)
+`zombied_engine`, `thermal_redline`, `oom_warning`, `wes_cliff`, `agent_version_mismatch`
 
 ---
 
