@@ -12,7 +12,6 @@ import { perfMark } from './utils/perfMark';
 import { IS_AGENT, IS_DEMO, IS_LOCAL_HOST as isLocalHost, SITE_URL } from './utils/buildTarget';
 import { roleFromOrgMembership } from './utils/role';
 import { isProOrAbove } from './utils/tier';
-import { loadPaddle } from './cloud/utils/loadPaddle';
 import Sidebar from './components/Sidebar';
 import MobileTabBar from './components/MobileTabBar';
 import Header from './components/Header';
@@ -50,7 +49,6 @@ const SignUpPage = IS_AGENT ? Absent : React.lazy(() => import('./cloud/SignUpPa
 const APIKeysView = IS_AGENT ? Absent : React.lazy(() => import('./cloud/APIKeysView'));
 const SettingsView = React.lazy(() => import('./components/SettingsView'));
 import { useSettings } from './hooks/useSettings';
-import PricingPage from './site/PricingPage';
 // ── Marketing-route code split ───────────────────────────────────────────
 // Measured on a simulated slow-4G phone: the entry chunk took 1.3 s to
 // download and ~1 s to parse before /pricing could paint, and 55% of it was
@@ -84,66 +82,8 @@ const PageFallback: React.FC = () => (
 const lazyPage = (el: React.ReactElement) => (
   <React.Suspense fallback={<PageFallback />}>{el}</React.Suspense>
 );
-import { X, Sparkles, Zap, Shield, Globe } from 'lucide-react';
+import { X } from 'lucide-react';
 import { STATIC_PAGE_META, setPageMeta, normalizePath } from './utils/pageMeta';
-
-const UpgradeModal: React.FC<{ isOpen: boolean; onClose: () => void; onUpgrade: () => void }> = ({ isOpen, onClose, onUpgrade }) => {
-  if (!isOpen) return null;
-
-  return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-300">
-      <div className="bg-zinc-950 border border-zinc-800 w-full max-w-lg rounded-[32px] overflow-hidden shadow-2xl shadow-blue-500/10 animate-in zoom-in-95 duration-300">
-        <div className="relative p-8 text-center space-y-6">
-          <button onClick={onClose} className="absolute top-6 right-6 p-2 text-gray-500 hover:text-white transition-colors">
-            <X className="w-5 h-5" />
-          </button>
-
-          <div className="w-16 h-16 bg-blue-600/20 rounded-2xl border border-blue-500/30 flex items-center justify-center mx-auto">
-            <Sparkles className="w-8 h-8 text-blue-400" />
-          </div>
-
-          <div className="space-y-2">
-            <h2 className="text-2xl font-bold text-white">Unlock Wicklee Team</h2>
-            <p className="text-gray-400 text-sm">
-              Upgrade to Wicklee Team — 10 or 25 nodes in the cloud fleet view, the full
-              pattern engine, cost reporting, and Fleet API across your entire fleet.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 gap-3 text-left">
-            {[
-              { icon: Zap, title: 'Up to 25 Fleet Nodes', desc: 'Grow past Community\'s 3 nodes — pick a 10- or 25-node plan.' },
-              { icon: Shield, title: 'Full Alert Wiring', desc: 'Slack + email alerts for all pattern engine events.' },
-              { icon: Globe, title: 'API Access (600 req/min)', desc: 'Build automation on live fleet telemetry via REST API.' }
-            ].map((item, i) => (
-              <div key={i} className="flex items-start gap-4 p-4 bg-zinc-900/50 border border-zinc-800 rounded-2xl">
-                <div className="p-2 bg-blue-600/10 rounded-lg">
-                  <item.icon className="w-4 h-4 text-blue-400" />
-                </div>
-                <div>
-                  <h4 className="text-xs font-bold text-white uppercase tracking-wider">{item.title}</h4>
-                  <p className="text-[10px] text-gray-500">{item.desc}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <div className="pt-4 space-y-3">
-            <button
-              onClick={onUpgrade}
-              className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-2xl transition-all shadow-lg shadow-blue-500/20"
-            >
-              See Team plans
-            </button>
-            <button onClick={onClose} className="text-xs text-gray-500 hover:text-gray-300 transition-colors">
-              Maybe later
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
 
 const MOCK_TENANTS: Tenant[] = [
   { id: 'tnt-01', name: 'Wicklee Dev Ops' },
@@ -217,7 +157,6 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
         isPro: isProOrAbove(clerkTier),
         tier: clerkTier,
       };
-  const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const [pairingInfo, setPairingInfo] = useState<PairingInfo | null>(null);
   const [isPairingModalOpen, setIsPairingModalOpen] = useState(false);
   const [isAddNodeModalOpen, setIsAddNodeModalOpen] = useState(false);
@@ -423,95 +362,6 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
   const isLoggedIn = isLocalHost || !!isSignedIn;
 
 
-  // Open Paddle checkout for Team.
-  //
-  // Team is the only self-serve tier: Community is free and Enterprise is a
-  // conversation. The server decides whether checkout may run at all — it
-  // returns `checkout_enabled` only when PADDLE_CHECKOUT_ENABLED=true AND a
-  // real (non-placeholder) Team price is configured. A price ID looks the same
-  // whether it points at the current $200 plan or the retired $49 one, so that
-  // flag is an explicit operator assertion, not something either side can infer.
-  //
-  // Resolves false when checkout can't run, so the caller (the Team card on
-  // PricingPage) falls back to its contact CTA rather than billing the wrong
-  // amount or failing silently.
-  const openTeamCheckout = useCallback(async (
-    cycle: 'monthly' | 'annual' = 'monthly',
-    plan: 'team_10' | 'team' = 'team',
-  ): Promise<boolean> => {
-    // No billing in the agent build — this also drops Paddle from its bundle.
-    if (IS_AGENT) return false;
-    try {
-      const token = await getToken();
-      const r = await fetch(`${CLOUD_URL}/api/billing/config`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!r.ok) return false;
-      const config = await r.json() as {
-        environment: 'sandbox' | 'production';
-        client_token: string;
-        checkout_enabled?: boolean;
-        prices: { team_10?: string; team_10_annual?: string; team?: string; team_annual?: string };
-        custom_data: { user_id: string };
-        customer_email: string | null;
-      };
-
-      if (!config.checkout_enabled) return false;
-
-      const priceId = plan === 'team_10'
-        ? (cycle === 'annual' ? config.prices.team_10_annual : config.prices.team_10)
-        : (cycle === 'annual' ? config.prices.team_annual    : config.prices.team);
-      if (!priceId) {
-        console.warn(`[billing] no Paddle price configured for ${plan} ${cycle}`);
-        return false;
-      }
-
-      // Paddle.js is injected on first checkout rather than on every page.
-      let Paddle: PaddleInstance;
-      try {
-        Paddle = await loadPaddle();
-      } catch (e) {
-        console.error('[billing] Paddle.js not loaded:', e);
-        return false;
-      }
-
-      // Initialize Paddle with client token (idempotent).
-      // Environment must be set separately — it's not a valid Initialize() option.
-      Paddle.Environment.set(config.environment);
-      Paddle.Initialize({ token: config.client_token });
-
-      // quantity 1: both Team sizes are flat prices ($99 / $200), not the old
-      // $49/seat with a 3-seat minimum. The size is a different price ID, not
-      // a quantity.
-      Paddle.Checkout.open({
-        items: [{ priceId, quantity: 1 }],
-        customData: config.custom_data,
-        customer: currentUser.email ? { email: currentUser.email } : undefined,
-        settings: {
-          displayMode: 'overlay',
-          theme: 'dark',
-          successUrl: `${window.location.origin}/dashboard?upgraded=1`,
-        },
-      });
-      return true;
-    } catch (e) {
-      console.error('[billing] checkout failed:', e);
-      return false;
-    }
-  }, [getToken, currentUser.email]);
-
-  // Self-serve checkout starts only from the Team card on /pricing, where the
-  // size and billing period are chosen explicitly. Builds without cloud
-  // billing (agent binary, demo, localhost) get the contact CTA only.
-  const teamCheckout = IS_AGENT || IS_DEMO || isLocalHost ? undefined : openTeamCheckout;
-
-  // The upgrade modal sends people to /pricing to pick a size and billing
-  // period; it used to open a 25-node monthly checkout directly.
-  const handleUpgrade = useCallback(() => {
-    setIsUpgradeModalOpen(false);
-    navigate('/pricing');
-  }, [navigate]);
-
   const handleTabChange = (tab: DashboardTab) => {
     setActiveTab(tab);
   };
@@ -566,20 +416,6 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
       return lazyPage(<LegalPage onNavigate={navigate} initialTab="refund" />);
     }
 
-    // Pricing route — public, accessible logged in or out
-    if (currentPath === '/pricing' || currentPath === '/pricing/') {
-      return (
-        <PricingPage
-          currentTier={permissions.subscriptionTier}
-          isLoggedIn={isLoggedIn}
-          onNavigate={navigate}
-          onSignIn={() => navigate('/sign-in')}
-          onSignUp={() => navigate('/sign-up')}
-          onTeamCheckout={teamCheckout}
-        />
-      );
-    }
-
     // Blog routes — public, no auth required
     if (currentPath === '/blog' || currentPath === '/blog/') {
       return lazyPage(
@@ -630,7 +466,7 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
   const renderContent = () => {
     switch (activeTab) {
       case DashboardTab.OVERVIEW:
-        return <Overview nodes={nodes} nodesLoading={nodesLoading} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} onUpgrade={() => setIsUpgradeModalOpen(true)} getNodeSettings={getNodeSettings} fleetKwhRate={settings.fleet.kwhRate} onNavigateToObservability={(params?: ObservabilityNavParams) => { setObservabilityNav(params); setActiveTab(DashboardTab.TRACES); }} onNavigateToInsights={(tab, scrollTo) => { setInsightsDeepLink({ tab, scrollTo }); setActiveTab(DashboardTab.AI_INSIGHTS); }} />;
+        return <Overview nodes={nodes} nodesLoading={nodesLoading} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} getNodeSettings={getNodeSettings} fleetKwhRate={settings.fleet.kwhRate} onNavigateToObservability={(params?: ObservabilityNavParams) => { setObservabilityNav(params); setActiveTab(DashboardTab.TRACES); }} onNavigateToInsights={(tab, scrollTo) => { setInsightsDeepLink({ tab, scrollTo }); setActiveTab(DashboardTab.AI_INSIGHTS); }} />;
       case DashboardTab.MODELS:
         return <ModelsPage isLocalHost={isLocalHost} getToken={isLocalHost ? undefined : getToken} nodes={nodes} onNavigateToInsightsPerformance={permissions.canRunAIAnalysis ? () => { setInsightsDeepLink({ tab: 'performance' }); setActiveTab(DashboardTab.AI_INSIGHTS); } : undefined} />;
       case DashboardTab.NODES:
@@ -653,7 +489,6 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
             deepLink={insightsDeepLink}
             onDeepLinkConsumed={() => setInsightsDeepLink(undefined)}
             onNavigateToModels={() => setActiveTab(DashboardTab.MODELS)}
-            onNavigateToPricing={() => navigate('/pricing')}
           />
         ) : (
           <div className="text-center py-20 text-gray-500">Unauthorized Access</div>
@@ -672,7 +507,6 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
           clearAllNodeOverrides={clearAllNodeOverrides}
           onNavigateToManagement={() => setActiveTab(DashboardTab.NODES)}
           onNavigateToApiKeys={() => setActiveTab(DashboardTab.API_KEYS)}
-          onNavigateToPricing={() => navigate('/pricing')}
           pairingInfo={pairingInfo}
           getToken={getToken}
           subscriptionTier={clerkTier}
@@ -680,12 +514,8 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
         />;
       case DashboardTab.API_KEYS:
         return IS_AGENT ? null : <React.Suspense fallback={null}><APIKeysView /></React.Suspense>;
-      case DashboardTab.PRICING:
-        return IS_AGENT ? null : <PricingPage currentTier={permissions.subscriptionTier} isLoggedIn={isLoggedIn} onNavigate={navigate} onTeamCheckout={teamCheckout} embedded />;
-      case DashboardTab.BILLING:
-        return IS_AGENT ? null : <PricingPage currentTier={permissions.subscriptionTier} isLoggedIn={isLoggedIn} onNavigate={navigate} onTeamCheckout={teamCheckout} embedded />;
       default:
-        return <Overview nodes={nodes} nodesLoading={nodesLoading} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} onUpgrade={() => setIsUpgradeModalOpen(true)} getNodeSettings={getNodeSettings} fleetKwhRate={settings.fleet.kwhRate} />;
+        return <Overview nodes={nodes} nodesLoading={nodesLoading} pairingInfo={pairingInfo} onOpenPairing={() => setIsPairingModalOpen(true)} onAddNode={() => setIsAddNodeModalOpen(true)} getNodeSettings={getNodeSettings} fleetKwhRate={settings.fleet.kwhRate} />;
     }
   };
 
@@ -715,9 +545,6 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
         setNodeOverride={setNodeOverride}
         clearAllOverridesForField={clearAllOverridesForField}
         clearAllNodeOverrides={clearAllNodeOverrides}
-        isUpgradeModalOpen={isUpgradeModalOpen}
-        setIsUpgradeModalOpen={setIsUpgradeModalOpen}
-        handleUpgrade={handleUpgrade}
         isPairingModalOpen={isPairingModalOpen}
         setIsPairingModalOpen={setIsPairingModalOpen}
         isAddNodeModalOpen={isAddNodeModalOpen}
@@ -787,9 +614,6 @@ interface DashboardShellProps {
   setNodeOverride: ReturnType<typeof useSettings>['setNodeOverride'];
   clearAllOverridesForField: ReturnType<typeof useSettings>['clearAllOverridesForField'];
   clearAllNodeOverrides: ReturnType<typeof useSettings>['clearAllNodeOverrides'];
-  isUpgradeModalOpen: boolean;
-  setIsUpgradeModalOpen: (v: boolean) => void;
-  handleUpgrade: () => void;
   isPairingModalOpen: boolean;
   setIsPairingModalOpen: (v: boolean) => void;
   isAddNodeModalOpen: boolean;
@@ -832,7 +656,6 @@ const DashboardShell: React.FC<DashboardShellProps> = (props) => {
     nodes, activeTab, handleTabChange, setActiveTab,
     currentUser, currentTenant, setCurrentTenant,
     theme, toggleTheme, pairingInfo,
-    isUpgradeModalOpen, setIsUpgradeModalOpen, handleUpgrade,
     isPairingModalOpen, setIsPairingModalOpen,
     isAddNodeModalOpen, setIsAddNodeModalOpen, handleNodeAdded,
     generatePairingCode, disconnectFleet, renderContent, navigate,
@@ -840,11 +663,6 @@ const DashboardShell: React.FC<DashboardShellProps> = (props) => {
 
   return (
     <div className="flex h-screen overflow-hidden bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100 font-sans transition-colors duration-300">
-      <UpgradeModal
-        isOpen={isUpgradeModalOpen}
-        onClose={() => setIsUpgradeModalOpen(false)}
-        onUpgrade={handleUpgrade}
-      />
       <PairingModal
         isOpen={isPairingModalOpen}
         onClose={() => setIsPairingModalOpen(false)}

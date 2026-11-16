@@ -468,7 +468,8 @@ interface AIInsightsProps {
   /** Navigate to the Models tab — used by model-placement cards (e.g. the
    *  Migration Advisor's "view what's loaded" handoff). */
   onNavigateToModels?: () => void;
-  /** Open /pricing — every Team/Pro upgrade CTA on this page routes there. */
+  /** Was /pricing. Left unset since the page is gone, which makes the
+   *  upgrade CTAs on the frozen cloud cards inert rather than broken. */
   onNavigateToPricing?: () => void;
 }
 

@@ -105,13 +105,6 @@ export const STATIC_PAGE_META: Record<string, PageMeta> = {
                  'thermal throttling, quantization, and hardware-aware fleet operations.',
     path:        '/blog',
   },
-  '/pricing': {
-    title:       'Pricing — Wicklee',
-    description: 'Community free forever — unlimited local nodes, 3 in the cloud fleet view. ' +
-                 'Team from $99/mo (10 nodes) or $200/mo (25 nodes) adds 90-day history, the Fleet API, ' +
-                 'chargeback and capacity planning. Enterprise is self-hosted, with SSO and audit export.',
-    path:        '/pricing',
-  },
   '/trust': {
     title:       'Trust & Security — Wicklee',
     description: 'What leaves a node (hardware telemetry) vs what never does (prompts, templates). ' +
