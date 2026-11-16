@@ -30,7 +30,36 @@ jobs:
     # since 2026-10-11 built five assets, published none, and reported nothing.
     # macos-15 is the oldest label with a current arm64 image; macos-latest is
     # macos-26, which is where this pin goes next.
-    runs-on: macos-15
+    # Self-hosted, on the maintainer's M4 Mac mini, because hosted macOS arm64
+    # capacity is not reliable enough to publish from. On 2026-11-16 four
+    # consecutive runs were cancelled after exactly 15 minutes with no runner
+    # ever assigned and zero steps recorded, annotated by GitHub as "The job was
+    # not acquired by Runner of type hosted even after multiple attempts" plus a
+    # macOS-arm64 capacity notice — while the Status page showed Actions fully
+    # operational. Two runs earlier the same day got a runner and built in 11-13
+    # minutes, so the label resolves fine; it is availability, not deprecation.
+    #
+    # Both publish jobs carry this one in `needs:`, and a *cancelled* dependency
+    # makes them SKIP rather than fail, so hosted capacity decided whether a
+    # release published at all. That is the same structural trap that let five
+    # weeks of releases report success while publishing nothing (see the release
+    # history in docs/ROADMAP.md).
+    #
+    # The trade is a different failure mode, not the absence of one: a release
+    # cut while the Mac mini is asleep or offline QUEUES instead of failing.
+    # Watch for a run sitting in "queued" rather than one that errors.
+    #
+    # Safe on a public repo only because this workflow has no `pull_request`
+    # trigger — it runs on pushes to main, on v* tags, and on manual dispatch,
+    # all of which need write access. A fork PR cannot schedule a job onto this
+    # machine. `macos-15` appeared nowhere else in the repository; every job in
+    # ci.yml is ubuntu-latest, so nothing else moves.
+    #
+    # Requires on that host: rustup (with the aarch64-apple-darwin target, which
+    # the toolchain action installs), Xcode Command Line Tools, and a PATH that
+    # reaches ~/.cargo/bin. Run as a launchd service, the runner takes PATH from
+    # a `.path` file in its own directory, not from the login shell.
+    runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 30      # max observed ~10 min; cap stops runaway DuckDB compile
     steps:
       - uses: actions/checkout@v4
