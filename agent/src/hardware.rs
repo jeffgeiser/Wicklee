@@ -452,11 +452,6 @@ pub(crate) fn parse_vm_stat_swapouts(text: &str) -> Option<(u64, u64)> {
     swapouts.map(|s| (s, page_size))
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub(crate) async fn read_swap_pages_out() -> Option<(u64, u64)> {
-    None
-}
-
 /// Shared result from the Linux thermal harvester.  Carried alongside the state
 /// string so the WES sampler can use direct_penalty (AMD clock-ratio path) or fall
 /// back to thermal_penalty_v2(state) (generic sysfs path).
