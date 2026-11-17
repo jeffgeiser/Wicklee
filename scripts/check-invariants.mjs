@@ -20,6 +20,8 @@ const failures = [];
 const fail = (check, msg) => failures.push({ check, msg });
 
 const read = (p) => readFile(resolve(ROOT, p), 'utf8');
+const readOptional = (p) => readFile(resolve(ROOT, p), 'utf8').catch(() => null);
+const skipped = [];
 
 async function walk(dir, exts) {
   const out = [];
@@ -143,7 +145,16 @@ async function checkPayloadSync() {
 
   // CLAUDE.md names the file that holds the serializer. It pointed at
   // agent/src/main.rs for months after the struct moved to metrics.rs.
-  const guide = await read('CLAUDE.md');
+  //
+  // The guide is gitignored (.gitignore:61), so it exists on a developer's
+  // machine and never in CI. This part therefore only ever runs locally —
+  // which is the argument for checks over prose in miniature: the check is in
+  // the repository and runs for everyone, the guide is on one machine.
+  const guide = await readOptional('CLAUDE.md');
+  if (guide === null) {
+    skipped.push('payload-sync: CLAUDE.md is gitignored and absent here, so its file pointer was not checked');
+    return;
+  }
   const named = relative(ROOT, resolve(ROOT, agent.file));
   if (!guide.includes(named)) {
     fail('payload-sync',
@@ -162,4 +173,5 @@ if (failures.length) {
   console.error('');
   process.exit(1);
 }
+for (const s of skipped) console.log(`[check-invariants] skipped — ${s}`);
 console.log('[check-invariants] OK — WES ladder, WES thresholds, MetricsPayload three-way sync.');
