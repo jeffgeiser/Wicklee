@@ -7,6 +7,7 @@
  */
 
 import React from 'react';
+import { wesColorClass } from '../../utils/wes';
 
 
 interface HealthPip {
@@ -79,11 +80,7 @@ const FleetHeaderBar: React.FC<FleetHeaderBarProps> = ({
           {!isSingleNode && (
             <span className="text-[9px] text-gray-600 uppercase tracking-wider">peak</span>
           )}
-          <span className={`font-mono text-sm font-bold ${
-            topWes != null
-              ? topWes > 10 ? 'text-emerald-400' : topWes >= 3 ? 'text-green-300' : topWes >= 1 ? 'text-yellow-400' : 'text-red-400'
-              : 'text-gray-600'
-          }`}>
+          <span className={`font-mono text-sm font-bold ${wesColorClass(topWes)}`}>
             {topWes != null ? topWes.toFixed(1) : '—'}
           </span>
           <span className="text-[9px] text-gray-600">WES</span>

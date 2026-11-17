@@ -2013,10 +2013,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
               : `${rankedTokW.length} node${rankedTokW.length !== 1 ? 's' : ''} reporting`
             : wesNullSub}
           icon={Zap}
-          iconCls={displayFleetAvgTokW != null && displayFleetAvgTokW > 10 ? 'text-emerald-400'
-            : displayFleetAvgTokW != null && displayFleetAvgTokW >= 3 ? 'text-green-300'
-            : displayFleetAvgTokW != null && displayFleetAvgTokW >= 1 ? 'text-yellow-400'
-            : 'text-gray-500'}
+          iconCls={wesColorClass(displayFleetAvgTokW)}
         />
 
       </div>

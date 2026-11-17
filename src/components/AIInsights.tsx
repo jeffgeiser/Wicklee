@@ -36,7 +36,7 @@ import type { FleetObservation } from '../cloud/hooks/useFleetObservations';
 import { useFleetDuty as useCloudFleetDuty } from '../cloud/hooks/useFleetDuty';
 import { useFleetStream } from '../contexts/FleetStreamContext';
 
-import { computeWES, computeRawWES, thermalCostPct } from '../utils/wes';
+import { computeWES, computeRawWES, thermalCostPct, wesColorClass } from '../utils/wes';
 import { INFERENCE_VRAM_THRESHOLD_MB } from '../utils/efficiency';
 import { getNodePowerW } from '../utils/power';
 import { buildReportFromLive } from '../utils/benchmarkReport';
@@ -2110,7 +2110,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                                 </div>
                                 <div>
                                   <p className="text-[9px] text-gray-600 uppercase tracking-widest">WES</p>
-                                  <p className={`text-sm font-bold font-telin ${m.wes != null && m.wes > 10 ? 'text-emerald-400' : m.wes != null && m.wes >= 3 ? 'text-green-300' : m.wes != null && m.wes >= 1 ? 'text-yellow-400' : m.wes != null ? 'text-red-400' : 'text-gray-600'}`}>
+                                  <p className={`text-sm font-bold font-telin ${wesColorClass(m.wes)}`}>
                                     {m.wes != null ? (m.wes >= 100 ? m.wes.toFixed(0) : m.wes.toFixed(1)) : '—'}
                                   </p>
                                 </div>
@@ -2182,9 +2182,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                       <p className="text-[10px] text-gray-600 uppercase tracking-widest">Current WES</p>
                       {fleetWes != null ? (
                         <div className="flex items-baseline gap-2">
-                          <span className={`font-telin text-xl font-bold ${
-                            fleetWes > 10 ? 'text-emerald-400' : fleetWes >= 3 ? 'text-green-300' : fleetWes >= 1 ? 'text-yellow-400' : 'text-red-400'
-                          }`}>
+                          <span className={`font-telin text-xl font-bold ${wesColorClass(fleetWes)}`}>
                             {fleetWes.toFixed(1)}
                           </span>
                           <span className="text-[10px] text-gray-600">vs. baseline: requires Team history</span>
