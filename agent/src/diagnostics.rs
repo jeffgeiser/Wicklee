@@ -138,28 +138,23 @@ pub(crate) async fn run_startup_diagnostics(node_id: &str, pairing_status: &str,
     }
 
     #[cfg(target_os = "windows")]
-    match Nvml::init() {
-        Ok(nvml) => {
-            let count = nvml.device_count().unwrap_or(0);
-            if count > 0 {
-                if let Ok(dev) = nvml.device_by_index(0) {
-                    let name = dev.name().unwrap_or_else(|_| "GPU".to_string());
-                    let temp = dev.temperature(TemperatureSensor::Gpu)
-                        .map(|t| format!("{t}°C"))
-                        .unwrap_or_else(|_| "?°C".to_string());
-                    let util = dev.utilization_rates()
-                        .map(|u| format!("{}%", u.gpu))
-                        .unwrap_or_else(|_| "?%".to_string());
-                    platform_rows.push(row("GPU", &format!("{name}  {temp}  {util}")));
-                    if let Ok(mem) = dev.memory_info() {
-                        let used  = mem.used  as f64 / 1_073_741_824.0;
-                        let total = mem.total as f64 / 1_073_741_824.0;
-                        platform_rows.push(row("VRAM", &format!("{used:.1} / {total:.1} GB")));
-                    }
-                }
-            }
+    if let Ok(nvml) = Nvml::init()
+        && nvml.device_count().unwrap_or(0) > 0
+        && let Ok(dev) = nvml.device_by_index(0)
+    {
+        let name = dev.name().unwrap_or_else(|_| "GPU".to_string());
+        let temp = dev.temperature(TemperatureSensor::Gpu)
+            .map(|t| format!("{t}°C"))
+            .unwrap_or_else(|_| "?°C".to_string());
+        let util = dev.utilization_rates()
+            .map(|u| format!("{}%", u.gpu))
+            .unwrap_or_else(|_| "?%".to_string());
+        platform_rows.push(row("GPU", &format!("{name}  {temp}  {util}")));
+        if let Ok(mem) = dev.memory_info() {
+            let used  = mem.used  as f64 / 1_073_741_824.0;
+            let total = mem.total as f64 / 1_073_741_824.0;
+            platform_rows.push(row("VRAM", &format!("{used:.1} / {total:.1} GB")));
         }
-        Err(_) => {}
     }
 
     if !platform_rows.is_empty() {
