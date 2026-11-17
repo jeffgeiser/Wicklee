@@ -69,8 +69,12 @@ jobs:
 
   agent-windows:
     name: Agent · clippy (Windows)
-    runs-on: windows-latest
-    timeout-minutes: 30
+    # Pinned for the same reason release.yml pins its Windows build:
+    # windows-latest is VS 18 / MSVC 14.51, which cannot compile the bundled
+    # DuckDB C++ (libduckdb-sys, cc-rs exit 2). This job was written against
+    # windows-latest and failed on exactly that, not on a lint.
+    runs-on: windows-2022
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
 
