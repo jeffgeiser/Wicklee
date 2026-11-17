@@ -1,31 +1,30 @@
 /**
  * Build-target flags and the local-agent host check.
  *
- * `VITE_BUILD_TARGET` is a build-time constant (set by `.env.agent` /
- * `.env.demo`), so these are dead-code-eliminated in bundles that don't
- * need them.
+ * `VITE_BUILD_TARGET` is a build-time constant (set by `.env.agent`), so these
+ * are dead-code-eliminated in bundles that don't need them.
  *
- * Why `IS_LOCAL_HOST` lives here: it had been copy-pasted as a bare
- * hostname check into five modules (App, Overview, NodesList, AIInsights,
- * TracesView). Each copy meant "we are the agent binary served from
- * localhost:7700, so talk to the local agent instead of the cloud" — but
- * the demo bundle is *also* static-served, and previewing it on
- * localhost (`npm run build:demo && serve dist-demo`) made every copy
- * answer `true`. The demo then opened `ws://localhost:PORT/ws`, fetched
- * `/api/metrics` outside the demo fetch shim, and rendered an empty
- * dashboard reading "Connecting to local agent…" — while the synthetic
- * fleet stream ran correctly underneath. On a real hostname
- * (demo.wicklee.dev, *.hf.space) the same bundle worked, so the break
- * only ever showed up in local preview — exactly where it gets verified
- * before deploying.
- *
- * The demo is never the local agent, so it is excluded here once.
+ * Why `IS_LOCAL_HOST` lives here: it had been copy-pasted as a bare hostname
+ * check into five modules (App, Overview, NodesList, AIInsights, TracesView).
+ * Each copy meant "we are the agent binary served from localhost:7700, so talk
+ * to the local agent instead of the cloud", and five copies of that meaning
+ * drift. It is decided once, here.
  */
 export const IS_AGENT: boolean =
   (import.meta.env.VITE_BUILD_TARGET as string) === 'agent';
 
-export const IS_DEMO: boolean =
-  (import.meta.env.VITE_BUILD_TARGET as string) === 'demo';
+/**
+ * Permanently false. The demo build was removed in transition step 5 along with
+ * `src/demo/`, `.env.demo` and the `build:demo` script.
+ *
+ * It stays exported because three modules under `src/cloud/` still read it
+ * (`AddNodeModal`, `TeamManagement`, `APIKeysView`), and `src/cloud/` is frozen
+ * until step 7 decides what happens to it — removing links to it is in scope,
+ * editing it is not. Typed `boolean` rather than `false` so those call sites do
+ * not narrow to dead branches before that decision is made. Delete this and its
+ * three readers together.
+ */
+export const IS_DEMO: boolean = false;
 
 /**
  * True when this bundle is talking to a local agent.
@@ -40,9 +39,8 @@ export const IS_DEMO: boolean =
  */
 export const IS_LOCAL_HOST: boolean =
   IS_AGENT ||
-  (!IS_DEMO &&
-    (window.location.hostname === 'localhost' ||
-      window.location.hostname === '127.0.0.1'));
+  window.location.hostname === 'localhost' ||
+  window.location.hostname === '127.0.0.1';
 
 /** Public site. The agent build links out to it for pages it does not ship. */
 export const SITE_URL = 'https://wicklee.dev';

@@ -2,7 +2,7 @@ import React, { Suspense, useState, useRef, useEffect } from 'react';
 import { LayoutGrid, Server, Activity, Cpu, Users, Settings, BookOpen, Newspaper, Github, User as UserIcon, Boxes } from 'lucide-react';
 import { ConnectionState, DashboardTab, User, TIER_BADGE } from '../types';
 import { usePermissions } from '../hooks/usePermissions';
-import { IS_AGENT, IS_DEMO } from '../utils/buildTarget';
+import { IS_AGENT } from '../utils/buildTarget';
 
 const LazyClerkAccountActions = IS_AGENT ? ((() => null) as never) : React.lazy(() => import('../cloud/ClerkAccountActions'));
 
@@ -38,7 +38,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
     { id: DashboardTab.AI_INSIGHTS,  icon: Cpu,        label: 'Insights',        show: permissions.canRunAIAnalysis },
     { id: DashboardTab.NODES,        icon: Server,     label: 'Management',      show: true },
     { id: DashboardTab.TRACES,       icon: Activity,   label: 'Observability',   show: true },
-    { id: DashboardTab.TEAM,         icon: Users,      label: 'Team Management', show: permissions.canManageTeam && !IS_AGENT && !IS_DEMO && !isLocalHost },
+    { id: DashboardTab.TEAM,         icon: Users,      label: 'Team Management', show: permissions.canManageTeam && !IS_AGENT && !isLocalHost },
   ];
 
   return (
@@ -143,7 +143,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
                 </a>
               </div>
 
-              {!IS_AGENT && !IS_DEMO && !isLocalHost && (
+              {!IS_AGENT && !isLocalHost && (
                 <Suspense fallback={
                   <div className="mt-1.5 pt-1.5 border-t border-gray-100 dark:border-gray-700/50 space-y-0.5">
                     <div className="px-3 py-2 h-9" />
