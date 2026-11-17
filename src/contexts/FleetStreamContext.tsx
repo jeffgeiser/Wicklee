@@ -2,7 +2,6 @@ import React, { createContext, useContext, useState, useEffect, useRef, useMemo 
 import type { SentinelMetrics, FleetEvent, FleetNode, FleetStreamState, ConnectionState } from '../types';
 import { getNodePowerW } from '../utils/power';
 import { CLOUD_URL } from '../utils/cloudUrl';
-import { IS_DEMO } from '../utils/buildTarget';
 
 const isLocalHost =
   window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
@@ -122,7 +121,7 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
   }, [scopeKey]);
 
   useEffect(() => {
-    if (!IS_DEMO && (isLocalHost || !isSignedIn)) return;
+    if (isLocalHost || !isSignedIn) return;
 
     let retryTimer: ReturnType<typeof setTimeout>;
     let cancelled = false;
@@ -146,15 +145,9 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
 
       if (cancelled) return;
 
-      let es: EventSource;
-      if (IS_DEMO) {
-        const { DemoEventSource } = await import('../demo/demoEventSource');
-        es = new DemoEventSource() as unknown as EventSource;
-      } else {
-        es = new EventSource(
-          `${CLOUD_URL}/api/fleet/stream?token=${encodeURIComponent(streamToken)}`,
-        );
-      }
+      const es: EventSource = new EventSource(
+        `${CLOUD_URL}/api/fleet/stream?token=${encodeURIComponent(streamToken)}`,
+      );
       esRef.current = es;
 
       es.onopen = () => {
@@ -447,7 +440,7 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
   }, [isSignedIn, getToken, orgId]);
 
   useEffect(() => {
-    if ((!IS_DEMO && isLocalHost) || !connected || seededRef.current) return;
+    if (isLocalHost || !connected || seededRef.current) return;
     seededRef.current = true;
     const gen = scopeGenRef.current;
 

@@ -7,7 +7,7 @@ import { FleetStreamProvider, useFleetStream } from './contexts/FleetStreamConte
 import { CLOUD_URL } from './utils/cloudUrl';
 import { hasClerkSessionHint } from './cloud/utils/clerkHint';
 import { perfMark } from './utils/perfMark';
-import { IS_AGENT, IS_DEMO, IS_LOCAL_HOST as isLocalHost, SITE_URL } from './utils/buildTarget';
+import { IS_AGENT, IS_LOCAL_HOST as isLocalHost, SITE_URL } from './utils/buildTarget';
 import { roleFromOrgMembership } from './utils/role';
 import { isProOrAbove } from './utils/tier';
 import Sidebar from './components/Sidebar';
@@ -432,22 +432,12 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
   );
 };
 
-const DEMO_USER = {
-  id: 'demo-user',
-  publicMetadata: { tier: 'team' },
-  primaryEmailAddress: { emailAddress: 'demo@wicklee.dev' },
-  fullName: 'Demo Operator',
-};
-
 interface AppProps {
   /** Cloud builds only: the Clerk-hooks bridge from cloud/CloudApp. */
   cloudApp?: React.FC<{ AppCore: React.FC<AppCoreProps> }>;
 }
 
 const App: React.FC<AppProps> = ({ cloudApp: CloudApp }) => {
-  if (IS_DEMO) {
-    return <AppCore isSignedIn={true} isLoaded={true} getToken={() => Promise.resolve('demo')} user={DEMO_USER} orgId={null} />;
-  }
   if (IS_AGENT || !CloudApp) {
     return <AppCore isSignedIn={false} isLoaded={true} getToken={() => Promise.resolve(null)} user={null} />;
   }

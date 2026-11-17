@@ -10,7 +10,6 @@
     "build": "tsc && vite build",
     "postbuild": "node scripts/generate-static-pages.mjs",
     "build:agent": "tsc && vite build --mode agent",
-    "build:demo": "tsc && vite build --mode demo",
     "lint": "eslint . --max-warnings 32",
     "test": "vitest run",
     "test:watch": "vitest",

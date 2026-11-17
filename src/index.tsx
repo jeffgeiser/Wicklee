@@ -4,7 +4,7 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 import ErrorBoundary from './components/ErrorBoundary';
 import { perfMark } from './utils/perfMark';
-import { IS_AGENT, IS_DEMO } from './utils/buildTarget';
+import { IS_AGENT } from './utils/buildTarget';
 
 perfMark('wk:entry-start');
 
@@ -13,19 +13,7 @@ if (!rootElement) throw new Error('Could not find root element to mount to');
 const root = ReactDOM.createRoot(rootElement);
 
 (async () => {
-  if (IS_DEMO) {
-    const { installDemoFetch } = await import('./demo/demoApi');
-    installDemoFetch();
-    const { default: DemoBanner } = await import('./demo/DemoBanner');
-    root.render(
-      <React.StrictMode>
-        <ErrorBoundary surface="cloud">
-          <App />
-          <DemoBanner />
-        </ErrorBoundary>
-      </React.StrictMode>
-    );
-  } else if (IS_AGENT) {
+  if (IS_AGENT) {
     root.render(
       <React.StrictMode>
         <ErrorBoundary surface="agent">

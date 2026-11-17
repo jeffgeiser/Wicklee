@@ -32,7 +32,6 @@ export default tseslint.config(
   {
     ignores: [
       'agent/frontend/dist/**',
-      'dist-demo/**',
       'node_modules/**',
       'public/**',
       'cloud/**',
