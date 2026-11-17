@@ -6,7 +6,7 @@
 
 **Sovereign-first GPU fleet monitor for local AI inference.**
 
-One Rust binary per node. Live hardware dashboard at `localhost:7700`. Optional fleet aggregation at [wicklee.dev](https://wicklee.dev). No proxy in the inference path by default — your models run untouched.
+One Rust binary per node. Live hardware dashboard at `localhost:7700`. No proxy in the inference path by default — your models run untouched.
 
 <img width="1681" height="691" alt="Screenshot 2026-04-06 at 5 47 03 PM" src="https://github.com/user-attachments/assets/4f12d129-864a-4559-807e-634d57786bdd" />
 
@@ -219,7 +219,7 @@ Wicklee exposes structured telemetry for AI agents via MCP, REST, and standard d
 - **`GET /.well-known/mcp.json`** — MCP server manifest
 - **`/llms.txt`** — Lightweight discovery file
 - **`/openapi.json`** — OpenAPI 3.0 spec
-- **REST API** — Fleet state, WES scores, best-route inference, observations. On the agent, `GET /api/metrics` is an SSE stream; `GET /api/metrics/snapshot` returns the latest frame as JSON for scripts.
+- **REST API** — node metrics, WES scores, observations and local history. `GET /api/metrics` is an SSE stream; `GET /api/metrics/snapshot` returns the latest frame as JSON for scripts.
 - **`/v1` diagnostics** — `state`, `readiness`, `inspect`, `findings`, `receipts`. Evidence-labelled, same functions as the CLI and MCP. [Above](#diagnose-local-inference--wicklee-inspect).
 
 ### Local MCP Tools (localhost:7700)
@@ -243,32 +243,26 @@ that needs a person's consent, not an agent's.
 `wicklee_inspect` replace them. They answer with the name of their replacement
 rather than "unknown tool".
 
-### Cloud MCP Tools (wicklee.dev/mcp)
-
-Fleet-aggregated MCP for remote AI agents — multi-node routing, cross-node WES comparison, and fleet-wide observations. Includes `get_fleet_model_fit` to score any HuggingFace GGUF against every online node simultaneously.
-
 ```bash
 # Add to Claude Desktop, Cursor, or Windsurf
 npx -y mcp-remote http://localhost:7700/mcp
 
-# Query node status directly
+# Query a tool directly
 curl -X POST http://localhost:7700/mcp \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"get_node_status"},"id":1}'
 
 # Ask your agent
 # "Can I run Qwen2.5-72B on my hardware right now?"
-# "Which node in my fleet should handle the next request?"
 # "Why was my last inference run slow?"
 ```
 
-Point your agent at **wicklee.dev/llms.txt** for full capability discovery.
-
-### Enterprise Bridge
-
-- **OpenTelemetry Export** — OTLP metrics to Datadog, Grafana Cloud, New Relic
-- **Prometheus Endpoint** — `GET https://wicklee.dev/metrics` on the cloud (not the agent) with API key authentication — see [docs/GRAFANA.md](docs/GRAFANA.md)
-- **Cloud MCP** — Fleet-aggregated MCP for remote AI agents
+The discovery files are published on the public site too, so an agent can read the
+capability inventory before it has a node to talk to:
+[`/llms.txt`](https://wicklee.dev/llms.txt),
+[`/llms-full.txt`](https://wicklee.dev/llms-full.txt),
+[`/api.md`](https://wicklee.dev/api.md) and
+[`/openapi.json`](https://wicklee.dev/openapi.json).
 
 ---
 

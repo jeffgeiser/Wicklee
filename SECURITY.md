@@ -37,12 +37,17 @@ Please include:
 
 This policy covers:
 - The Wicklee agent binary (`wicklee`)
-- The fleet backend at `wicklee.dev`
 - The install scripts (`install.sh`, `install.ps1`)
+- The public site at `wicklee.dev`
 
 Out of scope:
 - Third-party dependencies (report upstream)
 - Self-hosted modifications
+
+There is no hosted fleet backend. `wicklee.dev` serves the site, the install
+scripts and the discovery files as static files; it runs no API and holds no
+telemetry. A report about a fleet control plane you are running yourself falls
+under self-hosted modifications.
 
 ## Disclosure
 
