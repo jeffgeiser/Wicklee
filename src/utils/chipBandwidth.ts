@@ -39,22 +39,18 @@ export const INFERENCE_EFFICIENCY = 0.40;
  * — the lookup uses substring matching so "Apple M2 Pro" matches "M2 Pro".
  */
 const APPLE_BANDWIDTH_GB_S: Record<string, number> = {
-  // M1 family
   'M1 Ultra':  800,
   'M1 Max':    400,
   'M1 Pro':    200,
   'M1':         68,
-  // M2 family
   'M2 Ultra':  800,
   'M2 Max':    400,
   'M2 Pro':    200,
   'M2':        100,
-  // M3 family — bandwidth was DOWNGRADED on M3 Pro/Max relative to M2 equivalents
-  'M3 Ultra':  819,   // 819.2 spec — matches agent hardware_bandwidth_gbps
-  'M3 Max':    400,   // 16-core GPU variant; 14-core is 300 (we approximate up)
+  'M3 Ultra':  819,
+  'M3 Max':    400,
   'M3 Pro':    150,
   'M3':        100,
-  // M4 family
   'M4 Max':    546,
   'M4 Pro':    273,
   'M4':        120,
@@ -66,9 +62,6 @@ const APPLE_BANDWIDTH_GB_S: Record<string, number> = {
  * Conservative — datacenter cards use HBM, consumer cards use GDDR.
  */
 const NVIDIA_BANDWIDTH_GB_S: Record<string, number> = {
-  // Datacenter HBM — A100/H100 split by variant in chipBandwidthGBs() since
-  // NVML names ("NVIDIA A100-SXM4-80GB", "NVIDIA H100 PCIe") need keyword
-  // logic, not plain substring keys.
   'H200':       4800,
   'V100':        900,
   'L40S':        864,
@@ -76,14 +69,11 @@ const NVIDIA_BANDWIDTH_GB_S: Record<string, number> = {
   'L4':          300,
   'A40':         696,
   'A10':         600,
-  // Grace Blackwell unified memory (DGX Spark)
   'GB10':        273,
-  // RTX 50 series (Blackwell)
   'RTX 5090':   1792,
   'RTX 5080':    960,
   'RTX 5070 Ti': 896,
   'RTX 5070':    672,
-  // RTX 40 series (Ada Lovelace)
   'RTX 4090':   1008,
   'RTX 4080 Super': 736,
   'RTX 4080':    717,
@@ -92,7 +82,6 @@ const NVIDIA_BANDWIDTH_GB_S: Record<string, number> = {
   'RTX 4070':    504,
   'RTX 4060 Ti': 288,
   'RTX 4060':    272,
-  // RTX 30 series (Ampere)
   'RTX 3090 Ti': 1008,
   'RTX 3090':    936,
   'RTX 3080 Ti': 912,
@@ -101,7 +90,6 @@ const NVIDIA_BANDWIDTH_GB_S: Record<string, number> = {
   'RTX 3070':    448,
   'RTX 3060 Ti': 448,
   'RTX 3060':    360,
-  // Workstation
   'RTX 6000 Ada':  960,
   'RTX A6000':     768,
   'RTX A5000':     768,
@@ -128,17 +116,13 @@ export function chipBandwidthGBs(chipName: string | null | undefined): number | 
     return new RegExp(`(?:^|[^A-Z0-9])${esc}(?:$|[^A-Z0-9])`).test(name);
   };
 
-  // A100/H100 ship in variants whose NVML names interleave the capacity and
-  // form factor ("A100-SXM4-80GB", "H100 PCIe", "H100 80GB HBM3"), so plain
-  // table keys can't distinguish them. Mirrors agent hardware_bandwidth_gbps().
   if (word('A100')) return name.includes('80') ? 2039 : 1555;
   if (word('H100')) {
     if (word('PCIE')) return 2000;
     if (word('NVL'))  return 3938;
-    return 3350; // SXM ("H100 80GB HBM3")
+    return 3350;
   }
 
-  // Merge both tables and try longest keys first so "M2 Pro" wins over "M2".
   const all = { ...APPLE_BANDWIDTH_GB_S, ...NVIDIA_BANDWIDTH_GB_S };
   const keys = Object.keys(all).sort((a, b) => b.length - a.length);
   for (const k of keys) {

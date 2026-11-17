@@ -74,11 +74,8 @@ function hfUrl(model_id: string): string {
   return `https://huggingface.co/${model_id}`;
 }
 
-// ── Variant table (extracted to allow useState) ───────────────────────────────
-
 function quantLabel(v: VariantResult): string {
   if (v.quant && v.quant !== 'unknown') return v.quant;
-  // Fall back to last segment of filename (e.g. "Q4_K_M" from "model-Q4_K_M.gguf")
   const stem = v.filename.replace(/\.gguf$/i, '');
   return stem.split(/[-.]/).pop() ?? stem;
 }
@@ -96,8 +93,6 @@ const VariantTable: React.FC<{
   const paramsB = parseParameterCountB(modelId) ?? 7;
   const isDefaultCtx = contextLength === DEFAULT_CONTEXT_LENGTH;
 
-  // Recompute per-variant VRAM + fit at chosen context. At default context,
-  // trust the backend's score so colors match the parent row.
   const recomputed = variants.map(v => {
     if (isDefaultCtx) {
       return { ...v, _vramMb: v.vram_required_mb, _label: v.fit_label, _score: v.fit_score, _headroomPct: v.vram_headroom_pct };
@@ -114,8 +109,6 @@ const VariantTable: React.FC<{
   const recQuant = recommendedQuant(maxSize);
   const hasRecQuant = variants.some(v => v.quant?.toUpperCase() === recQuant.toUpperCase());
 
-  // Estimate avg watts at inference from history (same-class models).
-  // Used for per-variant cost-per-million-tokens.
   const avgWatts = (() => {
     if (!history || !history.length) return null;
     const withWatts = history.filter(r => r.avg_watts != null && r.avg_watts > 0);
@@ -126,7 +119,6 @@ const VariantTable: React.FC<{
 
   return (
     <>
-      {/* Variants header + HF link on the same row */}
       <div className="flex items-center justify-between mt-1">
         <span className="text-[9px] font-semibold uppercase tracking-widest text-gray-600">
           Quants{fitting.length < variants.length ? ` · ${fitting.length} fit` : ` · ${variants.length}`}
@@ -142,20 +134,16 @@ const VariantTable: React.FC<{
         </a>
       </div>
 
-      {/* Variant rows */}
       <div className="space-y-0">
         {displayed.map(v => {
           const vc = fitColors(v._score, 'red');
           const label = quantLabel(v);
           const isRecommended = hasRecQuant && v.quant?.toUpperCase() === recQuant.toUpperCase();
           const proj = history ? projectTpsForVariant(history, v.file_size_mb, v.quant) : null;
-          // Cost-per-million-tokens — only when we have both a tok/s projection
-          // and a watts estimate from fleet/local telemetry.
           let costPerM: number | null = null;
           if (proj && avgWatts != null) {
             const tpsAvg = (proj.min + proj.max) / 2;
             if (tpsAvg > 0) {
-              // (watts / 1000) * (1,000,000 / tps / 3600) * rate
               costPerM = (avgWatts / 1000) * (1_000_000 / tpsAvg / 3600) * kwhRate;
             }
           }
@@ -218,7 +206,6 @@ const VariantTable: React.FC<{
         })}
       </div>
 
-      {/* Won't fit disclosure */}
       {wontFit.length > 0 && (
         <button
           onClick={() => setShowAll(s => !s)}
@@ -228,7 +215,6 @@ const VariantTable: React.FC<{
         </button>
       )}
 
-      {/* Pull command — inline, no recommendation paragraph */}
       {pullCmd && (
         <div className="flex items-center gap-1 mt-1.5 bg-gray-900/60 border border-gray-700/60 rounded px-2 py-1">
           <code className="text-[11px] text-cyan-300 font-mono flex-1 truncate">{pullCmd}</code>
@@ -238,8 +224,6 @@ const VariantTable: React.FC<{
     </>
   );
 };
-
-// ── Speed comparison chart ────────────────────────────────────────────────────
 
 /**
  * Inline horizontal-bar chart showing each variant's projected tok/s on
@@ -296,8 +280,6 @@ const QuantSpeedChart: React.FC<{
   );
 };
 
-// ── Model row ─────────────────────────────────────────────────────────────────
-
 const ModelRow: React.FC<{
   model: ModelResult;
   history: ComparisonRow[] | null;
@@ -316,14 +298,10 @@ const ModelRow: React.FC<{
   const colors = fitColors(best.fit_score, 'red');
   const uploader = uploaderName(model.model_id);
 
-  // Recommended quant for line 2. Falls back to best variant when no rec.
   const maxSize = model.variants.reduce((m, v) => Math.max(m, v.file_size_mb), 0);
   const recQuantName = recommendedQuant(maxSize);
   const recVariant = model.variants.find(v => v.quant?.toUpperCase() === recQuantName.toUpperCase()) ?? best;
 
-  // Projections + cost — use best (top-scored) variant for the row line.
-  // Pass chipName so the projection falls back to a theoretical bandwidth-based
-  // estimate when no telemetry history exists yet (Phase 3).
   const proj = projectTpsForVariant(history ?? [], best.file_size_mb, best.quant, chipName);
   const avgWatts = (() => {
     if (!history || !history.length) return null;
@@ -337,31 +315,17 @@ const ModelRow: React.FC<{
     if (tpsAvg > 0) costPerM = (avgWatts / 1000) * (1_000_000 / tpsAvg / 3600) * kwhRate;
   }
 
-  // Localhost always has a single node — there's no "hasFleetHistory" toggle,
-  // but the same grid template makes the row visually consistent with the
-  // cloud Fleet panel. Phase 3 theoretical fallback means tok/s ~always~
-  // renders here (chip lookup almost always succeeds on Apple/NVIDIA), so we
-  // use the wider speed-column variant of the grid unconditionally.
   return (
     <div className="border border-gray-700/60 rounded-xl overflow-hidden">
-      {/* Single-line grid summary — column proportions mirror the cloud Fleet
-          variant exactly so users moving between localhost and the fleet
-          dashboard see the same layout. Responsive: popularity hides first,
-          then projection, then quant. Identity + fit + action always visible. */}
       <button
         onClick={() => setOpen(v => !v)}
         className={[
           'w-full grid gap-2 items-center px-3 py-2 hover:bg-gray-700/20 transition-colors text-left',
-          // Identity gets ~47% of the row; right-side columns tightened so
-          // fit/speed/popularity/actions group visually together. Same
-          // proportions as the cloud Fleet panel so users moving between
-          // localhost and the fleet dashboard see consistent column widths.
           'grid-cols-[minmax(0,3fr)_minmax(0,1.1fr)_auto]',
           'lg:grid-cols-[minmax(0,3fr)_minmax(0,0.9fr)_minmax(0,1.1fr)_minmax(0,0.9fr)_auto]',
           'xl:grid-cols-[minmax(0,3fr)_minmax(0,0.9fr)_minmax(0,1.1fr)_minmax(0,0.9fr)_minmax(0,0.5fr)_auto]',
         ].join(' ')}
       >
-        {/* Col 1 — identity (dot + stacked name/uploader) */}
         <div className="flex items-center gap-2 min-w-0">
           <div className={`w-2 h-2 rounded-full ${colors.dot} shrink-0`} />
           <div className="min-w-0 flex-1">
@@ -379,7 +343,6 @@ const ModelRow: React.FC<{
           </div>
         </div>
 
-        {/* Col 2 — recommended quant + size (hidden on < md) */}
         <div
           className="text-[10px] font-mono tabular-nums hidden md:block min-w-0"
           title={quantQualityHint(recVariant.quant ?? '')}
@@ -388,7 +351,6 @@ const ModelRow: React.FC<{
           <span className="text-gray-600"> · {(recVariant.file_size_mb / 1024).toFixed(1)} GB</span>
         </div>
 
-        {/* Col 3 — fit grade */}
         <div
           className="flex items-center gap-1.5 text-[10px] min-w-0"
           title={`Fit score ${best.fit_score}/100`}
@@ -398,7 +360,6 @@ const ModelRow: React.FC<{
           <span className="text-gray-600 tabular-nums whitespace-nowrap">fit</span>
         </div>
 
-        {/* Col 4 — speed + (optional) cost projection. Hidden on < lg. */}
         <div className="text-[10px] tabular-nums hidden lg:flex items-center gap-2 min-w-0">
           {proj ? (
             <DiscoveryHoverCard
@@ -433,7 +394,6 @@ const ModelRow: React.FC<{
           )}
         </div>
 
-        {/* Col 5 — popularity (hidden on < xl) */}
         <div className="text-[10px] tabular-nums hidden xl:flex items-center gap-2 min-w-0 justify-end">
           <span className="text-gray-700" title="HuggingFace downloads (all time)">
             {fmtDl(model.downloads)}↓
@@ -445,7 +405,6 @@ const ModelRow: React.FC<{
           )}
         </div>
 
-        {/* Col 6 — actions (always visible, right-aligned) */}
         <div className="flex items-center gap-1 shrink-0">
           {best.pull_cmd && best.fit_score >= 40 && (
             <RowCopyButton
@@ -459,7 +418,6 @@ const ModelRow: React.FC<{
         </div>
       </button>
 
-      {/* Expanded: variants + pull command, no separate HF link row */}
       {open && (
         <div className="px-3 pb-2 border-t border-gray-700/40">
           <VariantTable
@@ -478,8 +436,6 @@ const ModelRow: React.FC<{
   );
 };
 
-// ── Main component ────────────────────────────────────────────────────────────
-
 const ModelDiscoveryCard: React.FC<{ isLocalHost?: boolean }> = ({ isLocalHost = true }) => {
   const [search, setSearch]         = useState('');
   const [pendingSearch, setPending] = useState('');
@@ -488,11 +444,7 @@ const ModelDiscoveryCard: React.FC<{ isLocalHost?: boolean }> = ({ isLocalHost =
   const [error, setError]           = useState<string | null>(null);
   const debounceRef                 = useRef<ReturnType<typeof setTimeout> | null>(null);
   const history                     = useModelComparisonHistory(isLocalHost);
-  // useSettings exposes `isKwhRateConfigured` so cost-per-M only shows when
-  // the user has actually entered their power rate in Settings — not when
-  // they're seeing the default $0.12 placeholder they never engaged with.
   const [contextLength, setContextLength] = useState<number>(DEFAULT_CONTEXT_LENGTH);
-  // Phase 2: category + sort. 'All' shows everything; sort defaults to 'fit'.
   const [category, setCategory] = useState<ModelCategory | 'All'>('All');
   const [sortMode, setSortMode] = useState<SortMode>('fit');
   const { settings, isKwhRateConfigured } = useSettings();
@@ -503,16 +455,10 @@ const ModelDiscoveryCard: React.FC<{ isLocalHost?: boolean }> = ({ isLocalHost =
     setLoading(true);
     setError(null);
     try {
-      // Pull a wide catalog so trending lists actually have depth on
-      // capable nodes. Backend caps at 200.
       const params = new URLSearchParams({ limit: '200' });
       if (query) params.set('search', query);
       const resp = await fetch(`/api/model-candidates?${params}`);
       if (!resp.ok) throw new Error(`${resp.status}`);
-      // When the agent doesn't have this route, axum's static fallback
-      // serves index.html (HTML) — JSON.parse then fails with a cryptic
-      // "Unexpected token '<'". Detect via Content-Type to surface a
-      // clean "update your agent" message instead.
       const ct = resp.headers.get('content-type') ?? '';
       if (!ct.includes('application/json')) {
         throw new Error('agent endpoint missing — update your agent: `curl -fsSL https://wicklee.dev/install.sh | bash`');
@@ -525,12 +471,10 @@ const ModelDiscoveryCard: React.FC<{ isLocalHost?: boolean }> = ({ isLocalHost =
     }
   }, []);
 
-  // Load trending on mount
   useEffect(() => {
     if (isLocalHost) fetchModels();
   }, [isLocalHost, fetchModels]);
 
-  // Debounced live search
   const handleSearchChange = (val: string) => {
     setPending(val);
     setContextLength(DEFAULT_CONTEXT_LENGTH);
@@ -553,9 +497,6 @@ const ModelDiscoveryCard: React.FC<{ isLocalHost?: boolean }> = ({ isLocalHost =
   const fittingCount = data?.models.filter(m => m.variants.some(v => v.fit_score >= 60)).length ?? 0;
   const hw = data?.hardware;
 
-  // ── Phase 2: category + sort plumbing ────────────────────────────────────
-  // Base pool: everything the agent returned. Localhost has a single node so
-  // there's no fit-mode filter to layer on first (unlike the fleet variant).
   const basePool = data?.models ?? [];
   const categoryCounts: Record<ModelCategory | 'All', number> = {
     All: basePool.length,
@@ -568,7 +509,6 @@ const ModelDiscoveryCard: React.FC<{ isLocalHost?: boolean }> = ({ isLocalHost =
 
   return (
     <div className="space-y-3">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Package className="w-4 h-4 text-cyan-400" />
@@ -584,7 +524,6 @@ const ModelDiscoveryCard: React.FC<{ isLocalHost?: boolean }> = ({ isLocalHost =
             </span>
           )}
         </div>
-        {/* Hardware context pill */}
         {hw && (
           <div className="flex items-center gap-2 text-[10px] text-gray-600">
             <Cpu className="w-3 h-3" />
@@ -599,7 +538,6 @@ const ModelDiscoveryCard: React.FC<{ isLocalHost?: boolean }> = ({ isLocalHost =
         )}
       </div>
 
-      {/* Search */}
       <form onSubmit={handleSearchSubmit} className="flex gap-2">
         <div className="flex-1 relative">
           {loading
@@ -623,16 +561,6 @@ const ModelDiscoveryCard: React.FC<{ isLocalHost?: boolean }> = ({ isLocalHost =
         </button>
       </form>
 
-      {/* Page-level methodology callout removed — per-row hover tooltips now
-          explain how each tok/s projection was derived (cohort/sample/
-          bandwidth/theoretical), and the full methodology lives in
-          docs/docs.md under "Model Discovery Scoring". The page banner was
-          drifting toward over-claim now that theoretical fallback can produce
-          tok/s estimates without any telemetry input. */}
-
-      {/* Context length + Sort — paired on one row at ≥lg widths; restack
-          via flex-wrap on narrower viewports. Mirrors FleetModelDiscovery
-          so the two panels stay visually identical. */}
       <div className="flex items-start gap-x-6 gap-y-2 flex-wrap">
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-[10px] text-gray-600 uppercase tracking-widest">Context length:</span>
@@ -652,11 +580,8 @@ const ModelDiscoveryCard: React.FC<{ isLocalHost?: boolean }> = ({ isLocalHost =
           ))}
         </div>
 
-        {/* Vertical separator between the paired groups, lg+ only. */}
         <div className="hidden lg:block w-px self-stretch bg-gray-700/40" aria-hidden="true" />
 
-        {/* Sort chip row. 'speed' and 'cost' degrade gracefully — models
-            without a projection sink to the bottom rather than disappearing. */}
         <div className="flex items-center gap-1.5 flex-wrap">
           <span className="text-[10px] text-gray-600 uppercase tracking-widest mr-0.5">Sort:</span>
           {([
@@ -690,9 +615,6 @@ const ModelDiscoveryCard: React.FC<{ isLocalHost?: boolean }> = ({ isLocalHost =
         </div>
       </div>
 
-      {/* Category chip row — own row because counts in the chips give it
-          variable width and 7 chips need breathing room. Inferred client-
-          side from model_id (Phase 2). */}
       <div className="flex items-center gap-1.5 flex-wrap">
         <span className="text-[10px] text-gray-600 uppercase tracking-widest mr-0.5">Category:</span>
         <button
@@ -729,7 +651,6 @@ const ModelDiscoveryCard: React.FC<{ isLocalHost?: boolean }> = ({ isLocalHost =
         })}
       </div>
 
-      {/* Source label */}
       <div className="text-[10px] text-gray-700">
         {data?.is_live_search
           ? `Live HuggingFace search · ${displayModels.length} model${displayModels.length !== 1 ? 's' : ''} scored against your hardware`
@@ -738,12 +659,10 @@ const ModelDiscoveryCard: React.FC<{ isLocalHost?: boolean }> = ({ isLocalHost =
             : `Trending GGUF models by downloads · scored against your hardware`}
       </div>
 
-      {/* Error */}
       {error && (
         <p className="text-xs text-red-400 py-1">Failed to load: {error}</p>
       )}
 
-      {/* Empty */}
       {data && displayModels.length === 0 && !loading && (
         <p className="text-xs text-gray-600 py-6 text-center">
           {data.models.length === 0
@@ -752,7 +671,6 @@ const ModelDiscoveryCard: React.FC<{ isLocalHost?: boolean }> = ({ isLocalHost =
         </p>
       )}
 
-      {/* Initial loading skeleton */}
       {loading && !data && (
         <div className="flex items-center justify-center py-10 gap-2 text-xs text-gray-600">
           <Loader2 className="w-4 h-4 animate-spin text-cyan-500/60" />
@@ -760,13 +678,10 @@ const ModelDiscoveryCard: React.FC<{ isLocalHost?: boolean }> = ({ isLocalHost =
         </div>
       )}
 
-      {/* Results */}
       {data && displayModels.length > 0 && (
         <div className="space-y-1">
           {(() => {
             const list = [...displayModels];
-            // Hoist avgWatts here so 'cost' sort uses the same value the rows
-            // render — fleet-wide average from history, identical for every model.
             const avgWatts = history && history.length
               ? (() => {
                   const w = history.filter(r => r.avg_watts != null && r.avg_watts > 0);
@@ -775,7 +690,6 @@ const ModelDiscoveryCard: React.FC<{ isLocalHost?: boolean }> = ({ isLocalHost =
                     : null;
                 })()
               : null;
-            // The "best variant" — highest fit_score — drives speed/cost/size sorts.
             const bestVariantOf = (m: ModelResult) =>
               m.variants.reduce<VariantResult | null>(
                 (best, v) => (!best || v.fit_score > best.fit_score) ? v : best,
@@ -789,9 +703,6 @@ const ModelDiscoveryCard: React.FC<{ isLocalHost?: boolean }> = ({ isLocalHost =
               return projectTpsForVariant(history, best.file_size_mb, best.quant);
             };
             const sizeOf = (m: ModelResult) => bestVariantOf(m)?.file_size_mb ?? 0;
-            // When no search query, sort by the user's selected sort mode.
-            // Search results stay in HF's download-rank order so the relevance
-            // signal from HF's search isn't overridden.
             if (!search) {
               list.sort((a, b) => {
                 switch (sortMode) {

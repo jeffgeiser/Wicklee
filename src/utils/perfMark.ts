@@ -9,6 +9,5 @@ export function perfMark(name: string): void {
   try {
     performance.mark(name);
   } catch {
-    // Older engines without User Timing — nothing to record.
   }
 }

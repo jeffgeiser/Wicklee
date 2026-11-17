@@ -41,8 +41,6 @@ const BlogPost: React.FC<BlogPostProps> = ({ slug, onNavigate }) => {
           setDate(resolvedDate);
           setTags(resolvedTags);
 
-          // Update page title + SEO meta (shared helper — also sets
-          // canonical, og:url, og:type article, twitter:card).
           setPageMeta({
             title:       `${resolvedTitle} — Wicklee`,
             description: description || resolvedTitle,
@@ -63,20 +61,16 @@ const BlogPost: React.FC<BlogPostProps> = ({ slug, onNavigate }) => {
 
     return () => {
       cancelled = true;
-      // No restore-on-unmount needed: the App-level route effect re-applies
-      // the destination page's metadata on every navigation.
     };
   }, [slug]);
 
   return (
     <div className="min-h-screen bg-gray-900 text-gray-100 selection:bg-blue-600 selection:text-white">
-      {/* Background decor */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
         <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-blue-600/10 blur-[120px] rounded-full" />
         <div className="absolute bottom-[-10%] right-[-10%] w-[30%] h-[30%] bg-cyan-400/10 blur-[120px] rounded-full" />
       </div>
 
-      {/* Nav */}
       <nav className="max-w-7xl mx-auto px-4 sm:px-8 py-5 sm:py-8 flex items-center justify-between relative z-10">
         <button onClick={() => onNavigate('/')} className="cursor-pointer">
           <Logo className="text-3xl" connectionState="connected" />
@@ -100,9 +94,7 @@ const BlogPost: React.FC<BlogPostProps> = ({ slug, onNavigate }) => {
         </div>
       </nav>
 
-      {/* Content */}
       <main className="max-w-3xl mx-auto px-4 sm:px-8 py-12 pb-32 relative z-10">
-        {/* Back link */}
         <button
           onClick={() => onNavigate('/blog')}
           className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-300 transition-colors mb-10"

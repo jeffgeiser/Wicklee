@@ -4,8 +4,6 @@ import { getNodePowerW } from '../utils/power';
 import { CLOUD_URL } from '../utils/cloudUrl';
 import { IS_DEMO } from '../utils/buildTarget';
 
-// ── Constants ────────────────────────────────────────────────────────────────
-
 const isLocalHost =
   window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 
@@ -18,8 +16,6 @@ const SETTLE_MS          = 60_000;
 const POWER_ANOMALY_THRESHOLD = 0.30;
 /** Minimum watts baseline below which power anomaly detection is suppressed (cold-start noise). */
 const POWER_ANOMALY_MIN_BASELINE_W = 10;
-
-// ── Pending-change buffer types ───────────────────────────────────────────────
 
 /**
  * Tracks a single in-flight state transition waiting to settle.
@@ -34,7 +30,7 @@ interface PendingChange {
   type:           FleetEvent['type'];
   pendingAt:      number;
   hostname:       string;
-  originalValue:  string | null | boolean; // boolean for connectivity
+  originalValue:  string | null | boolean;
   targetValue:    string | null | boolean;
   detail?:        string;
 }
@@ -48,11 +44,7 @@ interface NodePending {
 
 const uid = () => Math.random().toString(36).slice(2);
 
-// ── Context ──────────────────────────────────────────────────────────────────
-
 const FleetStreamContext = createContext<FleetStreamState | null>(null);
-
-// ── Provider ─────────────────────────────────────────────────────────────────
 
 interface FleetStreamProviderProps {
   children:          React.ReactNode;
@@ -71,7 +63,6 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
   orgId,
   onNodesSnapshot,
 }) => {
-  // ── State ──────────────────────────────────────────────────────────────────
   const [allNodeMetrics, setAllNodeMetrics] = useState<Record<string, SentinelMetrics>>({});
   const [lastSeenMsMap, setLastSeenMsMap]   = useState<Record<string, number>>({});
   const [fleetEvents, setFleetEvents]       = useState<FleetEvent[]>([]);
@@ -80,7 +71,6 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
   const [lastTelemetryMs, setLastTelemetryMs] = useState<number | null>(null);
   const [restrictedNodeIds, setRestrictedNodeIds] = useState<ReadonlySet<string>>(new Set());
 
-  // ── Observation refs (persist across SSE frames without triggering re-render) ─
   const prevLiveRef    = useRef<Record<string, boolean>>({});
   const prevThermalRef = useRef<Record<string, string | null>>({});
   const prevModelRef   = useRef<Record<string, string | null>>({});
@@ -102,15 +92,9 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
    *  previous org/session can tell it is stale and drop its result. */
   const scopeGenRef    = useRef(0);
 
-  // Stable ref for the snapshot callback so the SSE effect doesn't re-run.
   const onNodesSnapshotRef = useRef(onNodesSnapshot);
   onNodesSnapshotRef.current = onNodesSnapshot;
 
-  // ── Reset on fleet scope change ────────────────────────────────────────────
-  // Switching orgs or signing out changes which fleet we're looking at. Every
-  // frame merges into existing state, so without a reset the previous org's
-  // nodes, metrics and events stayed on screen after the switch. Declared
-  // before the SSE effect so the reset lands before the new stream opens.
   const scopeKey = `${isSignedIn ? 1 : 0}:${orgId ?? ''}`;
   const prevScopeKeyRef = useRef(scopeKey);
   useEffect(() => {
@@ -137,7 +121,6 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
     seededRef.current           = false;
   }, [scopeKey]);
 
-  // ── SSE Effect ─────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!IS_DEMO && (isLocalHost || !isSignedIn)) return;
 
@@ -147,15 +130,11 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
     const connect = async () => {
       if (cancelled) return;
 
-      // 1. Fetch stream token
       let streamToken: string;
       try {
         const jwt = await getToken();
         if (!jwt || cancelled) { retryTimer = setTimeout(connect, RETRY_MS); return; }
         const hdrs: Record<string, string> = { Authorization: `Bearer ${jwt}` };
-        // Legacy hint; the backend authoritatively scopes by the JWT's org
-        // claim (not this header) — kept only so the effect deps include orgId,
-        // forcing a reconnect with a fresh org-scoped token on org switch.
         if (orgId) hdrs['X-Org-Id'] = orgId;
         const res = await fetch(`${CLOUD_URL}/api/auth/stream-token`, { headers: hdrs });
         if (!res.ok || cancelled) { retryTimer = setTimeout(connect, RETRY_MS); return; }
@@ -167,9 +146,6 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
 
       if (cancelled) return;
 
-      // 2. Open EventSource. Demo builds substitute a fake EventSource that
-      // feeds synthetic fleet frames through this exact processing path
-      // (dynamic import so the demo module never ships in cloud/agent bundles).
       let es: EventSource;
       if (IS_DEMO) {
         const { DemoEventSource } = await import('../demo/demoEventSource');
@@ -195,7 +171,6 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
           const updatedLastSeen: Record<string, number>          = {};
           const newEvents:       FleetEvent[]                    = [];
 
-          // Per-(nodeId, eventType) suppression — 15 min cooldown per node per event type.
           const EVENT_SUPPRESS_MS = 15 * 60_000;
           const suppression = eventSuppressionRef.current;
           const shouldSuppress = (nodeId: string, eventType: string): boolean => {
@@ -216,22 +191,15 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
             const wasLive   = prevLiveRef.current[nodeId];
 
             if (isNowLive && n.metrics) {
-              // Patch display_name into metrics.hostname (custom name wins) and
-              // carry the node's tags so downstream consumers can tag-filter
-              // without extra fetches.
               const patched = { ...n.metrics, hostname: hostname, tags: n.tags ?? null };
               updatedMetrics[nodeId] = patched;
             }
 
-            // ── Get or create this node's pending-change slot ─────────────
             const np: NodePending = pendingRef.current[nodeId] ?? {};
 
-            // ── 1. CONNECTIVITY ───────────────────────────────────────────
             if (wasLive !== undefined && isNowLive !== wasLive) {
-              // Observed a live-state transition on this frame.
               const type: FleetEvent['type'] = isNowLive ? 'node_online' : 'node_offline';
               if (!np.connectivity) {
-                // Fresh transition — open a new settlement window.
                 np.connectivity = {
                   type,
                   pendingAt:     now,
@@ -240,21 +208,16 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
                   targetValue:   isNowLive,
                 };
               } else if (np.connectivity.targetValue !== isNowLive) {
-                // State flipped back (or to a third state).
-                // Per spec: if node ends the window in the ORIGINAL state → cancel.
                 if (isNowLive === np.connectivity.originalValue) {
                   delete np.connectivity;
                 } else {
-                  // Different from both original and previous target — update target, keep window.
                   np.connectivity.type        = type;
                   np.connectivity.targetValue = isNowLive;
                   np.connectivity.hostname    = hostname;
                 }
               }
-              // If targetValue === isNowLive: same direction as existing pending — no action.
             }
 
-            // Check if connectivity has settled.
             if (np.connectivity) {
               const pc = np.connectivity;
               if (isNowLive === pc.targetValue) {
@@ -264,14 +227,11 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
                   }
                   delete np.connectivity;
                 }
-                // else: still in settlement window — wait.
               } else {
-                // Current state no longer matches pending target; already handled update above.
                 delete np.connectivity;
               }
             }
 
-            // Remaining dimensions only apply when the node is live.
             if (isNowLive && n.metrics) {
               const curThermal = n.metrics.thermal_state ?? null;
               const curModel   = n.metrics.ollama_active_model ?? null;
@@ -281,7 +241,6 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
               const prevModel   = prevModelRef.current[nodeId];
               const prevPower   = prevPowerRef.current[nodeId];
 
-              // ── 2. THERMAL / THROTTLE ───────────────────────────────────
               if (prevThermal !== undefined && prevThermal !== curThermal) {
                 const isThrottledNow = curThermal != null && ['serious', 'critical'].includes(curThermal.toLowerCase());
                 const wasThrottled   = prevThermal != null && ['serious', 'critical'].includes(prevThermal.toLowerCase());
@@ -304,10 +263,8 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
                   };
                 } else if (np.thermal.targetValue !== curThermal) {
                   if (curThermal === np.thermal.originalValue) {
-                    // Reverted to original — cancel.
                     delete np.thermal;
                   } else {
-                    // Further change — update target + detail, keep original window.
                     np.thermal.type        = type;
                     np.thermal.targetValue = curThermal;
                     np.thermal.detail      = `${np.thermal.originalValue ?? 'unknown'} → ${curThermal ?? 'unknown'}`;
@@ -324,18 +281,15 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
                   }
                   delete np.thermal;
                 } else if (curThermal !== pt.targetValue) {
-                  // Already updated above; if target still differs, the new pending was set.
-                  // Only cancel here if we didn't set a new pending (i.e. reverted to original).
                   if (!np.thermal || np.thermal.targetValue !== curThermal) delete np.thermal;
                 }
               }
 
-              // ── 3. MODEL SWAP ─────────────────────────────────────────────
               if (
                 prevModel !== undefined &&
                 prevModel !== curModel &&
-                curModel != null &&          // only log when a model is actually loaded
-                prevModel != null            // only log swaps, not initial model load
+                curModel != null &&
+                prevModel != null
               ) {
                 const detail = `${prevModel} → ${curModel}`;
                 if (!np.model) {
@@ -370,12 +324,6 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
                 }
               }
 
-              // ── 4. POWER ANOMALY ──────────────────────────────────────────
-              // Once a pending anomaly opens, compare against ITS baseline
-              // (originalValue), not the per-frame prev: prevPower advances
-              // every frame, so a sustained step (100W → 200W and holding)
-              // showed a 0% frame-over-frame delta on the very next frame and
-              // cancelled itself — the detector could effectively never fire.
               const powerBaseline = np.power ? Number(np.power.originalValue) : prevPower;
               if (
                 powerBaseline != null &&
@@ -394,13 +342,11 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
                     detail:        `${powerBaseline.toFixed(0)}W ${direction} ${curPower.toFixed(0)}W`,
                   };
                 } else {
-                  // Still deviated from the baseline — update to latest reading.
                   np.power.targetValue = `${curPower.toFixed(0)}`;
                   np.power.detail      = `${np.power.originalValue}W ${direction} ${curPower.toFixed(0)}W`;
                   np.power.hostname    = hostname;
                 }
               } else if (np.power) {
-                // Power returned to (near) the original baseline — cancel.
                 delete np.power;
               }
 
@@ -412,16 +358,11 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
                 delete np.power;
               }
 
-              // ── 5. PEAK TPS ───────────────────────────────────────────────
-              // Track per-node tok/s high-water mark for throughput estimation.
-              // Covers both Ollama and vLLM; reset on model swap so the baseline
-              // stays relevant to the currently loaded model.
               const rawTpsForPeak   = (n.metrics.ollama_tokens_per_second ?? n.metrics.vllm_tokens_per_sec) ?? null;
               const curModelForPeak = n.metrics.ollama_active_model ?? n.metrics.vllm_model_name ?? null;
 
               if (peakModelRef.current[nodeId] !== undefined &&
                   peakModelRef.current[nodeId] !== curModelForPeak) {
-                // Model changed — old peak is irrelevant to the new model.
                 delete peakTpsRef.current[nodeId];
               }
               peakModelRef.current[nodeId] = curModelForPeak;
@@ -431,13 +372,11 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
                 peakTpsRef.current[nodeId] = rawTpsForPeak;
               }
 
-              // ── Advance observation refs ──────────────────────────────────
               prevThermalRef.current[nodeId] = curThermal;
               prevModelRef.current[nodeId]   = curModel;
               prevPowerRef.current[nodeId]   = curPower;
             }
 
-            // Save updated pending slot (or remove if empty).
             if (Object.keys(np).length > 0) {
               pendingRef.current[nodeId] = np;
             } else {
@@ -447,9 +386,6 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
             prevLiveRef.current[nodeId] = isNowLive;
           }
 
-          // ── Prune nodes no longer in the snapshot ───────────────────────
-          // Each frame is the full fleet, so anything absent was removed —
-          // drop its per-node refs so they don't accumulate or resurrect.
           const present = new Set(fleet.nodes.map(n => n.node_id));
           for (const ref of [prevLiveRef, prevThermalRef, prevModelRef, prevPowerRef, pendingRef, peakTpsRef, peakModelRef]) {
             for (const id of Object.keys(ref.current)) {
@@ -466,10 +402,8 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
             return out;
           };
 
-          // ── Batch state updates ─────────────────────────────────────────
           setLastSeenMsMap(updatedLastSeen);
 
-          // Non-live nodes keep their last-known metrics; removed nodes don't.
           setAllNodeMetrics(prev => {
             const kept = prunePrev(prev);
             if (kept === prev && Object.keys(updatedMetrics).length === 0) return prev;
@@ -481,9 +415,6 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
             setFleetEvents(prev => [...newEvents, ...prev].slice(0, MAX_EVENTS));
           }
 
-          // Derive restricted node set from the latest snapshot. Keep the
-          // previous Set when membership is unchanged so the context value
-          // (and every consumer) isn't invalidated on each frame.
           const newRestrictedIds = new Set(
             fleet.nodes.filter(n => n.restricted).map(n => n.node_id)
           );
@@ -493,9 +424,8 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
               : newRestrictedIds
           );
 
-          // Notify App.tsx so it can patch node hostnames.
           onNodesSnapshotRef.current?.(fleet.nodes);
-        } catch { /* malformed frame */ }
+        } catch { }
       };
 
       es.onerror = () => {
@@ -516,7 +446,6 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
     };
   }, [isSignedIn, getToken, orgId]);
 
-  // ── Seed fleet events from DuckDB history on initial connect ──────────────
   useEffect(() => {
     if ((!IS_DEMO && isLocalHost) || !connected || seededRef.current) return;
     seededRef.current = true;
@@ -541,22 +470,17 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
         };
         if (!data.events?.length || gen !== scopeGenRef.current) return;
 
-        // Map DB event_type → FleetEvent type. Only seed events we have
-        // explicit display support for — unrecognized types (startup, update,
-        // etc.) are skipped to avoid flooding Live Activity with generic entries.
         const EVENT_TYPE_MAP: Record<string, FleetEvent['type']> = {
           node_online:    'node_online',
           node_offline:   'node_offline',
           model_swap:     'model_swap',
           thermal_change: 'thermal_change',
           power_anomaly:  'power_anomaly',
-          // Observation onset
           zombied_engine:          'zombied_engine',
           thermal_redline:         'thermal_redline',
           oom_warning:             'oom_warning',
           wes_cliff:               'wes_cliff',
           agent_version_mismatch:  'agent_version_mismatch',
-          // Observation resolved
           zombied_engine_resolved:         'zombied_engine_resolved',
           thermal_redline_resolved:        'thermal_redline_resolved',
           oom_warning_resolved:            'oom_warning_resolved',
@@ -581,11 +505,10 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
           const fresh = seeded.filter(e => !existingIds.has(e.id));
           return [...prev, ...fresh].sort((a, b) => b.ts - a.ts).slice(0, MAX_EVENTS);
         });
-      } catch { /* historical events are best-effort */ }
+      } catch { }
     })();
   }, [connected, getToken]);
 
-  // ── 5-second tick for stale detection ──────────────────────────────────────
   const [, setTick] = useState(0);
   useEffect(() => {
     if (isLocalHost) return;
@@ -593,7 +516,6 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
     return () => clearInterval(id);
   }, []);
 
-  // ── Derive connectionState ─────────────────────────────────────────────────
   const nowMs    = Date.now();
   const hasNodes = Object.keys(allNodeMetrics).length > 0;
   const allStale = Object.keys(lastSeenMsMap).length > 0 &&
@@ -607,7 +529,6 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
     ? 'degraded'
     : 'connected';
 
-  // ── Memoised context value ─────────────────────────────────────────────────
   const addFleetEvent = React.useCallback((event: FleetEvent) => {
     setFleetEvents(prev => [event, ...prev].slice(0, MAX_EVENTS));
   }, []);
@@ -615,8 +536,6 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
   const value = useMemo<FleetStreamState>(() => ({
     allNodeMetrics,
     lastSeenMsMap,
-    // Snapshot the peak ref on every render — since allNodeMetrics changes every
-    // SSE frame, the memo always re-runs and peaks stay current without extra state.
     peakTpsMap: { ...peakTpsRef.current },
     fleetEvents,
     addFleetEvent,
@@ -633,8 +552,6 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({
     </FleetStreamContext.Provider>
   );
 };
-
-// ── Hook ─────────────────────────────────────────────────────────────────────
 
 export function useFleetStream(): FleetStreamState {
   const ctx = useContext(FleetStreamContext);

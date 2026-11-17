@@ -21,8 +21,6 @@ describe('chipBandwidthGBs', () => {
   });
 
   it('does not mis-bind Apple keys inside SXM form-factor codes', () => {
-    // "V100-SXM2" contains the substring "M2" — must resolve as V100 (900),
-    // not as a base Apple M2 (100). Same for "SXM4" vs Apple M4.
     expect(chipBandwidthGBs('Tesla V100-SXM2-16GB')).toBe(900);
     expect(chipBandwidthGBs('NVIDIA A100-SXM4-40GB')).toBe(1555);
   });
@@ -52,8 +50,6 @@ describe('chipBandwidthGBs', () => {
 
 describe('quantSweet delegation', () => {
   it('quotes the same bandwidth as the canonical table (no more drift)', () => {
-    // M3 Max previously read 300 from quantSweet's private copy while
-    // chipBandwidth.ts said 400 — same node, two numbers on screen.
     const node = makeNode({ chip_name: 'Apple M3 Max' });
     expect(chipBandwidthGbs(node)).toBe(chipBandwidthGBs('Apple M3 Max'));
     expect(chipBandwidthGbs(node)).toBe(400);
@@ -66,7 +62,6 @@ describe('quantSweet delegation', () => {
 
 describe('theoreticalTpsForChip', () => {
   it('applies the 0.40 inference-efficiency factor to the raw ceiling', () => {
-    // M4 Max (546 GB/s), 5 GB model → 546 × 0.40 / 5 = 43.7 tok/s
     expect(theoreticalTpsForChip('Apple M4 Max', 5)).toBeCloseTo(
       (546 * INFERENCE_EFFICIENCY) / 5, 5,
     );

@@ -58,7 +58,6 @@ const WebhooksSection: React.FC<Props> = ({ subscriptionTier, getToken, nodes, o
   const [error,   setError]   = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
 
-  // Form state
   const [formUrl,        setFormUrl]        = useState('');
   const [formEvent,      setFormEvent]      = useState('thermal_state_changed');
   const [formNodeId,     setFormNodeId]     = useState<string>('');
@@ -126,7 +125,6 @@ const WebhooksSection: React.FC<Props> = ({ subscriptionTier, getToken, nodes, o
       const created: WebhookSub = await res.json();
       setRevealedSecret({ id: created.id, secret: created.secret ?? '' });
       setSubs(prev => [created, ...prev]);
-      // Reset form
       setFormUrl('');
       setFormThreshold('1.0');
       setShowForm(false);
@@ -180,8 +178,6 @@ const WebhooksSection: React.FC<Props> = ({ subscriptionTier, getToken, nodes, o
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text).catch(() => {});
   };
-
-  // ── Rendering ────────────────────────────────────────────────────────────
 
   if (!isProOrAbove) {
     return (
@@ -244,7 +240,6 @@ const WebhooksSection: React.FC<Props> = ({ subscriptionTier, getToken, nodes, o
         </div>
       )}
 
-      {/* Reveal-once secret callout */}
       {revealedSecret && (
         <div className="px-6 py-4 bg-cyan-500/5 border-b border-cyan-500/20">
           <p className="text-xs font-semibold text-cyan-300 mb-2">⚠️ Save this secret — it won't be shown again</p>
@@ -271,7 +266,6 @@ const WebhooksSection: React.FC<Props> = ({ subscriptionTier, getToken, nodes, o
         </div>
       )}
 
-      {/* Form */}
       {showForm && (
         <form onSubmit={handleCreate} className="px-6 py-5 space-y-3 border-b border-gray-700">
           <div>
@@ -368,7 +362,6 @@ const WebhooksSection: React.FC<Props> = ({ subscriptionTier, getToken, nodes, o
         </form>
       )}
 
-      {/* Subscription list */}
       <div className="px-6 py-4 space-y-2">
         {loading && subs.length === 0 ? (
           <p className="text-xs text-gray-600 py-2">Loading…</p>
@@ -428,7 +421,6 @@ const WebhooksSection: React.FC<Props> = ({ subscriptionTier, getToken, nodes, o
         )}
       </div>
 
-      {/* Spec footer */}
       <div className="px-6 py-3 border-t border-gray-700 text-[10px] text-gray-600 leading-relaxed">
         <strong className="text-gray-500">Payload spec:</strong> POST with JSON body. Header <code className="text-gray-400 font-mono">X-Wicklee-Signature: sha256=&lt;hex&gt;</code> = HMAC-SHA256 of body using your subscription secret. Verify on receipt to confirm authenticity. 5-second timeout, no retries — keep your handler fast.
       </div>

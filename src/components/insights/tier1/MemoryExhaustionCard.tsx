@@ -11,8 +11,6 @@ import type { SentinelMetrics } from '../../../types';
 import { INFERENCE_VRAM_THRESHOLD_MB } from '../../../utils/efficiency';
 import InsightCard from '../InsightCard';
 
-// ── Memory helpers ────────────────────────────────────────────────────────────
-
 interface MemorySnapshot {
   headroomGb:  number;
   headroomPct: number;
@@ -48,19 +46,14 @@ function getMemorySnapshot(node: SentinelMetrics): MemorySnapshot | null {
   };
 }
 
-// ── Props ─────────────────────────────────────────────────────────────────────
-
 interface Props {
   node: SentinelMetrics;
   showNodeHeader?: boolean;
 }
 
-// ── Component ─────────────────────────────────────────────────────────────────
-
 const MemoryExhaustionCard: React.FC<Props> = ({ node, showNodeHeader = false }) => {
   const snap = getMemorySnapshot(node);
 
-  // Guard: model must be loaded AND headroom < 10%
   if (!snap || snap.headroomPct >= 10) return null;
 
   const titleSuffix = showNodeHeader ? ` · ${node.node_id}` : '';
@@ -76,7 +69,6 @@ const MemoryExhaustionCard: React.FC<Props> = ({ node, showNodeHeader = false })
     >
       <div className="px-5 py-4 space-y-3">
 
-        {/* ── Memory status line ───────────────────────────────────────────── */}
         <div className="flex items-center gap-2 text-sm flex-wrap">
           <span className="font-telin text-red-400">{snap.headroomGb.toFixed(1)} GB</span>
           <span className="text-gray-500">free {memLabel} ·</span>
@@ -85,7 +77,6 @@ const MemoryExhaustionCard: React.FC<Props> = ({ node, showNodeHeader = false })
           <span className="font-telin text-gray-300">{snap.modelSizeGb.toFixed(1)} GB</span>
         </div>
 
-        {/* ── Description ──────────────────────────────────────────────────── */}
         <p className="text-sm text-gray-400 leading-relaxed">
           Only{' '}
           <span className="font-telin text-red-400">{snap.headroomGb.toFixed(1)} GB</span>
@@ -93,12 +84,10 @@ const MemoryExhaustionCard: React.FC<Props> = ({ node, showNodeHeader = false })
           begins swapping model weights to disk.
         </p>
 
-        {/* ── Hostname (fleet mode only) ───────────────────────────────────── */}
         {showNodeHeader && node.hostname && node.hostname !== node.node_id && (
           <p className="text-xs text-gray-500 font-mono">{node.hostname}</p>
         )}
 
-        {/* ── Recommendations ──────────────────────────────────────────────── */}
         <div className="pt-1 border-t border-gray-700">
           <p className="text-[10px] text-gray-500 uppercase tracking-widest font-semibold mb-1.5">
             Recommended

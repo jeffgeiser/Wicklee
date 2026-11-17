@@ -31,24 +31,21 @@ use std::sync::{Arc, Mutex};
 use duckdb::{params, Connection};
 use serde::{Deserialize, Serialize};
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
 /// Convert Unix milliseconds to an ISO 8601 UTC string: `YYYY-MM-DDTHH:MM:SS.mmmZ`.
 /// Hand-rolled to avoid pulling in the chrono crate.
 fn millis_to_iso8601(ms: i64) -> String {
     let total_secs = ms.div_euclid(1000);
     let frac_ms    = ms.rem_euclid(1000) as u32;
 
-    // Days since Unix epoch using the civil-from-days algorithm (Howard Hinnant).
     let mut days  = total_secs.div_euclid(86400);
     let day_secs  = total_secs.rem_euclid(86400) as u32;
     let hh        = day_secs / 3600;
     let mm        = (day_secs % 3600) / 60;
     let ss        = day_secs % 60;
 
-    days += 719_468; // shift epoch from 1970-01-01 to 0000-03-01
+    days += 719_468;
     let era = if days >= 0 { days } else { days - 146_096 } / 146_097;
-    let doe = (days - era * 146_097) as u32; // day of era [0, 146096]
+    let doe = (days - era * 146_097) as u32;
     let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
     let y   = yoe as i64 + era * 400;
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
@@ -59,8 +56,6 @@ fn millis_to_iso8601(ms: i64) -> String {
 
     format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z", y, m, d, hh, mm, ss, frac_ms)
 }
-
-// ── Sample ────────────────────────────────────────────────────────────────────
 
 /// A single 1-Hz metric snapshot extracted from a MetricsPayload broadcast frame.
 /// Only the fields we persist — keeps the schema focused and easy to extend.
@@ -81,11 +76,9 @@ pub struct Sample {
     pub mem_pressure_pct: Option<f64>,
     pub swap_write_mb_s:  Option<f64>,
     pub clock_throttle_pct: Option<f64>,
-    // Phase 4: inference latency metrics
     pub ttft_ms:          Option<f64>,
     pub avg_latency_ms:   Option<f64>,
     pub queue_depth:      Option<i64>,
-    // Phase 2: backend pattern evaluation fields
     pub penalty_avg:           Option<f64>,
     pub nvidia_gpu_temp_c:     Option<i32>,
     pub vllm_cache_usage_perc: Option<f64>,
@@ -115,14 +108,12 @@ struct BroadcastFrame {
     #[serde(default)] memory_pressure_percent:         Option<f32>,
     #[serde(default)] swap_write_mb_s:                 Option<f32>,
     #[serde(default)] clock_throttle_pct:              Option<f32>,
-    // Phase 4: latency metrics (best available from vLLM, Ollama probe, or proxy)
     #[serde(default)] vllm_avg_ttft_ms:               Option<f32>,
     #[serde(default)] ollama_ttft_ms:                  Option<f32>,
     #[serde(default)] ollama_proxy_avg_ttft_ms:        Option<f32>,
     #[serde(default)] vllm_avg_e2e_latency_ms:         Option<f32>,
     #[serde(default)] ollama_proxy_avg_latency_ms:     Option<f32>,
     #[serde(default)] vllm_requests_waiting:           Option<u32>,
-    // Phase 2: backend pattern evaluation fields
     #[serde(default)] penalty_avg:                     Option<f32>,
     #[serde(default)] nvidia_gpu_temp_c:               Option<u32>,
     #[serde(default)] vllm_cache_usage_perc:           Option<f32>,
@@ -133,9 +124,7 @@ impl BroadcastFrame {
         Sample {
             ts_ms:            self.timestamp_ms as i64,
             node_id:          self.node_id,
-            // Prefer Ollama model name; fall back to vLLM.
             model:            self.ollama_active_model.or(self.vllm_model_name),
-            // Prefer Ollama tok/s; add vLLM if both active simultaneously.
             tps:              match (self.ollama_tokens_per_second, self.vllm_tokens_per_sec) {
                 (Some(o), Some(v)) => Some((o + v) as f64),
                 (Some(o), None)    => Some(o as f64),
@@ -146,12 +135,9 @@ impl BroadcastFrame {
             mem_used_mb:      self.used_memory_mb  as i64,
             mem_total_mb:     self.total_memory_mb as i64,
             cpu_power_w:      self.cpu_power_w.map(|v| v as f64),
-            // NVIDIA: nvidia_power_draw_w. Apple: apple_soc_power_w (Combined CPU+GPU+ANE).
-            // Priority: NVIDIA board power → Apple SoC total → None.
             gpu_power_w:      self.nvidia_power_draw_w
                                   .or(self.apple_soc_power_w)
                                   .map(|v| v as f64),
-            // NVIDIA preferred; fall back to Apple Silicon iogpu utilization.
             gpu_util_pct:     self.nvidia_gpu_utilization_percent
                                   .or(self.gpu_utilization_percent)
                                   .map(|v| v as f64),
@@ -161,18 +147,14 @@ impl BroadcastFrame {
             mem_pressure_pct: self.memory_pressure_percent.map(|v| v as f64),
             swap_write_mb_s:  self.swap_write_mb_s.map(|v| v as f64),
             clock_throttle_pct: self.clock_throttle_pct.map(|v| v as f64),
-            // Best-available TTFT: vLLM histogram avg > proxy rolling avg > Ollama probe
             ttft_ms:          self.vllm_avg_ttft_ms
                                   .or(self.ollama_proxy_avg_ttft_ms)
                                   .or(self.ollama_ttft_ms)
                                   .map(|v| v as f64),
-            // Best-available E2E latency: vLLM histogram > proxy rolling avg
             avg_latency_ms:   self.vllm_avg_e2e_latency_ms
                                   .or(self.ollama_proxy_avg_latency_ms)
                                   .map(|v| v as f64),
-            // Queue depth: vLLM waiting requests
             queue_depth:           self.vllm_requests_waiting.map(|v| v as i64),
-            // Phase 2: backend pattern evaluation fields
             penalty_avg:           self.penalty_avg.map(|v| v as f64),
             nvidia_gpu_temp_c:     self.nvidia_gpu_temp_c.map(|v| v as i32),
             vllm_cache_usage_perc: self.vllm_cache_usage_perc.map(|v| v as f64),
@@ -187,8 +169,6 @@ impl Sample {
         Ok(frame.into_sample())
     }
 }
-
-// ── Resolution ────────────────────────────────────────────────────────────────
 
 /// Which tier to query.  `auto` picks the best tier for the requested window.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -288,8 +268,6 @@ pub struct HistoryResponse {
     pub samples:    Vec<HistorySample>,
 }
 
-// ── Inference Traces ──────────────────────────────────────────────────────────
-
 /// Internal write struct for an inference trace captured by the Ollama proxy.
 /// `Clone` so a test can vary one field of a row; the writer moves it.
 #[derive(Clone)]
@@ -304,14 +282,6 @@ pub(crate) struct TraceRow {
     pub status: i32,
     pub eval_count: Option<i64>,
     pub eval_duration_ns: Option<i64>,
-    // ── Step 5 ───────────────────────────────────────────────────────────────
-    // The spec widens this row with the first three. The last two are a
-    // deviation worth stating: `latency_ms` and `ttft_ms` above are the same
-    // numbers rounded to milliseconds, and a receipt is the one artifact in
-    // Phase 1 that claims to be exact, so it needs the nanoseconds the
-    // runtime actually reported. Carrying them here rather than on a parallel
-    // channel means one row describes one request, and the proxy sends the
-    // done packet's contents once.
     pub load_duration_ns: Option<i64>,
     pub prompt_eval_count: Option<i64>,
     /// Prompt tokens served from the KV cache rather than recomputed. A high
@@ -325,13 +295,13 @@ pub(crate) struct TraceRow {
 #[derive(Serialize)]
 pub(crate) struct TraceRecord {
     pub id: String,
-    pub timestamp: String,        // ISO 8601
+    pub timestamp: String,
     #[serde(rename = "nodeId")]
     pub node_id: String,
     pub model: String,
-    pub latency: i64,             // ms
-    pub ttft: i64,                // ms
-    pub tpot: f64,                // ms/tok
+    pub latency: i64,
+    pub ttft: i64,
+    pub tpot: f64,
     pub status: i32,
 }
 
@@ -339,7 +309,7 @@ pub(crate) struct TraceRecord {
 #[derive(Debug, Serialize)]
 pub struct EventRecord {
     pub ts_ms:      i64,
-    pub timestamp:  String,   // ISO 8601
+    pub timestamp:  String,
     pub node_id:    String,
     pub level:      String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -358,8 +328,6 @@ pub struct Dismissal {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note:            Option<String>,
 }
-
-// ── SLA Monitor types ───────────────────────────────────────────────────────
 
 /// p50/p95/p99/max for one latency dimension.  Returned by `query_sla()`.
 #[derive(Debug, Serialize)]
@@ -412,8 +380,6 @@ pub struct SlaSummary {
     pub by_model:         Vec<SlaModelRow>,
 }
 
-// ── Store ─────────────────────────────────────────────────────────────────────
-
 /// Shared DuckDB metrics store.  Clone-cheap (Arc inside).
 /// All methods are synchronous — use `tokio::task::spawn_blocking` for
 /// long-running operations (aggregation, large history queries) in async code.
@@ -431,12 +397,6 @@ impl Store {
     }
 
     fn init_schema(&self) -> Result<(), duckdb::Error> {
-        // ── Baseline schema (CREATE TABLE) ───────────────────────────────────
-        // These are the foundational tables. If any one of them fails, the
-        // store cannot operate — propagate the error so Store::open returns
-        // Err and main.rs disables the DuckDB-gated routes. ALTER statements
-        // (additive column migrations) are split into a tolerant pass below
-        // so a single bad migration cannot strip the whole feature surface.
         self.0.lock().unwrap().execute_batch("
             -- Tier 0: raw 1-Hz samples, 24-hour retention.
             -- PRIMARY KEY enforces uniqueness; ON CONFLICT DO NOTHING in write_sample
@@ -674,35 +634,16 @@ impl Store {
             );
         ")?;
 
-        // ── Additive column migrations (tolerant) ────────────────────────────
-        // Each ALTER runs in its own execute() call so a single statement
-        // failure cannot abort the batch and kill Store::open. The whole
-        // feature surface (~12 routes — model-candidates, sla, profile,
-        // history, traces, events/history, observations, cost-by-model,
-        // model-comparison, …) is gated on Store being Some(_) in main.rs;
-        // one bad ALTER previously stripped all of them silently. Now any
-        // ALTER failure is logged but ignored — the column was either
-        // already there, or the DuckDB version doesn't support the syntax,
-        // either of which is recoverable: query code uses .unwrap_or
-        // defaults when a column is absent.
-        //
-        // Note: a literal `ALTER TABLE ... ADD COLUMN ... NOT NULL` on a
-        // table with existing rows is rejected by DuckDB even with a
-        // DEFAULT. Always omit NOT NULL on additive migrations.
         let migrations: &[&str] = &[
             "ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS swap_write_mb_s      DOUBLE",
             "ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS clock_throttle_pct   DOUBLE",
             "ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS ttft_ms              DOUBLE",
             "ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS avg_latency_ms       DOUBLE",
             "ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS queue_depth          BIGINT",
-            // Phase 2 — backend pattern evaluation (C/I/M/N)
             "ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS penalty_avg          DOUBLE",
             "ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS nvidia_gpu_temp_c    INTEGER",
             "ALTER TABLE metrics_raw ADD COLUMN IF NOT EXISTS vllm_cache_usage_perc DOUBLE",
-            // HF likes — nullable so existing-row tables accept the migration.
             "ALTER TABLE model_catalog ADD COLUMN IF NOT EXISTS likes BIGINT DEFAULT 0",
-            // Step 5: the proxy's done packet, in full. An existing database
-            // has the old ten columns, so these arrive by migration.
             "ALTER TABLE inference_traces ADD COLUMN IF NOT EXISTS load_duration_ns         BIGINT",
             "ALTER TABLE inference_traces ADD COLUMN IF NOT EXISTS prompt_eval_count        BIGINT",
             "ALTER TABLE inference_traces ADD COLUMN IF NOT EXISTS prompt_eval_cached_count BIGINT",
@@ -720,14 +661,10 @@ impl Store {
         Ok(())
     }
 
-    // ── Write ─────────────────────────────────────────────────────────────────
-
     /// Insert one raw sample.
     /// Conflicts (same ts_ms + node_id) are silently discarded — safe on restart
     /// within the same wall-clock second or minor clock adjustments.
     pub fn write_sample(&self, s: Sample) -> Result<(), duckdb::Error> {
-        // 1 Hz hot path: prepare_cached reuses the parsed/planned statement
-        // instead of re-parsing this 22-column INSERT every second.
         self.0.lock().unwrap().prepare_cached(
             "INSERT INTO metrics_raw
              (ts_ms, node_id, model, tps,
@@ -768,8 +705,6 @@ impl Store {
         Ok(())
     }
 
-    // ── Aggregation + Pruning ─────────────────────────────────────────────────
-
     /// Called once per hour (dispatched via `spawn_blocking`).
     ///
     /// Aggregates the last 2 hours of raw samples into complete 1-minute buckets,
@@ -783,41 +718,22 @@ impl Store {
     /// Prunes raw rows older than 24 h, 1-min rows older than 30 d, and
     /// 1-hr rows older than 90 d.
     pub fn run_aggregation(&self, now_ms: i64) -> Result<(), duckdb::Error> {
-        // Bucket boundaries — never aggregate the currently-open bucket.
         let cur_min_ms = (now_ms / 60_000)    * 60_000;
         let cur_hr_ms  = (now_ms / 3_600_000) * 3_600_000;
 
-        // Lookback windows for re-aggregation — catches restarts / gaps.
-        let raw_lookback = now_ms - 7_200_000;     // 2 h
-        let min_lookback = now_ms - 7_200_000;     // 2 h of 1-min rows for 1-hr tier
+        let raw_lookback = now_ms - 7_200_000;
+        let min_lookback = now_ms - 7_200_000;
 
-        // Retention cutoffs.
-        let raw_cutoff   = now_ms - 86_400_000_i64;           // 24 h
-        let min_cutoff   = now_ms - 30_i64 * 86_400_000_i64;  // 30 d
-        let hr_cutoff    = now_ms - 90_i64 * 86_400_000_i64;  // 90 d
-        let event_cutoff = now_ms - 7_i64 * 86_400_000_i64;   // 7 d
-        // Transitions are the evidence the diagnostic rules cite. The longest
-        // window any Phase 1 rule looks back over is a day (`expiry_reload`
-        // counts reloads per day), so a week leaves room for a rule to be
-        // re-evaluated over history without keeping it indefinitely.
+        let raw_cutoff   = now_ms - 86_400_000_i64;
+        let min_cutoff   = now_ms - 30_i64 * 86_400_000_i64;
+        let hr_cutoff    = now_ms - 90_i64 * 86_400_000_i64;
+        let event_cutoff = now_ms - 7_i64 * 86_400_000_i64;
         let transition_cutoff = now_ms - 7_i64 * 86_400_000_i64;
-        // Resolved findings outlive the transitions they were built from: the
-        // point of keeping them is "this used to happen and stopped", which is
-        // worth more than the log that proved it. Open findings are never
-        // pruned — an open finding with no evidence left in the window is
-        // still true, and the next evaluation will resolve it if it is not.
         let finding_cutoff = now_ms - 30_i64 * 86_400_000_i64;
-        // Receipts are the only exact numbers on the host, and a fingerprint
-        // baseline is worth nothing if it expires before the operator changes
-        // the thing it was measuring. Thirty days, same as a resolved
-        // finding — step 6 compares a run against a baseline taken "before
-        // the change", and a week is not long enough for that to mean a
-        // configuration change someone actually made.
         let receipt_cutoff = now_ms - 30_i64 * 86_400_000_i64;
 
         let conn = self.0.lock().unwrap();
 
-        // ── Tier 0 → Tier 1 ──────────────────────────────────────────────────
         conn.execute_batch(&format!("
             INSERT INTO metrics_1min
               (ts_ms, node_id, model,
@@ -856,15 +772,6 @@ impl Store {
               sample_count  = excluded.sample_count;
         "))?;
 
-        // ── Tier 1 → Tier 2 ──────────────────────────────────────────────────
-        // Each per-minute row carries `sample_count` (raw 1 Hz samples folded
-        // into it). Minutes with gaps/restarts have fewer samples, so we weight
-        // every average by sample_count — an unweighted AVG(avg) would treat a
-        // 3-sample minute the same as a full 60-sample minute and skew the hour.
-        // NULLIF guards divide-by-zero when a column was NULL across the window.
-        // Note: tps_p95 is the p95 of the per-minute *averages*, not of raw
-        // samples (raw rows are pruned at 24 h, so true sample-level p95 isn't
-        // available at the 1-hr tier).
         conn.execute_batch(&format!("
             INSERT INTO metrics_1hr
               (ts_ms, node_id, model,
@@ -903,7 +810,6 @@ impl Store {
               sample_count  = excluded.sample_count;
         "))?;
 
-        // ── Prune beyond retention windows ────────────────────────────────────
         conn.execute_batch(&format!("
             DELETE FROM metrics_raw  WHERE ts_ms < {raw_cutoff};
             DELETE FROM metrics_1min WHERE ts_ms < {min_cutoff};
@@ -917,18 +823,12 @@ impl Store {
             DELETE FROM verify_runs WHERE ts_ms < {receipt_cutoff};
         "))?;
 
-        // Fold the WAL into the main file after the hourly prune so deleted
-        // rows' space is reclaimable and the WAL doesn't grow between DuckDB's
-        // size-triggered auto-checkpoints. Best-effort: the aggregation itself
-        // already succeeded, so a failed checkpoint is only logged.
         if let Err(e) = conn.execute_batch("CHECKPOINT;") {
             eprintln!("[store] checkpoint after prune failed: {e}");
         }
 
         Ok(())
     }
-
-    // ── Query ─────────────────────────────────────────────────────────────────
 
     /// Return historical samples for `node_id` in `[from_ms, to_ms]`.
     /// Caller selects the tier; see `Resolution::auto` for auto-selection.
@@ -1051,8 +951,6 @@ impl Store {
         })
     }
 
-    // ── Inference Traces ───────────────────────────────────────────────────────
-
     /// Insert one inference trace.  Conflicts (duplicate id) are silently
     /// discarded — safe if the same done-packet is somehow processed twice.
     pub fn write_trace(&self, t: &TraceRow) {
@@ -1142,8 +1040,6 @@ impl Store {
         Ok(rows)
     }
 
-    // ── Inference SLA Monitor ───────────────────────────────────────────────
-
     /// Aggregate SLA percentiles from `inference_traces` over the given window.
     ///
     /// `window_min` is clamped to [1, 1440] minutes (24 h hard ceiling — that's the
@@ -1169,13 +1065,9 @@ impl Store {
             .unwrap_or(0);
         let cutoff = now - window_ms;
 
-        // Build base WHERE clause for both queries.
-        // We always scope to node_id (the agent only stores its own node anyway,
-        // but explicit beats implicit).  Model filter is optional.
         let mut where_clause = "node_id = ? AND ts_ms >= ?".to_string();
         if model.is_some() { where_clause.push_str(" AND model = ?"); }
 
-        // ── Aggregate query: percentiles + counts in a single round-trip. ──
         let agg_sql = format!(
             "SELECT
                 COUNT(*) AS n,
@@ -1225,7 +1117,6 @@ impl Store {
         let error_rate_pct = if n > 0 { errs as f64 / n as f64 * 100.0 } else { 0.0 };
         let compliance_pct = if n > 0 { compliant as f64 / n as f64 * 100.0 } else { 100.0 };
 
-        // ── Per-model breakdown. ──
         let by_model_sql = format!(
             "SELECT model, COUNT(*) AS n,
                     COALESCE(quantile_cont(ttft_ms,    0.95), 0) AS ttft_p95,
@@ -1253,7 +1144,6 @@ impl Store {
         };
         drop(stmt);
 
-        // ── Recent violations (last 20 over target). ──
         let viol_sql = format!(
             "SELECT ts_ms, model, ttft_ms, latency_ms
              FROM inference_traces
@@ -1296,8 +1186,6 @@ impl Store {
             by_model,
         })
     }
-
-    // ── Node Events ─────────────────────────────────────────────────────────
 
     /// Insert one Live Activity event.  Conflicts (same ts_ms + node_id +
     /// message) are silently discarded — safe on replay or duplicate push.
@@ -1375,8 +1263,6 @@ impl Store {
         Ok(rows)
     }
 
-    // ── Insight dismissals ────────────────────────────────────────────────────
-
     /// Persist a dismiss decision.  Upserts: re-dismissing the same
     /// (pattern_id, node_id) pair resets the expiry and note.
     ///
@@ -1427,17 +1313,13 @@ impl Store {
     /// Prune expired dismissal rows older than 7 days beyond their expiry.
     /// Called from the hourly aggregation loop in main.rs.
     pub fn prune_expired_dismissals(&self, now_ms: i64) -> Result<(), duckdb::Error> {
-        let cutoff = now_ms - 7 * 24 * 60 * 60 * 1000; // 7 days past expiry
+        let cutoff = now_ms - 7 * 24 * 60 * 60 * 1000;
         self.0.lock().unwrap().execute(
             "DELETE FROM accepted_states WHERE expires_at_ms < ?",
             params![cutoff],
         )?;
         Ok(())
     }
-
-    // ── Audit Log Export ──────────────────────────────────────────────────────
-
-    // ── Observation window query ────────────────────────────────────────────
 
     /// Return the last `window_ms` of raw samples for a given node.
     /// Used by the local observations evaluator (Patterns A/B/J/L).
@@ -1500,7 +1382,7 @@ impl Store {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as i64;
-        let from = now - 7 * 24 * 3600 * 1000; // 7 days
+        let from = now - 7 * 24 * 3600 * 1000;
         let conn = self.0.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT MEDIAN(tps), MEDIAN(gpu_power_w), COUNT(*)
@@ -1518,12 +1400,10 @@ impl Store {
             Ok((Some(tps), Some(watts), count)) if count >= 100 && watts > 0.0 => {
                 Ok(Some((tps, watts, count)))
             }
-            Ok(_) => Ok(None), // insufficient data
+            Ok(_) => Ok(None),
             Err(e) => Err(e),
         }
     }
-
-    // ── Inference Intelligence queries (Pro+) ─────────────────────────────────
 
     /// Inference Profiler — correlated time-series for a time window.
     /// Buckets auto-scale: ≤10min→1s, ≤1h→10s, ≤6h→30s, ≤24h→60s.
@@ -1592,7 +1472,6 @@ impl Store {
         let conn = self.0.lock().unwrap();
 
         let (sql, sample_interval_h) = if hours <= 24 {
-            // 1Hz raw data — each sample = 1 second = 1/3600 hour
             ("SELECT model, COUNT(*) AS samples,
                      AVG(gpu_power_w + COALESCE(cpu_power_w, 0)) AS avg_watts,
                      AVG(tps) AS avg_tps
@@ -1601,10 +1480,6 @@ impl Store {
               GROUP BY model ORDER BY avg_watts DESC".to_string(),
              1.0 / 3600.0)
         } else {
-            // 1-min aggregated data — `sample_count` carries the number of raw
-            // 1 Hz samples folded into each minute, so each counted sample is
-            // still 1 second = 1/3600 hour (NOT 1/60: that would treat every
-            // raw second as a full minute and inflate cost ~60×).
             ("SELECT model, SUM(sample_count) AS samples,
                      AVG(gpu_power_avg) AS avg_watts,
                      AVG(tps_avg) AS avg_tps
@@ -1659,7 +1534,6 @@ impl Store {
     ) -> Result<serde_json::Value, duckdb::Error> {
         let conn = self.0.lock().unwrap();
 
-        // 1. Find the closest inference trace to the given timestamp (±60s window)
         let mut trace_stmt = conn.prepare(
             "SELECT ts_ms, model, ttft_ms, latency_ms, tpot_ms, eval_count, status
              FROM inference_traces
@@ -1691,7 +1565,6 @@ impl Store {
 
         let trace_ts = trace_val["ts_ms"].as_i64().unwrap_or(ts_ms);
 
-        // 2. Read metrics_raw for ±30s around the trace
         let mut hw_stmt = conn.prepare(
             "SELECT AVG(vllm_cache_usage_perc) AS kv_cache,
                     AVG(penalty_avg) AS penalty,
@@ -1710,21 +1583,20 @@ impl Store {
             params![node_id, trace_ts - 30_000, trace_ts + 30_000],
             |row| {
                 Ok((
-                    row.get::<_, Option<f64>>(0)?,  // kv_cache
-                    row.get::<_, Option<f64>>(1)?,  // penalty
-                    row.get::<_, Option<String>>(2)?, // thermal
-                    row.get::<_, Option<f64>>(3)?,  // queue
-                    row.get::<_, Option<f64>>(4)?,  // power
-                    row.get::<_, Option<f64>>(5)?,  // gpu_pct
-                    row.get::<_, Option<f64>>(6)?,  // gpu_temp
-                    row.get::<_, Option<f64>>(7)?,  // swap
-                    row.get::<_, Option<f64>>(8)?,  // mem_pct
-                    row.get::<_, Option<f64>>(9)?,  // clock_throttle
+                    row.get::<_, Option<f64>>(0)?,
+                    row.get::<_, Option<f64>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<f64>>(3)?,
+                    row.get::<_, Option<f64>>(4)?,
+                    row.get::<_, Option<f64>>(5)?,
+                    row.get::<_, Option<f64>>(6)?,
+                    row.get::<_, Option<f64>>(7)?,
+                    row.get::<_, Option<f64>>(8)?,
+                    row.get::<_, Option<f64>>(9)?,
                 ))
             },
         ).unwrap_or((None, None, None, None, None, None, None, None, None, None));
 
-        // 3. Evaluate factors
         let mut factors = Vec::new();
         let mut summary_parts = Vec::new();
 
@@ -1773,7 +1645,6 @@ impl Store {
                     "detail": format!("Clock throttled {throttle:.0}% from maximum"), "value": throttle, "threshold": 15.0 }));
             }
 
-        // Sort factors by severity (high > moderate > low)
         factors.sort_by(|a, b| {
             let sev_rank = |s: &str| match s { "high" => 0, "moderate" => 1, _ => 2 };
             sev_rank(a["severity"].as_str().unwrap_or("low"))
@@ -1914,8 +1785,6 @@ impl Store {
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )?;
             for t in transitions {
-                // Model names cannot contain a comma, so joining is lossless
-                // and avoids a nested-type dependency in the schema.
                 let co_resident = t.co_resident.join(",");
                 let before = t
                     .before
@@ -2001,8 +1870,6 @@ impl Store {
         }
         Ok(out)
     }
-
-    // ── Model Catalog (HuggingFace GGUF cache) ─────────────────────────────
 
     /// Write a batch of catalog entries (replaces existing for the same model_id).
     /// Tuple shape: (model_id, filename, quant_level, file_size, downloads, likes, fetched_at).
@@ -2144,12 +2011,10 @@ impl Store {
     }
 }
 
-// ── Observation samples ──────────────────────────────────────────────────────
-
 /// Lightweight sample for server-side pattern evaluation.
 /// Pulled from `metrics_raw` over a short window (typically 5 min).
 #[derive(Debug)]
-#[allow(dead_code)] // mem_pressure_pct reserved for Pattern F
+#[allow(dead_code)]
 pub struct ObsSample {
     pub ts_ms:              i64,
     pub model:              Option<String>,
@@ -2159,16 +2024,13 @@ pub struct ObsSample {
     pub cpu_power_w:        Option<f64>,
     pub mem_pressure_pct:   Option<f64>,
     pub swap_write_mb_s:    Option<f64>,
-    // Extended fields for backend pattern evaluation (C/D/F/G/H/I/K/O)
     pub gpu_util_pct:          Option<f64>,
     pub vram_used_mb:          Option<i64>,
     pub vram_total_mb:         Option<i64>,
     pub clock_throttle_pct:    Option<f64>,
-    // Inference latency fields for patterns P/Q/R
     pub ttft_ms:               Option<f64>,
     pub avg_latency_ms:        Option<f64>,
     pub queue_depth:           Option<i64>,
-    // Phase 2 fields (C/I/M/N)
     pub penalty_avg:           Option<f64>,
     pub nvidia_gpu_temp_c:     Option<i32>,
     pub vllm_cache_usage_perc: Option<f64>,
@@ -2242,20 +2104,15 @@ mod tests {
 
         let back = store.query_receipts("WK-TEST", None, 10).unwrap();
         assert_eq!(back.len(), 1);
-        // Every field, because the point of the table is that the numbers
-        // come back exactly as the runtime reported them.
         assert_eq!(back[0], r);
         assert_eq!(back[0].source, ReceiptSource::Callback);
         assert_eq!(back[0].start_state, StartState::Loaded);
         assert_eq!(back[0].co_resident, vec!["other:7b".to_string()]);
         assert!((back[0].decode_tps().unwrap() - 61.2).abs() < 0.1);
 
-        // The same receipt posted twice is one row, not two: a retried POST
-        // must not move a median.
         store.write_receipt("WK-TEST", &r).unwrap();
         assert_eq!(store.query_receipts("WK-TEST", None, 10).unwrap().len(), 1);
 
-        // Newest first, and filterable by model.
         let mut later = ambient.clone();
         later.ts_ms = t0 + 60_000;
         let mut other_body = body.clone();
@@ -2270,7 +2127,6 @@ mod tests {
             store.query_receipts("WK-TEST", Some("coder:14b"), 10).unwrap().len(),
             1,
         );
-        // Another node's receipts are its own.
         assert!(store.query_receipts("WK-OTHER", None, 10).unwrap().is_empty());
 
         drop(store);
@@ -2352,7 +2208,6 @@ mod tests {
         let stored_b = all.iter().find(|f| f.id == b.id).expect("b is there");
         assert_eq!(stored_b.resolved_at_ms, Some(later2));
 
-        // `b` fires again: the row reopens rather than a second one appearing.
         assert_eq!(store.reconcile_findings("WK-TEST", &[a.clone(), b.clone()], t0 + 180_000).unwrap(), 0);
         let all = store.query_findings("WK-TEST", true).unwrap();
         assert_eq!(all.len(), 2, "no duplicate on reopen");
@@ -2361,7 +2216,6 @@ mod tests {
             "both are open again"
         );
 
-        // Another node's findings are its own.
         assert_eq!(store.reconcile_findings("WK-OTHER", &[], t0 + 240_000).unwrap(), 0);
         assert_eq!(
             store.query_findings("WK-TEST", false).unwrap().len(),
@@ -2370,7 +2224,6 @@ mod tests {
         );
         assert!(store.query_findings("WK-OTHER", true).unwrap().is_empty());
 
-        // An empty evaluation resolves everything this node had open.
         assert_eq!(store.reconcile_findings("WK-TEST", &[], t0 + 300_000).unwrap(), 2);
         assert!(store.query_findings("WK-TEST", false).unwrap().is_empty());
         assert_eq!(store.query_findings("WK-TEST", true).unwrap().len(), 2);
@@ -2395,8 +2248,6 @@ mod tests {
                 context_length: ctx,
                 expires_at_ms: Some(1_794_580_004_305),
                 last_activity_ms: Some(1_700_000_000_000),
-                // A real measurement, so the nested struct is covered by the
-                // round trip rather than serialising as null.
                 measured: Some(crate::residency::MeasuredFootprint {
                     size_bytes: 3_151_000_000,
                     context_length: ctx.unwrap_or(4096),
@@ -2442,7 +2293,6 @@ mod tests {
         ];
         store.write_transitions("WK-T", &rows).unwrap();
 
-        // A different node's log is not this node's.
         store
             .write_transitions(
                 "WK-OTHER",
@@ -2454,13 +2304,11 @@ mod tests {
         assert_eq!(back.len(), 3, "a different node's rows must not come back");
         assert_eq!(back, rows, "every field survives the round trip verbatim");
 
-        // The window is honoured, and ordering is ascending for derive_switches.
         let recent = store.query_transitions("WK-T", 1_700_000_001_000).unwrap();
         assert_eq!(recent.len(), 1);
         assert_eq!(recent[0].kind, TransitionKind::ContextChanged);
         assert_eq!(recent[0].cause, Cause::Probe);
 
-        // End to end: the stored log derives the swap the endpoint reports.
         let out = derive_switches(&back, 24, false);
         assert_eq!(out["total_swaps"], 1);
         assert_eq!(out["swaps"][0]["from_model"], "llama3.1:8b");
@@ -2468,7 +2316,6 @@ mod tests {
         assert_eq!(out["swaps"][0]["cause"], "expiry_reached");
         assert_eq!(out["swaps"][0]["co_resident"][0], "qwen3.5:9b");
 
-        // A kind this binary does not know is skipped, not guessed at.
         {
             let conn = store.0.lock().unwrap();
             conn.execute(
@@ -2502,7 +2349,6 @@ mod tests {
         for i in 0..3 {
             store.write_sample(Sample::from_broadcast_json(&sample_json(base + i * 1000)).unwrap()).unwrap();
         }
-        // Duplicate (ts_ms, node_id) → ON CONFLICT DO NOTHING, not an error.
         store.write_sample(Sample::from_broadcast_json(&sample_json(base)).unwrap()).unwrap();
         let h = store.query_history("WK-T", base, base + 10_000, Resolution::Raw).unwrap();
         assert_eq!(h.samples.len(), 3);
@@ -2514,7 +2360,7 @@ mod tests {
     fn aggregation_prunes_and_checkpoints() {
         let (store, dir) = temp_store("agg");
         let now = 1_700_000_000_000_i64;
-        let stale = now - 2 * 86_400_000; // older than raw retention
+        let stale = now - 2 * 86_400_000;
         store.write_sample(Sample::from_broadcast_json(&sample_json(stale)).unwrap()).unwrap();
         store.write_sample(Sample::from_broadcast_json(&sample_json(now - 120_000)).unwrap()).unwrap();
         store.run_aggregation(now).unwrap();
@@ -2533,7 +2379,6 @@ mod tests {
             .map(|i| (format!("org/m{i}"), format!("m{i}.Q4_K_M.gguf"), "Q4_K_M".to_string(), 1_000 + i, 10 * i, i, now))
             .collect();
         store.write_catalog(&rows).unwrap();
-        // Replaying the same batch replaces rather than duplicates.
         store.write_catalog(&rows).unwrap();
         assert!(store.catalog_is_fresh(24));
         assert_eq!(store.query_catalog(None, 100).unwrap().len(), 5);
@@ -2580,9 +2425,6 @@ impl Store {
         let mut conn = self.0.lock().unwrap();
         let tx = conn.transaction()?;
 
-        // UPDATE then INSERT rather than ON CONFLICT: the upsert syntax has
-        // moved across DuckDB versions and this runs on a request path, so two
-        // portable statements beat one that might not parse.
         {
             let mut upd = tx.prepare(
                 "UPDATE findings
@@ -2598,13 +2440,8 @@ impl Store {
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)",
             )?;
             for f in open {
-                // Model names cannot contain a comma, as write_transitions
-                // already relies on for co_resident.
                 let models = f.models.join(",");
                 let statements = serde_json::to_string(&f.statements).ok();
-                // first_seen_ms is the rule's, derived from the log, so a
-                // finding that recurs after a quiet spell reports the current
-                // occurrence rather than the first one ever recorded.
                 let changed = upd.execute(params![
                     f.rule,
                     f.severity,
@@ -2632,10 +2469,6 @@ impl Store {
             }
         }
 
-        // Which rows are open now that this evaluation's findings are written.
-        // Read the ids and update them one at a time rather than building a
-        // `NOT IN (...)` list: a handful of findings makes the statement count
-        // irrelevant, and nothing is interpolated into SQL.
         let still_open: Vec<String> = {
             let mut stmt = tx.prepare(
                 "SELECT id FROM findings WHERE node_id = ? AND resolved_at_ms IS NULL",
@@ -2697,8 +2530,6 @@ impl Store {
                     .filter(|m| !m.is_empty())
                     .map(str::to_string)
                     .collect(),
-                // An unreadable statements column costs the sentences, not the
-                // row: the title still says what was found.
                 statements: statements
                     .and_then(|s| serde_json::from_str(&s).ok())
                     .unwrap_or_else(|| serde_json::json!([])),
@@ -2718,15 +2549,8 @@ impl Store {
         node_id: &str,
         r: &crate::receipts::Receipt,
     ) -> Result<(), duckdb::Error> {
-        // u64 to i64: every column here is a nanosecond duration or a token
-        // count, and i64 nanoseconds runs to the year 2262. A value that did
-        // not fit would be a runtime reporting nonsense, which is worth
-        // storing as NULL rather than as a negative number.
         let n = |v: Option<u64>| v.and_then(|x| i64::try_from(x).ok());
         let conn = self.0.lock().unwrap();
-        // DELETE then INSERT for the same reason reconcile_findings does
-        // UPDATE then INSERT: the upsert syntax has moved between DuckDB
-        // versions and this runs on a request path.
         conn.execute("DELETE FROM receipts WHERE node_id = ? AND id = ?", params![node_id, r.id.as_str()])?;
         conn.execute(
             "INSERT INTO receipts
@@ -2755,8 +2579,6 @@ impl Store {
                 n(r.eval_ns),
                 n(r.total_ns),
                 n(r.wall_ms),
-                // Model names cannot contain a comma, as write_transitions
-                // already relies on.
                 r.co_resident.join(",").as_str(),
                 r.thermal_state.as_deref(),
                 r.test_id.as_deref(),
@@ -2852,8 +2674,6 @@ impl Store {
                 id: r.get(0)?,
                 finding_id: r.get(1)?,
                 ts_ms: r.get(2)?,
-                // An unreadable config costs the diff, not the comparison:
-                // the medians and ranges are still the measurement.
                 config: config.and_then(|c| serde_json::from_str(&c).ok()).unwrap_or_default(),
                 models: csv(models),
                 receipts: csv(receipts),
@@ -2902,10 +2722,6 @@ impl Store {
             Ok(Receipt {
                 id: r.get(0)?,
                 ts_ms: r.get(1)?,
-                // An unreadable name falls back rather than dropping the row:
-                // the measurements are still exact, and Callback is the
-                // honest guess because it is the only source a stranger can
-                // write to.
                 source: ReceiptSource::from_name(&source).unwrap_or(ReceiptSource::Callback),
                 model: r.get(3)?,
                 digest: r.get(4)?,

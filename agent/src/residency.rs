@@ -344,7 +344,6 @@ impl Tracker {
         let mut drafts: Vec<(String, TransitionKind, Cause, Option<ModelState>, Option<ModelState>)> =
             Vec::new();
 
-        // ── Gone: loaded last time, absent now ──────────────────────────────
         let gone: Vec<String> = self
             .states
             .values()
@@ -355,26 +354,19 @@ impl Tracker {
         for model in gone {
             let before = self.states.get(&model).cloned();
             let cause = match before.as_ref().and_then(|s| s.expires_at_ms) {
-                // Gone at or after its stated expiry: the keep-alive ran out.
                 Some(expiry) if expiry <= ts + EXPIRY_SKEW_MS => Cause::ExpiryReached,
-                // Gone early, or with no expiry to compare against. Eviction and
-                // a keep_alive of 0 from another caller are indistinguishable
-                // from here, so neither is claimed.
                 _ => Cause::Unknown,
             };
             let after = self.unload(&model, ts);
             drafts.push((model, TransitionKind::Unloaded, cause, before, after));
         }
 
-        // ── Present: new, or changed since last time ────────────────────────
         for polled in &poll.models {
             let before = self.states.get(&polled.model).cloned();
             let was_loaded = before
                 .as_ref()
                 .is_some_and(|s| s.residency == Residency::Loaded);
 
-            // A digest change under the same name is a different model. Record
-            // it as an unload and a load rather than mutating state silently.
             let replaced = was_loaded
                 && match (before.as_ref().and_then(|s| s.digest.as_deref()), polled.digest.as_deref())
                 {
@@ -393,8 +385,6 @@ impl Tracker {
             }
 
             if !was_loaded || replaced {
-                // A replaced model is a different model, so none of the old
-                // state carries over to it.
                 let carried = if replaced { None } else { before.as_ref() };
                 let state = self.load(polled, ts, actor_cause, carried);
                 drafts.push((
@@ -423,7 +413,6 @@ impl Tracker {
             }
             let placement_changed = after.is_split() != before.is_split();
 
-            // Fixed order, so a scripted sequence is reproducible.
             for kind in [
                 (context_changed, TransitionKind::ContextChanged),
                 (expiry_reset, TransitionKind::ExpiryReset),
@@ -433,8 +422,6 @@ impl Tracker {
             .filter_map(|(fired, k)| fired.then_some(k))
             {
                 let cause = if kind == TransitionKind::PlacementChanged {
-                    // Placement is the runtime's allocation decision, not an act
-                    // of whoever happened to be calling.
                     Cause::Unknown
                 } else {
                     actor_cause
@@ -449,7 +436,6 @@ impl Tracker {
             }
         }
 
-        // ── Assign ids and record ───────────────────────────────────────────
         let mut out = Vec::with_capacity(drafts.len());
         for (model, kind, cause, before, after) in drafts {
             let co_resident = names
@@ -476,9 +462,6 @@ impl Tracker {
             }
             self.history.push_back(t.clone());
             if self.persisting {
-                // Bounded, so a store that stops accepting writes cannot grow
-                // this without limit. What falls off is counted and reported,
-                // never silently discarded.
                 if self.pending.len() == HISTORY_CAP {
                     self.pending.pop_front();
                     self.dropped_before_persist += 1;
@@ -551,9 +534,6 @@ impl Tracker {
     pub(crate) fn note_activity(&mut self, model: &str, ts_ms: i64) -> bool {
         match self.states.get_mut(model) {
             Some(state) => {
-                // Never move it backwards. Receipts can arrive out of order —
-                // a caller that batches its posts sends the oldest last — and
-                // the field means "most recent use", not "last one reported".
                 if state.last_activity_ms.is_none_or(|prev| ts_ms > prev) {
                     state.last_activity_ms = Some(ts_ms);
                 }
@@ -626,8 +606,6 @@ impl Tracker {
             size_vram_bytes: polled.size_vram_bytes,
             context_length: polled.context_length,
             expires_at_ms: polled.expires_at_ms,
-            // A load a real caller asked for is activity. A load the probe or a
-            // test run caused is not, which is why the two are told apart.
             last_activity_ms: if cause == Cause::User {
                 Some(ts)
             } else {
@@ -669,9 +647,6 @@ impl Tracker {
         state.context_length = None;
         state.expires_at_ms = None;
         state.observed_at_ms = ts;
-        // `measured` is deliberately not cleared: it remains a true statement
-        // about a footprint that was observed, and it is the only measured
-        // basis a readiness answer for an unloaded model can cite.
         Some(state.clone())
     }
 }
@@ -729,8 +704,6 @@ pub(crate) fn derive_switches(
         if load.kind != TransitionKind::Loaded {
             continue;
         }
-        // Ascending order makes this monotonic: a later load never needs an
-        // entry an earlier one has already walked past.
         while window_start < i && load.ts_ms - transitions[window_start].ts_ms > SWAP_WINDOW_MS {
             window_start += 1;
         }
@@ -752,7 +725,6 @@ pub(crate) fn derive_switches(
         }
     }
 
-    // Newest first, as the query this replaces returned them.
     swaps.sort_by_key(|s| std::cmp::Reverse(s["ts_ms"].as_i64().unwrap_or(0)));
     let total_swaps = swaps.len();
     swaps.truncate(MAX_ROWS);
@@ -843,8 +815,6 @@ pub(crate) fn rfc3339_to_ms(s: &str) -> Option<i64> {
             }
             sign * (oh * 3600 + om * 60)
         }
-        // A naive timestamp has no zone to resolve, and guessing one would put
-        // the value hours away from the truth.
         _ => return None,
     };
 
@@ -905,8 +875,6 @@ mod tests {
         let mut t = Tracker::new();
         let m = pm("a", 100, 100, 4096, T0 + 300_000);
         t.observe(&poll(T0, Actor::User, vec![m.clone()]));
-        // Five more identical polls. A tracker that logged every tick would
-        // bury the real transitions under 17,000 rows a day.
         for i in 1..=5 {
             let out = t.observe(&poll(T0 + i * 5_000, Actor::User, vec![m.clone()]));
             assert!(out.is_empty(), "poll {i} produced {out:?}");
@@ -916,9 +884,6 @@ mod tests {
 
     #[test]
     fn a_request_omitting_num_ctx_shows_as_a_context_drop_and_an_expiry_reset() {
-        // Step 0 V3: a request without num_ctx reloads the model at the runtime
-        // default. Both halves of that signature have to appear, in this order,
-        // because the context_reset rule reads them together.
         let mut t = Tracker::new();
         t.observe(&poll(T0, Actor::User, vec![pm("a", 800, 800, 8192, T0 + 300_000)]));
         let out = t.observe(&poll(
@@ -946,19 +911,14 @@ mod tests {
             "a probe load is not activity",
         );
 
-        // A posted receipt is direct evidence a caller used it.
         assert!(t.note_activity("a", T0 + 1_000));
         assert_eq!(t.states().next().unwrap().last_activity_ms, Some(T0 + 1_000));
 
-        // A receipt that arrives late does not rewind the field: it means
-        // "most recent use", not "last one reported".
         assert!(t.note_activity("a", T0 + 500));
         assert_eq!(t.states().next().unwrap().last_activity_ms, Some(T0 + 1_000));
         assert!(t.note_activity("a", T0 + 2_000));
         assert_eq!(t.states().next().unwrap().last_activity_ms, Some(T0 + 2_000));
 
-        // A model the tracker has never polled gets nothing, rather than a
-        // state invented from a receipt.
         assert!(!t.note_activity("never-seen", T0 + 3_000));
         assert_eq!(t.states().count(), 1);
     }
@@ -983,7 +943,6 @@ mod tests {
             "the probe's own expiry reset must not look like a caller"
         );
 
-        // The same reset from a real caller does move it.
         let out = t.observe(&poll(
             T0 + 10_000,
             Actor::User,
@@ -1010,15 +969,12 @@ mod tests {
 
     #[test]
     fn an_unload_at_expiry_is_told_apart_from_one_before_it() {
-        // Expired: the stated expiry had passed when the model went.
         let mut t = Tracker::new();
         t.observe(&poll(T0, Actor::User, vec![pm("a", 100, 100, 4096, T0 + 5_000)]));
         let out = t.observe(&poll(T0 + 10_000, Actor::User, vec![]));
         assert_eq!(kinds(&out), vec![TransitionKind::Unloaded]);
         assert_eq!(out[0].cause, Cause::ExpiryReached);
 
-        // Gone early: this is what eviction looks like, but a keep_alive of 0
-        // from another caller looks identical, so neither is claimed.
         let mut t = Tracker::new();
         t.observe(&poll(T0, Actor::User, vec![pm("b", 100, 100, 4096, T0 + 600_000)]));
         let out = t.observe(&poll(T0 + 5_000, Actor::User, vec![]));
@@ -1030,7 +986,6 @@ mod tests {
         let mut t = Tracker::new();
         t.observe(&poll(T0, Actor::User, vec![pm("a", 1_000, 1_000, 4096, T0 + 300_000)]));
 
-        // Crossing into a split.
         let out = t.observe(&poll(
             T0 + 5_000,
             Actor::User,
@@ -1043,7 +998,6 @@ mod tests {
             "where the runtime puts bytes is not the caller's act"
         );
 
-        // Still split, different ratio: no new transition.
         let out = t.observe(&poll(
             T0 + 10_000,
             Actor::User,
@@ -1051,7 +1005,6 @@ mod tests {
         ));
         assert!(out.is_empty(), "drift inside a split is not a crossing");
 
-        // Back to fully resident.
         let out = t.observe(&poll(
             T0 + 15_000,
             Actor::User,
@@ -1069,17 +1022,13 @@ mod tests {
 
         let s = t.states().next().unwrap();
         assert_eq!(s.residency, Residency::NotLoaded);
-        // No longer true, so no longer reported.
         assert_eq!(s.size_bytes, None);
         assert_eq!(s.context_length, None);
         assert_eq!(s.expires_at_ms, None);
-        // Still true.
         assert_eq!(s.last_activity_ms, Some(T0));
         assert_eq!(s.installed_size_bytes, Some(3_389_983_735));
         assert_eq!(s.digest.as_deref(), Some("sha256:a"));
 
-        // The reload is a Loaded transition that carries the old state as its
-        // before, which is what expiry_reload needs to measure the gap.
         let out = t.observe(&poll(
             T0 + 20_000,
             Actor::User,
@@ -1141,7 +1090,6 @@ mod tests {
     fn the_in_memory_log_is_capped_but_the_count_is_not() {
         let mut t = Tracker::new();
         let mut ts = T0;
-        // Alternate load and unload until the cap is well past.
         while t.recorded() <= HISTORY_CAP as u64 + 10 {
             ts += 5_000;
             t.observe(&poll(ts, Actor::User, vec![pm("a", 100, 100, 4096, ts - 1_000)]));
@@ -1150,7 +1098,6 @@ mod tests {
         }
         assert_eq!(t.history().count(), HISTORY_CAP);
         assert!(t.recorded() > HISTORY_CAP as u64);
-        // The oldest kept entry is not the first one recorded.
         assert!(t.history().next().unwrap().id > 1);
     }
 
@@ -1189,7 +1136,6 @@ mod tests {
         }
     }
 
-    // Guards a column against its JSON name; there are no columns on musl.
     #[cfg(not(target_env = "musl"))]
     #[test]
     fn column_names_and_json_names_cannot_diverge() {
@@ -1207,16 +1153,12 @@ mod tests {
             assert_eq!(serde_json::to_value(c).unwrap(), serde_json::json!(c.as_str()));
             assert_eq!(Cause::from_name(c.as_str()), Some(c));
         }
-        // A name from a newer agent is skipped, not guessed at.
         assert_eq!(TransitionKind::from_name("teleported"), None);
         assert_eq!(Cause::from_name("vibes"), None);
     }
 
     #[test]
     fn a_clear_out_is_every_pair_and_not_one_arbitrary_victim() {
-        // Step 0 V4: a load that does not fit cleared every resident model.
-        // Three unloads and one load in the same poll is three swap rows, not
-        // one — pairing only the nearest unload would hide two thirds of it.
         let rows = vec![
             tr(1, T0, "a", TransitionKind::Unloaded, &[]),
             tr(2, T0, "b", TransitionKind::Unloaded, &[]),
@@ -1244,7 +1186,6 @@ mod tests {
         let out = derive_switches(&rows, 24, false);
         assert_eq!(out["total_swaps"], 0);
         assert_eq!(out["total_gap_ms"], 0);
-        // The envelope the frontend reads is present even when empty.
         for key in [
             "swaps",
             "total_swaps",
@@ -1314,7 +1255,6 @@ mod tests {
     #[test]
     fn placement_is_reported_only_when_both_figures_are_known() {
         let mut t = Tracker::new();
-        // The spec's example: 38% of the footprint outside the GPU.
         t.observe(&poll(
             T0,
             Actor::User,
@@ -1329,15 +1269,12 @@ mod tests {
         assert_eq!(report["residency"], "loaded");
         assert_eq!(report["context_length"], 4096);
 
-        // Unloaded: the sizes are gone, so there is no placement to report and
-        // none is invented.
         t.observe(&poll(T0 + 5_000, Actor::User, vec![]));
         let s = t.states().next().unwrap();
         assert_eq!(s.outside_accelerator_bytes(), None);
         assert_eq!(s.outside_accelerator_percent(), None);
         assert!(s.report()["outside_accelerator_percent"].is_null());
 
-        // A model known only from /api/tags has a file size and nothing else.
         let mut t = Tracker::new();
         t.observe_installed_sizes(&[("never-loaded".to_string(), 3_389_983_735)], T0);
         let s = t.states().next().unwrap();
@@ -1348,10 +1285,6 @@ mod tests {
 
     #[test]
     fn a_live_api_ps_response_folds_into_the_log() {
-        // Captured verbatim from the maintainer's host on 2026-11-13, Ollama
-        // 0.40.16, while the deployed agent was polling it. Nothing here is
-        // hand-written: if the tracker cannot read this, it cannot read the
-        // runtime it ships against.
         const LIVE: &str = r#"{
           "models": [{
             "name": "llama3.1:8b",
@@ -1378,50 +1311,40 @@ mod tests {
         let after = out[0].after.as_ref().unwrap();
         assert_eq!(after.model, "llama3.1:8b");
         assert_eq!(after.size_bytes, Some(5_280_104_447));
-        // Fully resident: size_vram equals size, so no placement split.
         assert_eq!(after.size_vram_bytes, Some(5_280_104_447));
         assert!(!after.is_split());
-        // The running context, not the model's maximum of 131072.
         assert_eq!(after.context_length, Some(4096));
-        // The real local-offset timestamp, 14:53:13.400 at -05:00.
         assert_eq!(after.expires_at_ms, Some(1_794_599_593_400));
         assert_eq!(after.residency, Residency::Loaded);
 
-        // Polling the same response again changes nothing.
         assert!(t.observe(&Poll::from_ps(&ps, T0 + 5_000, Actor::User)).is_empty());
     }
 
     #[test]
     fn rfc3339_parses_what_ollama_sends_and_rejects_the_rest() {
-        // The verbatim shape from the maintainer's host. 09:26:44.305 at -05:00
-        // is 14:26:44.305 UTC, and the sub-millisecond digits are dropped, not
-        // rounded.
         assert_eq!(
             rfc3339_to_ms("2026-11-13T09:26:44.305831-05:00"),
             Some(1794580004305)
         );
-        // The Z form, and the same instant written two ways.
         assert_eq!(rfc3339_to_ms("2026-11-13T09:26:44Z"), Some(1794562004000));
         assert_eq!(
             rfc3339_to_ms("2026-11-13T14:26:44+05:00"),
             rfc3339_to_ms("2026-11-13T09:26:44Z")
         );
         assert_eq!(rfc3339_to_ms("1970-01-01T00:00:00Z"), Some(0));
-        // Leap years, both kinds of century.
         assert_eq!(rfc3339_to_ms("2000-02-29T00:00:00Z"), Some(951_782_400_000));
         assert_eq!(rfc3339_to_ms("1900-03-01T00:00:00Z"), Some(-2_203_891_200_000));
 
-        // Nothing partially understood is returned as a number.
         for bad in [
             "",
             "2026-11-13",
-            "2026-11-13T09:26:44",          // no zone to resolve
-            "2026-11-13 09:26:44",          // no zone to resolve
+            "2026-11-13T09:26:44",
+            "2026-11-13 09:26:44",
             "2026/11/13T09:26:44Z",
-            "2026-11-13T09:26:44.Z",        // a dot with no digits
-            "2026-13-01T00:00:00Z",         // month 13
-            "2026-11-13T24:00:00Z",         // hour 24
-            "2026-11-13T09:26:44+5:00",     // offset not two digits
+            "2026-11-13T09:26:44.Z",
+            "2026-13-01T00:00:00Z",
+            "2026-11-13T24:00:00Z",
+            "2026-11-13T09:26:44+5:00",
             "2026-11-13T09:26:44ZZ",
         ] {
             assert_eq!(rfc3339_to_ms(bad), None, "{bad:?} must not parse");

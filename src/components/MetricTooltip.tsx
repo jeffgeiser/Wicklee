@@ -1,8 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { ArrowRight } from 'lucide-react';
 
-// ── Types ─────────────────────────────────────────────────────────────────────
-
 type DotColor = 'blue' | 'emerald' | 'green' | 'amber' | 'yellow' | 'orange' | 'red' | 'gray';
 
 interface TooltipRange {
@@ -25,8 +23,6 @@ interface MetricTooltipProps {
   children: React.ReactNode;
 }
 
-// ── Internal helpers ──────────────────────────────────────────────────────────
-
 const Dot: React.FC<{ color: DotColor }> = ({ color }) => {
   const cls: Record<DotColor, string> = {
     blue:    'bg-blue-500',
@@ -46,8 +42,6 @@ const Dot: React.FC<{ color: DotColor }> = ({ color }) => {
   );
 };
 
-// ── Component ─────────────────────────────────────────────────────────────────
-
 const MetricTooltip: React.FC<MetricTooltipProps> = ({
   metricId,
   name,
@@ -60,7 +54,6 @@ const MetricTooltip: React.FC<MetricTooltipProps> = ({
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleMouseEnter = () => {
-    // Never show on touch-only devices
     if (!window.matchMedia('(hover: hover)').matches) return;
     timerRef.current = setTimeout(() => setVisible(true), 400);
   };
@@ -93,17 +86,14 @@ const MetricTooltip: React.FC<MetricTooltipProps> = ({
           ].join(' ')}
           role="tooltip"
         >
-          {/* Name */}
           <p className="text-xs font-semibold text-gray-100 font-sans leading-snug mb-1">
             {name}
           </p>
 
-          {/* One-liner */}
           <p className="text-[11px] text-gray-400 font-sans leading-snug mb-2.5">
             {oneLiner}
           </p>
 
-          {/* Compact ranges */}
           {trimmedRanges && trimmedRanges.length > 0 && (
             <div className="space-y-1.5 mb-2.5">
               {trimmedRanges.map((r, i) => (
@@ -120,7 +110,6 @@ const MetricTooltip: React.FC<MetricTooltipProps> = ({
             </div>
           )}
 
-          {/* Deep link — re-enable pointer events for the link only */}
           <a
             href={`/metrics#${metricId}`}
             className="pointer-events-auto inline-flex items-center gap-1 text-[10px] text-indigo-400 hover:text-indigo-300 transition-colors"

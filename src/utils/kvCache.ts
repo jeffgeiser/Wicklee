@@ -41,8 +41,6 @@
 
 import type { SentinelMetrics } from '../types';
 
-// Context milestones shown in the Context Runway UI.
-// These cover the practical range of local inference use cases.
 const CTX_MILESTONES = [4_096, 16_384, 32_768, 65_536, 131_072] as const;
 type CtxMilestone = typeof CTX_MILESTONES[number];
 
@@ -75,8 +73,6 @@ export interface ContextRunway {
   summary:      string;
 }
 
-// ── Architecture extraction ───────────────────────────────────────────────────
-
 /**
  * Derive KV cache architecture from /api/show fields when available.
  * Returns null when the required fields are absent.
@@ -101,7 +97,7 @@ function archFromPayload(node: SentinelMetrics): KVArchitecture | null {
     layers,
     kvHeads,
     headDim,
-    maxCtx: maxCtx ?? 8_192, // conservative fallback; most models at least 8k
+    maxCtx: maxCtx ?? 8_192,
     isExact: true,
   };
 }
@@ -124,10 +120,6 @@ export function parseParamCountFromModelName(name: string | null | undefined): n
   if (!name) return null;
   const lower = name.toLowerCase();
 
-  // Mixtral-style "8x7b" / "16x17b" — experts × per-expert size, discounted
-  // for the attention/embedding weights shared across experts. The naive
-  // product overstates real totals by ~20%: Mixtral 8x7B is 46.7B (not 56B),
-  // 8x22B is 141B (not 176B) → shared-weight factor ≈ 0.83/0.80.
   const moe = lower.match(/(\d+)x(\d+(?:\.\d+)?)b\b/);
   if (moe) {
     const experts = parseInt(moe[1], 10);
@@ -135,7 +127,6 @@ export function parseParamCountFromModelName(name: string | null | undefined): n
     if (experts > 0 && perExpert > 0) return Math.round(experts * perExpert * 0.83 * 1e9);
   }
 
-  // Standard "<num>b" or "<num>B" tag — e.g. 8b, 70B, 6.7b, 32b.
   const std = lower.match(/(?:^|[^a-z0-9])(\d+(?:\.\d+)?)\s*b\b/);
   if (std) {
     const b = parseFloat(std[1]);
@@ -156,13 +147,10 @@ export function parseParamCountFromModelName(name: string | null | undefined): n
  */
 function archFromParamCount(node: SentinelMetrics): KVArchitecture | null {
   let params = node.ollama_parameter_count ?? null;
-  // Prefer the real value: Ollama /api/show → vLLM /v1/models → 8 192 floor.
   const maxCtx = node.ollama_context_length
               ?? node.vllm_max_model_len
               ?? 8_192;
 
-  // Fallback: parse the model name. Works for vLLM ("qwen2.5-32b") and
-  // llama.cpp where parameter_count is not populated.
   if (params == null) {
     const name =
       node.ollama_active_model
@@ -173,18 +161,16 @@ function archFromParamCount(node: SentinelMetrics): KVArchitecture | null {
   }
   if (params == null) return null;
 
-  const b = params / 1e9; // parameter count in billions
+  const b = params / 1e9;
 
-  // Pattern table: [minB, maxB, layers, kvHeads, headDim]
-  // GQA values from Llama 3 architecture variants.
   const patterns: [number, number, number, number, number][] = [
-    [0,    2,   16, 8,  64],  // ~1B  (Llama 3.2 1B: 16 layers, 8 KV, h=64)
-    [2,    4.5, 28, 8, 128],  // ~3B  (Llama 3.2 3B: 28 layers, 8 KV, h=128)
-    [4.5,  9,   32, 8, 128],  // ~7B  (Llama 3.1 8B: 32 layers, 8 KV, h=128)
-    [9,   18,   40, 8, 128],  // ~13B (Llama 3 13B-ish)
-    [18,  40,   48, 8, 128],  // ~30B
-    [40,  80,   80, 8, 128],  // ~70B (Llama 3.1 70B: 80 layers, 8 KV, h=128)
-    [80, Infinity, 96, 8, 128], // 100B+
+    [0,    2,   16, 8,  64],
+    [2,    4.5, 28, 8, 128],
+    [4.5,  9,   32, 8, 128],
+    [9,   18,   40, 8, 128],
+    [18,  40,   48, 8, 128],
+    [40,  80,   80, 8, 128],
+    [80, Infinity, 96, 8, 128],
   ];
 
   for (const [min, max, layers, kvHeads, headDim] of patterns) {
@@ -195,8 +181,6 @@ function archFromParamCount(node: SentinelMetrics): KVArchitecture | null {
   return null;
 }
 
-// ── Core calculation ──────────────────────────────────────────────────────────
-
 /**
  * KV cache size in bytes for a given architecture at a given context length.
  *
@@ -206,8 +190,6 @@ function archFromParamCount(node: SentinelMetrics): KVArchitecture | null {
 function kvCacheBytes(arch: KVArchitecture, ctxTokens: number): number {
   return 2 * arch.layers * arch.kvHeads * arch.headDim * ctxTokens * 2;
 }
-
-// ── Public API ────────────────────────────────────────────────────────────────
 
 /**
  * Compute the Context Runway for a node's current model.
@@ -245,10 +227,8 @@ export function computeContextRunway(
 
   const headroomBytes = headroomGb * 1024 * 1024 * 1024;
 
-  // Compute KV cache at each milestone AND at the model's max context.
   const milestones = [
     ...CTX_MILESTONES.filter(m => m <= arch.maxCtx),
-    // Include the model's actual max context if it's not already a milestone.
     ...(CTX_MILESTONES.includes(arch.maxCtx as CtxMilestone) ? [] : [arch.maxCtx]),
   ].sort((a, b) => a - b);
 

@@ -164,7 +164,6 @@ const RuntimeConfigModal: React.FC<Props> = ({
     return () => { cancelled = true; };
   }, [modelName, agentBaseUrl]);
 
-  // Esc to close
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
@@ -186,7 +185,6 @@ const RuntimeConfigModal: React.FC<Props> = ({
     >
       <div className="w-full max-w-2xl bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl flex flex-col max-h-[80vh]">
 
-        {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800 shrink-0">
           <div className="min-w-0">
             <p className="text-[10px] font-bold uppercase tracking-widest text-blue-400 mb-0.5">
@@ -221,7 +219,6 @@ const RuntimeConfigModal: React.FC<Props> = ({
           </div>
         </div>
 
-        {/* Body */}
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
           {loading && (
             <div className="text-center text-sm text-gray-400 py-8">Loading…</div>
@@ -235,14 +232,12 @@ const RuntimeConfigModal: React.FC<Props> = ({
 
           {config && !loading && (
             <>
-              {/* Runtime badge */}
               <div className="flex items-center gap-2">
                 <span className={`px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider rounded border ${runtimeBadgeClass(config.runtime)}`}>
                   {config.runtime}
                 </span>
               </div>
 
-              {/* Parameters table */}
               <div className="bg-gray-950/40 border border-gray-800 rounded-lg px-4 py-2">
                 <Row label="Context length" value={fmtNum(config.context_length)} />
                 <Row label="Parameters" value={fmtParamCount(config.parameter_count)} />
@@ -253,7 +248,6 @@ const RuntimeConfigModal: React.FC<Props> = ({
                 />
               </div>
 
-              {/* Ollama: template + system prompt */}
               {config.runtime === 'ollama' && (
                 <>
                   {config.template && (
@@ -265,7 +259,6 @@ const RuntimeConfigModal: React.FC<Props> = ({
                 </>
               )}
 
-              {/* vLLM / llama.cpp: process args */}
               {(config.runtime === 'vllm' || config.runtime === 'llamacpp') && config.process_args && config.process_args.length > 0 && (
                 <div>
                   <div className="text-[10px] font-bold uppercase tracking-widest text-gray-500 mb-1.5">
@@ -277,7 +270,6 @@ const RuntimeConfigModal: React.FC<Props> = ({
                 </div>
               )}
 
-              {/* Raw response (collapsible) */}
               {config.raw !== undefined && config.raw !== null && (
                 <Collapsible title="Raw response">
                   {JSON.stringify(config.raw, null, 2)}

@@ -33,7 +33,6 @@ const ModelFitMiniTile: React.FC<ModelFitMiniTileProps> = ({ result, node, showN
     ?? node.llamacpp_model_name
     ?? 'Unknown model';
 
-  // Memory bar segments as % of totalGb
   const usedGb      = result.totalGb - result.headroomGb;
   const otherUsedGb = Math.max(0, usedGb - result.modelSizeGb);
   const modelBarPct = Math.min((result.modelSizeGb / result.totalGb) * 100, 100);
@@ -41,7 +40,6 @@ const ModelFitMiniTile: React.FC<ModelFitMiniTileProps> = ({ result, node, showN
 
   return (
     <div className="bg-gray-800 border border-gray-700 rounded-xl px-3 py-2.5 space-y-1.5">
-      {/* Row 1: model name + fit indicator */}
       <div className="flex items-center gap-2 min-w-0">
         <span className={`shrink-0 w-2 h-2 rounded-full ${DOT_COLOR[result.score]}`} />
         <span className="text-xs text-gray-200 truncate flex-1 font-medium">{modelName}</span>
@@ -50,14 +48,12 @@ const ModelFitMiniTile: React.FC<ModelFitMiniTileProps> = ({ result, node, showN
         </span>
       </div>
 
-      {/* Row 2: node hostname (fleet mode) */}
       {showNodeHeader && (
         <p className="text-[9px] text-gray-600 truncate">
           {node.hostname && node.hostname !== node.node_id ? node.hostname : node.node_id}
         </p>
       )}
 
-      {/* Row 3: thin VRAM bar */}
       <div className="flex items-center gap-2">
         <div className="h-[3px] flex-1 bg-gray-700 rounded-full overflow-hidden flex">
           <div

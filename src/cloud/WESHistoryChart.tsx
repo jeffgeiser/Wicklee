@@ -7,9 +7,6 @@ import {
 import { TrendingUp, Lock, RefreshCw, FileDown } from 'lucide-react';
 import { SubscriptionTier } from '../types';
 import { CLOUD_URL } from '../utils/cloudUrl';
-// benchmarkReport imports removed — CSV export replaces modal
-
-// ── Types ─────────────────────────────────────────────────────────────────────
 
 interface WESPoint {
   ts_ms: number;
@@ -30,8 +27,6 @@ interface ChartPoint {
   raw_wes:        number | null;
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
 function buildChartPoints(points: WESPoint[], fmtTs: (ms: number) => string): ChartPoint[] {
   return points.map(p => ({
     label:         fmtTs(p.ts_ms),
@@ -39,8 +34,6 @@ function buildChartPoints(points: WESPoint[], fmtTs: (ms: number) => string): Ch
     raw_wes:       p.raw_wes       != null ? parseFloat(p.raw_wes.toFixed(3))       : null,
   }));
 }
-
-// ── Props ─────────────────────────────────────────────────────────────────────
 
 interface WESHistoryChartProps {
   getToken:    () => Promise<string | null>;
@@ -51,8 +44,6 @@ interface WESHistoryChartProps {
   selectedNodeId?: string | null;
   onNodeSelect?:   (nodeId: string) => void;
 }
-
-// ── Component ─────────────────────────────────────────────────────────────────
 
 const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
   getToken,
@@ -65,10 +56,7 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
   const [nodes,        setNodes]        = useState<WESNode[]>([]);
   const [internalSelectedId, setInternalSelectedId] = useState<string | null>(null);
 
-  // Use external selection if provided, otherwise internal
   const selectedId = externalSelectedId ?? internalSelectedId;
-  // Stable setter that reads the latest onNodeSelect through a ref, so
-  // fetchHistory (deps [getToken]) never calls a stale parent callback.
   const externalOnNodeSelectRef = useRef(externalOnNodeSelect);
   externalOnNodeSelectRef.current = externalOnNodeSelect;
   const setSelectedId = useCallback((id: string) => {
@@ -79,12 +67,7 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
   const [loading,      setLoading]      = useState(false);
   const [error,        setError]        = useState<string | null>(null);
   const [lastFetch,    setLastFetch]    = useState(0);
-  // exportReport state removed — CSV export replaces modal
 
-  // Read the selection through a ref inside fetchHistory: with deps =
-  // [getToken], a closed-over selectedId stays frozen at its mount value
-  // (null), so every range change / refresh reset the selection to the
-  // first node with data (see MetricsHistoryChart for the same fix).
   const selectedIdRef = useRef(selectedId);
   selectedIdRef.current = selectedId;
 
@@ -105,7 +88,6 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
       const data = await res.json();
       const fetched: WESNode[] = data.nodes ?? [];
       setNodes(fetched);
-      // Auto-select first node with data if nothing selected yet
       const withData = fetched.find(n => n.points.length > 0);
       const currentId = selectedIdRef.current;
       if (!currentId || !fetched.some(n => n.node_id === currentId)) {
@@ -114,8 +96,6 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
       }
       setLastFetch(Date.now());
     } catch (e) {
-      // Superseded fetch (range switched) aborts — ignore so a stale earlier
-      // response can't overwrite newer data.
       if ((e as { name?: string } | null)?.name === 'AbortError') return;
       setError('Failed to load history');
     } finally {
@@ -123,16 +103,12 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
     }
   }, [getToken, setSelectedId]);
 
-  // Fetch on range change; abort the in-flight request on change/unmount so a
-  // slow earlier fetch can't land after a newer one (stale-overwrite race).
   useEffect(() => {
-    if (RANGE_CONFIG[range].historyMin > historyDays) return; // gate
+    if (RANGE_CONFIG[range].historyMin > historyDays) return;
     const ctrl = new AbortController();
     fetchHistory(range, ctrl.signal);
     return () => ctrl.abort();
   }, [range, fetchHistory, historyDays]);
-
-  // ── Derived chart data ────────────────────────────────────────────────────
 
   const selectedNode  = nodes.find(n => n.node_id === selectedId);
   const cfg           = RANGE_CONFIG[range];
@@ -143,10 +119,6 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
     p => p.raw_wes != null && p.penalized_wes != null && p.raw_wes > p.penalized_wes + 0.001
   );
 
-  // ── 7-day drift annotation (Pro+) ──────────────────────────────────────────
-  // When viewing the 7d range, compare the recent 24h average against the
-  // baseline (days 1–6). Mirrors the cloud-side wes_long_term_drift evaluator
-  // exactly so the chart annotation and the observation card agree.
   const driftAnalysis = (() => {
     if (range !== '7d' || !selectedNode || selectedNode.points.length === 0) return null;
     const now = Date.now();
@@ -167,8 +139,6 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
     return { baseAvg, recentAvg, dropPct, alarming: dropPct >= 15 };
   })();
 
-  // ── CSV export — build from in-memory chart data ────────────────────────
-
   const handleCsvDownload = useCallback(() => {
     if (!selectedNode || selectedNode.points.length === 0) return;
     const header = 'timestamp,raw_wes,penalized_wes,thermal_state';
@@ -187,12 +157,9 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
     URL.revokeObjectURL(url);
   }, [selectedNode, range]);
 
-  // ── Render ────────────────────────────────────────────────────────────────
-
   return (
     <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl p-6 shadow-sm dark:shadow-none">
 
-      {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
         <div className="flex items-center gap-2">
           <TrendingUp className="w-4 h-4 text-indigo-400" />
@@ -207,7 +174,6 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
         </div>
 
         <div className="flex items-center gap-2">
-          {/* CSV export — only when data is loaded */}
           {hasData && (
             <button
               onClick={handleCsvDownload}
@@ -219,7 +185,6 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
             </button>
           )}
 
-          {/* Time range selector */}
           <div className="flex items-center gap-1">
             {RANGES.map(r => {
               const rcfg    = RANGE_CONFIG[r];
@@ -249,7 +214,6 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
         </div>
       </div>
 
-      {/* Node tabs (if multiple nodes) */}
       {nodes.length > 1 && (
         <div className="flex flex-wrap gap-1.5 mb-4">
           {nodes.map(n => (
@@ -268,7 +232,6 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
         </div>
       )}
 
-      {/* Locked state */}
       {cfg.historyMin > historyDays && (
         <div className="flex flex-col items-center justify-center py-12 text-center">
           <Lock className="w-8 h-8 text-gray-600 mb-3" />
@@ -281,14 +244,12 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
         </div>
       )}
 
-      {/* Loading */}
       {loading && cfg.historyMin <= historyDays && (
         <div className="flex items-center justify-center py-12">
           <RefreshCw className="w-5 h-5 text-gray-600 animate-spin" />
         </div>
       )}
 
-      {/* Error */}
       {error && !loading && cfg.historyMin <= historyDays && (
         <div className="flex flex-col items-center justify-center py-8 text-center">
           <p className="text-xs text-red-400">{error}</p>
@@ -301,7 +262,6 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
         </div>
       )}
 
-      {/* No data yet */}
       {!loading && !error && cfg.historyMin <= historyDays && !hasData && lastFetch > 0 && (
         <div className="flex flex-col items-center justify-center py-10 text-center">
           <TrendingUp className="w-7 h-7 text-gray-600 mb-2" />
@@ -319,10 +279,6 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
         </div>
       )}
 
-      {/* 7-day drift annotation — when 7d range is selected and data is
-          dense enough to compute a baseline. Mirrors the server-side
-          wes_long_term_drift evaluator: ≥15% drop vs 6-day baseline →
-          alarming red callout; smaller drift → neutral note. */}
       {!loading && !error && hasData && driftAnalysis && (
         <div className={`mb-3 px-3 py-2 rounded-lg text-xs flex items-center gap-2 flex-wrap ${
           driftAnalysis.alarming
@@ -351,7 +307,6 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
         </div>
       )}
 
-      {/* Chart */}
       {!loading && !error && hasData && (
         <div className="h-56">
           <ResponsiveContainer width="100%" height="100%">
@@ -400,7 +355,6 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
                   return [value, name];
                 }}
               />
-              {/* Penalized WES — main filled area (indigo) */}
               <Area
                 type="monotone"
                 dataKey="penalized_wes"
@@ -411,9 +365,6 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
                 activeDot={{ r: 3, fill: '#6366f1' }}
                 connectNulls={false}
               />
-              {/* Raw WES — dashed reference line (hardware ceiling).
-                  Only rendered when there is a meaningful thermal gap so the
-                  chart stays clean during normal-thermal operation. */}
               {hasThermalCost && (
                 <Line
                   type="monotone"
@@ -432,7 +383,6 @@ const WESHistoryChart: React.FC<WESHistoryChartProps> = ({
         </div>
       )}
 
-      {/* Legend / key */}
       {!loading && hasData && (
         <div className="flex items-center gap-4 mt-3">
           <div className="flex items-center gap-1.5">

@@ -3,8 +3,6 @@
 
 use super::*;
 
-// ── Model Discovery & Hardware Fit ────────────────────────────────────────────
-
 /// A GGUF model variant from the HuggingFace catalog.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub(crate) struct CatalogVariant {
@@ -45,9 +43,6 @@ pub(crate) fn score_fit(
     hw: &HardwareProfile,
     historical_wes: Option<f32>,
 ) -> FitResult {
-    // All component math lives in the shared scoring module (mirrored
-    // agent<->cloud by scripts/sync-scoring.mjs) so both dashboards grade
-    // identically. This wrapper only adds the recommendation strings.
     let fit = scoring::fit_components(
         variant.file_size_bytes,
         hw.vram_mb,
@@ -91,24 +86,18 @@ pub(crate) fn score_fit(
 pub(crate) fn parse_quant_from_filename(filename: &str) -> Option<String> {
     let stem = filename.strip_suffix(".gguf")?;
 
-    // Strategy: scan all segments (split by '.' and '-') for a token that looks like a quant level.
-    // Check dot-separated segments first (higher priority), then dash-separated.
     let is_quant = |s: &str| -> bool {
         let u = s.to_ascii_uppercase();
         u.starts_with('Q') || u.starts_with("IQ") || u.starts_with('F') || u.starts_with("BF") || u.starts_with("MXFP")
     };
 
-    // Try dot-separated: model.Q4_K_M
     for seg in stem.rsplit('.') {
         if is_quant(seg) { return Some(seg.to_ascii_uppercase()); }
     }
 
-    // Try dash-separated: model-Q4_K_M or model-UD-IQ3_S
-    // Walk from the end to find the quant token — may be preceded by "UD-" prefix
     let parts: Vec<&str> = stem.rsplit('-').collect();
     for (i, seg) in parts.iter().enumerate() {
         if is_quant(seg) {
-            // Check if preceded by "UD" (ultra-dense) prefix: "UD-IQ3_S" → "UD-IQ3_S"
             let q = seg.to_ascii_uppercase();
             if i + 1 < parts.len() && parts[i + 1].eq_ignore_ascii_case("UD") {
                 return Some(format!("UD-{q}"));
@@ -146,8 +135,6 @@ pub(crate) fn is_auxiliary_gguf(filename: &str) -> bool {
 }
 
 /// Fetch GGUF models from HuggingFace using `?full=true` to get file sizes in one call.
-// Validates HuggingFace model IDs against the expected `owner/name` format.
-// Blocks shell-injectable characters from appearing in constructed pull commands.
 pub(crate) fn valid_hf_model_id(id: &str) -> bool {
     if id.is_empty() || id.len() > 200 { return false; }
     let mut parts = id.splitn(2, '/');
@@ -156,7 +143,6 @@ pub(crate) fn valid_hf_model_id(id: &str) -> bool {
     safe(owner) && safe(name)
 }
 
-// Percent-encodes a search term for use as a URL query parameter value.
 pub(crate) fn pct_encode_query(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 8);
     for b in s.bytes() {
@@ -182,7 +168,6 @@ pub(crate) async fn fetch_hf_gguf(
     search: Option<&str>,
     limit: usize,
 ) -> Vec<(String, u64, u64, Vec<(String, String, u64)>)> {
-    // Rate-limit HF fetches to 1 per second to avoid server-side IP bans.
     let delay = {
         let mut guard = HF_LAST_FETCH.lock().unwrap();
         let now = std::time::Instant::now();
@@ -195,7 +180,6 @@ pub(crate) async fn fetch_hf_gguf(
     };
     if !delay.is_zero() { tokio::time::sleep(delay).await; }
 
-    // Step 1: fetch model list (no full=true — HF never included size in siblings).
     let list_url = if let Some(term) = search {
         format!(
             "https://huggingface.co/api/models?filter=gguf&sort=downloads&direction=-1&limit={limit}&search={}",
@@ -216,8 +200,6 @@ pub(crate) async fn fetch_hf_gguf(
     };
     let model_list: Vec<serde_json::Value> = list_resp.json().await.unwrap_or_default();
 
-    // Step 2: for each model, fetch /api/models/{id}/tree/main to get actual file sizes.
-    // Tuple shape: (model_id, downloads, likes, variants[]).
     let mut results: Vec<(String, u64, u64, Vec<(String, String, u64)>)> = Vec::new();
     for model in &model_list {
         let model_id = model["id"].as_str().unwrap_or("");
@@ -234,16 +216,6 @@ pub(crate) async fn fetch_hf_gguf(
         };
         let files: Vec<serde_json::Value> = tree_resp.json().await.unwrap_or_default();
 
-        // Variant filtering pipeline (mirrors cloud at cloud/src/main.rs:4609):
-        //   1. .gguf extension + non-zero size
-        //   2. Drop auxiliary GGUFs (mmproj/lora/projector/tokenizer/etc)
-        //   3. Drop variants whose size is implausible for the declared
-        //      quant — e.g. a "F32 · 1.7 GB" entry on a 27B model is
-        //      almost certainly an embedding-only export mislabeled by
-        //      the filename parser. Without this filter, those tiny files
-        //      score "Excellent fit" because they trivially fit VRAM,
-        //      then surface as the "best variant" — surfacing wrong-model
-        //      data to the UI.
         let params_b = scoring::extract_params_b(model_id);
         let mut variants: Vec<(String, String, u64)> = Vec::new();
         for file in &files {
@@ -257,14 +229,12 @@ pub(crate) async fn fetch_hf_gguf(
             if !scoring::is_plausible_size_for_quant(params_b, &quant, size) { continue; }
             variants.push((filename.to_string(), quant, size));
         }
-        // Sort variants largest-first (highest quality first)
         variants.sort_by_key(|a| std::cmp::Reverse(a.2));
 
         if !variants.is_empty() {
             results.push((model_id.to_string(), downloads, likes, variants));
         }
 
-        // Brief pause between tree requests to be polite to HF
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
     results
@@ -274,15 +244,6 @@ pub(crate) async fn fetch_hf_gguf(
 /// Called on first /api/model-candidates request if cache is stale, and by a 24h background task.
 #[cfg(not(target_env = "musl"))]
 pub(crate) async fn refresh_model_catalog(store: store::Store) {
-    // 200 keeps the trending catalog broad enough that fleets with mixed
-    // VRAM (e.g. a 64 GB Mac alongside an 8 GB Pi) still see plenty of
-    // models even after per-node fit filtering. The /tree/main fan-out is
-    // rate-limited to 1 req/sec server-side, so this refresh takes ~3–4
-    // minutes — fine for a 24h background task, not on the request path.
-    // Catalog cache size — tuned 200 → 100 after observing the larger limit
-    // pulled in low-quality fine-tunes that crowded out useful results
-    // without proportional UX benefit. 100 is ~3x more than the original
-    // cap of 30 and refreshes in ~20s at 5-in-flight serial fetch.
     let models = fetch_hf_gguf(None, 100).await;
     if models.is_empty() { return; }
 
@@ -321,7 +282,6 @@ pub(crate) async fn handle_model_candidates(
     let search = params.get("search").filter(|s| !s.trim().is_empty()).cloned();
     let limit: usize = params.get("limit").and_then(|v| v.parse().ok()).unwrap_or(20).min(200);
 
-    // Build hardware profile from live metrics
     let apple = apple_m.lock().map(|g| g.clone()).unwrap_or_default();
     let nvidia = nvidia_m.lock().map(|g| g.clone()).unwrap_or_default();
     let wes   = wes_m.lock().map(|g| g.clone()).unwrap_or_default();
@@ -329,7 +289,6 @@ pub(crate) async fn handle_model_candidates(
     let gpu_vram = nvidia.nvidia_vram_total_mb.unwrap_or(0)
         .max(apple.gpu_wired_limit_mb.unwrap_or(0));
 
-    // Fallback for CPU-only nodes: use 75% of system RAM as the model budget
     let vram_mb = if gpu_vram == 0 {
         let mut sys = sysinfo::System::new();
         sys.refresh_memory();
@@ -350,14 +309,9 @@ pub(crate) async fn handle_model_candidates(
         thermal_state: thermal.to_string(),
     };
 
-    // Fetch catalog: live HF search when a term is present, cached trending otherwise.
-    // Tuple shape: (model_id, downloads, likes, variants[]).
     let catalog: Vec<(String, u64, u64, Vec<(String, String, u64)>)> = if let Some(ref term) = search {
-        // Live search — always fresh from HF
         fetch_hf_gguf(Some(term), limit).await
     } else {
-        // Trending — use DuckDB cache, refresh if stale
-        // Blocking pool: the store mutex may be held by the hourly aggregation.
         let st = store.clone();
         let fresh = tokio::task::spawn_blocking(move || st.catalog_is_fresh(24)).await.unwrap_or(false);
         if !fresh {
@@ -380,11 +334,7 @@ pub(crate) async fn handle_model_candidates(
                 quant_level: quant.clone(),
                 file_size_bytes: *file_size,
             };
-            // None = neutral "no historical WES" (scores 10). `Some(0.0)` is NOT
-            // neutral — fit_components matches it as a poor-WES signal (scores 5),
-            // which silently docked 5 points from every candidate.
             let fit = score_fit(model_id, &cv, &hw, None);
-            // Construct the Ollama HF pull command: `ollama pull hf.co/<model_id>:<quant>`
             let pull_cmd = format!("ollama pull hf.co/{model_id}:{quant}");
             scored_variants.push(serde_json::json!({
                 "quant":            fit.quant_level,

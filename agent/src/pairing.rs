@@ -66,12 +66,6 @@ pub(crate) fn pairing_response(state: &PairingState) -> PairingStatusResponse {
     }
 }
 
-// Service and diagnostics functions moved to service.rs and diagnostics.rs
-// (validate_binary_path, install_service, uninstall_service → service.rs)
-// (run_startup_diagnostics → diagnostics.rs)
-
-// ── Fleet Pairing Handlers ────────────────────────────────────────────────────
-
 pub(crate) async fn handle_pair_status(
     axum::extract::Extension(pairing_state): axum::extract::Extension<Arc<Mutex<PairingState>>>,
 ) -> Json<PairingStatusResponse> {
@@ -93,7 +87,6 @@ pub(crate) async fn handle_pair_generate(
         state.status = PairingStatus::Pending { code: code.clone(), expires_at };
         (state.node_id.clone(), pairing_response(&state))
     };
-    // Register with cloud backend. On success: transition to Connected and persist.
     let ps = Arc::clone(&pairing_state);
     tokio::spawn(async move {
         if let Some(token) = register_pair_code(&node_id, &code).await {
@@ -104,8 +97,6 @@ pub(crate) async fn handle_pair_generate(
                 state.status = PairingStatus::Connected { fleet_url: fleet_url.clone() };
                 state.node_id.clone()
             };
-            // Merge pairing fields into existing config — preserve proxy, ports,
-            // bind settings — atomically (see update_config).
             update_config(|cfg| {
                 cfg.node_id = nid;
                 cfg.fleet_url = Some(fleet_url);
@@ -173,7 +164,6 @@ pub(crate) async fn handle_pair_disconnect(
     let mut state = pairing_state.lock().unwrap();
     state.status              = PairingStatus::Unpaired;
     state.cloud_session_token = None;
-    // Clear pairing fields but preserve proxy, ports, bind settings — atomically.
     let nid = state.node_id.clone();
     update_config(|cfg| {
         cfg.node_id = nid;

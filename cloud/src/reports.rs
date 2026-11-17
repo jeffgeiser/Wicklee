@@ -2,8 +2,6 @@
 
 use crate::*;
 
-// ── Chargeback / showback (Team+) ────────────────────────────────────────────
-
 /// Shared base CTE for chargeback — see `energy::energy_base_cte`: per-row
 /// energy/token integrals over each sample's real duration (rows land every
 /// ~2 s, not 30 s), from the 5-min rollup UNION the not-yet-rolled-up raw
@@ -23,14 +21,6 @@ pub(crate) fn chargeback_row(key: &str, energy_kwh: f64, tokens: f64, hours: f64
     })
 }
 
-// ── Idle-waste & right-sizing report (Readiness Program item 10, Team+) ──────
-//
-// "Fleet burned $X idle last 30d; these N changes recover $Y." Phantom load =
-// a model held in memory while the node is NOT inferring — power burned for
-// nothing. Uses the same base CTE as chargeback (energy::energy_base_cte), so
-// the two reports always agree on energy: idle = total − live, both
-// integrated over real sample durations.
-
 /// Compute the idle-waste report for one tenant. Shared by the HTTP handler
 /// and the weekly digest task so both always agree.
 pub(crate) async fn compute_idle_waste(
@@ -41,8 +31,6 @@ pub(crate) async fn compute_idle_waste(
 ) -> serde_json::Value {
     let window = format!("{days} days");
 
-    // Per node × model: idle energy attributable to a loaded-but-idle model
-    // (phantom load) vs idle with nothing loaded (baseline idle, context only).
     let rows_sql = format!("{base}
         SELECT node_id, model,
                SUM(energy_kwh - active_kwh)::float8, SUM(active_kwh)::float8,
@@ -55,7 +43,7 @@ pub(crate) async fn compute_idle_waste(
     let mut phantom_kwh = 0.0_f64;
     let mut baseline_idle_kwh = 0.0_f64;
     let mut active_kwh = 0.0_f64;
-    let mut node_hours: HashMap<String, (f64, f64)> = HashMap::new(); // (idle_h, covered_h)
+    let mut node_hours: HashMap<String, (f64, f64)> = HashMap::new();
     let mut phantom_by_node_model: Vec<(&String, &String, f64, f64)> = Vec::new();
     for (node_id, model, idle, active, idle_h, covered_h) in &rows {
         active_kwh += active;
@@ -70,8 +58,6 @@ pub(crate) async fn compute_idle_waste(
     let phantom_cost = phantom_kwh * kwh_rate;
     let total_kwh = phantom_kwh + baseline_idle_kwh + active_kwh;
 
-    // Actions, largest recovery first. Monthly projection normalizes the
-    // window so 7d and 30d reports advise consistently.
     let monthly = |cost_in_window: f64| cost_in_window * 30.0 / days as f64;
     phantom_by_node_model.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap());
     let mut actions: Vec<serde_json::Value> = phantom_by_node_model.iter()
@@ -86,10 +72,9 @@ pub(crate) async fn compute_idle_waste(
                 idle_h, monthly(idle_kwh * kwh_rate)),
         })).collect();
 
-    // Consolidation candidates: nodes that barely inferred at all.
     if node_hours.len() > 1 {
         for (node_id, (idle_h, covered_h)) in &node_hours {
-            if *covered_h < 24.0 { continue; } // need a real observation window
+            if *covered_h < 24.0 { continue; }
             let duty_pct = (1.0 - idle_h / covered_h) * 100.0;
             if duty_pct < 10.0 {
                 actions.push(serde_json::json!({
@@ -129,7 +114,6 @@ pub(crate) async fn compute_idle_waste(
             "idle_pct_of_energy": if total_kwh > 0.0 {
                 (((phantom_kwh + baseline_idle_kwh) / total_kwh) * 1000.0).round() / 10.0
             } else { 0.0 },
-            // recovers_usd_month values are already monthly-normalized.
             "projected_monthly_recovery_usd": (recovery * 100.0).round() / 100.0,
         },
         "by_node": by_node,
@@ -253,7 +237,7 @@ pub(crate) async fn handle_put_digest(
 /// computes the 7-day report, and emails it via Resend. last_sent_ms advances
 /// only on successful delivery so a Resend outage retries next tick.
 pub(crate) async fn idle_digest_task(pool: sqlx::PgPool) {
-    tokio::time::sleep(Duration::from_secs(120)).await; // let metrics settle after boot
+    tokio::time::sleep(Duration::from_secs(120)).await;
     let mut interval = tokio::time::interval(Duration::from_secs(3600));
     loop {
         interval.tick().await;
@@ -362,8 +346,6 @@ pub(crate) async fn handle_fleet_capacity(
     let (_tcol, tval) = tenant_scope(&user_id, &org_id);
     let window = format!("{days} days");
 
-    // Observed per-node averages: rollups for the window plus the raw
-    // trailing day (rollup lags 24h — same convention as chargeback).
     let rows: Vec<(String, Option<f64>, Option<f64>)> = sqlx::query_as(
         "SELECT node_id,
                 AVG(tok_s) FILTER (WHERE tok_s > 0)::float8,
@@ -377,7 +359,6 @@ pub(crate) async fn handle_fleet_capacity(
          ) s GROUP BY node_id"
     ).bind(tval).bind(&window).fetch_all(&state.pool).await.unwrap_or_default();
 
-    // Classify nodes from the live cache (NVIDIA board power vs Apple SoC power).
     let cache = state.metrics.read().unwrap();
     let classify = |node_id: &str| -> &'static str {
         match cache.get(node_id).and_then(|e| e.metrics.as_ref()) {
@@ -433,9 +414,6 @@ pub(crate) async fn handle_fleet_capacity(
         ("nvidia_h100", "H100 80GB"),
     ];
 
-    // Procurement scenarios: how many units of each profile reach the target,
-    // and what that costs per day at 24h duty. Anchored to the fleet's own
-    // measured tok/W per class; each scenario states its basis.
     let mut scenarios: Vec<serde_json::Value> = PROFILES.iter().filter_map(|(profile, label)| {
         let (vram_mb, power_w) = hardware_profile(profile)?;
         let class = profile_class(profile);
@@ -448,7 +426,7 @@ pub(crate) async fn handle_fleet_capacity(
         let unit_tok_s = eff * power_w as f64;
         if unit_tok_s <= 0.0 { return None; }
         let units = if deficit <= 0.0 { 0 } else { (deficit / unit_tok_s).ceil() as i64 };
-        if units > 16 { return None; } // absurd scenario — not worth listing
+        if units > 16 { return None; }
         let added = unit_tok_s * units as f64;
         Some(serde_json::json!({
             "profile": profile, "label": label, "class": class,
@@ -504,7 +482,6 @@ pub(crate) async fn handle_migration_advisor(
         return upgrade_required("Model Migration Advisor", UpgradePlan::Team);
     }
 
-    // 7d demonstrated efficiency per node (rollups + raw trailing day).
     let (tcol, tval) = tenant_scope(&user_id, &org_id);
     let hist: Vec<(String, Option<f64>)> = sqlx::query_as(
         "SELECT node_id, AVG(wes)::float8 FROM (
@@ -523,7 +500,6 @@ pub(crate) async fn handle_migration_advisor(
             .bind(tval).fetch_all(&state.pool).await.unwrap_or_default()
             .into_iter().collect();
 
-    // Current placement snapshot from the live cache.
     struct Snap {
         hostname: Option<String>,
         model: Option<String>,
@@ -542,7 +518,7 @@ pub(crate) async fn handle_migration_advisor(
             else { m.ollama_active_model.clone() };
         let free_mem_mb = match (m.nvidia_vram_total_mb, m.nvidia_vram_used_mb) {
             (Some(t), Some(u)) => t.saturating_sub(u) as f64,
-            _ => m.available_memory_mb as f64,   // Apple unified memory
+            _ => m.available_memory_mb as f64,
         };
         Some((nid.clone(), Snap {
             hostname: m.hostname.clone(),
@@ -559,13 +535,12 @@ pub(crate) async fn handle_migration_advisor(
     for (from_id, from) in &snaps {
         let (Some(model), Some(from_wes)) = (&from.model, from.wes) else { continue };
         if !from.online || from_wes <= 0.0 { continue; }
-        // Model footprint: reported size + 20% headroom; unknown size assumes 8 GB.
         let needed_mb = from.model_size_mb.unwrap_or(8192.0) * 1.2;
         for (to_id, to) in &snaps {
             if to_id == from_id || !to.online { continue; }
             let Some(&to_wes) = hist_wes.get(to_id) else { continue };
-            if to_wes < from_wes * 1.2 { continue; }          // require ≥20% gain
-            if to.free_mem_mb < needed_mb { continue; }       // must fit with headroom
+            if to_wes < from_wes * 1.2 { continue; }
+            if to.free_mem_mb < needed_mb { continue; }
             let gain_pct = (to_wes - from_wes) / from_wes * 100.0;
             recommendations.push(serde_json::json!({
                 "model": model,
@@ -613,8 +588,6 @@ pub(crate) async fn handle_fleet_chargeback(
     let window = format!("{days} days");
 
     let base = chargeback_base();
-    // Tags overlap by design; empty-string fragments from stray commas fold
-    // into (untagged) via NULLIF.
     let by_tag_sql = format!("{base}
         SELECT COALESCE(NULLIF(t.tag, ''), '(untagged)') AS key,
                SUM(b.energy_kwh), SUM(b.tokens), SUM(b.hours_covered)
@@ -651,7 +624,6 @@ pub(crate) async fn handle_fleet_chargeback(
         rows.iter().map(|(k, e, t, h)| chargeback_row(k, *e, *t, *h, kwh_rate)).collect()
     };
 
-    // CSV path: one grouping, finance-ready, formula-injection-hardened.
     if params.get("format").map(|s| s.as_str()) == Some("csv") {
         let group = params.get("group").map(|s| s.as_str()).unwrap_or("tag");
         let rows = match group {

@@ -39,8 +39,6 @@ type FrameListener = (data: SentinelMetrics) => void;
 const RETRY_MS = 3_000;
 const CLOSE_GRACE_MS = 5_000;
 
-// ── Module-level shared state ────────────────────────────────────────────────
-
 const frameListeners = new Set<FrameListener>();
 const statusListeners = new Set<() => void>();
 let status: LocalStreamStatus = { connected: false, transport: null };
@@ -67,7 +65,7 @@ function setStatus(next: Partial<LocalStreamStatus>) {
 function emit(raw: string, transport: LocalTransport) {
   let data: SentinelMetrics;
   try { data = JSON.parse(raw) as SentinelMetrics; }
-  catch { return; /* malformed frame */ }
+  catch { return; }
   latest = data;
   setStatus({ connected: true, transport });
   frameListeners.forEach(l => l(data));
@@ -96,7 +94,6 @@ function connectWS() {
   ws = socket;
   socket.onmessage = (ev) => {
     emit(ev.data as string, 'ws');
-    // WS is delivering — drop the SSE fallback.
     if (es) { es.onopen = es.onmessage = es.onerror = null; es.close(); es = null; }
     clearTimeout(retrySse);
   };
@@ -151,8 +148,6 @@ const getStatus = () => status;
 const INACTIVE: LocalStreamStatus = { connected: false, transport: null };
 const getInactive = () => INACTIVE;
 
-// ── Hook ─────────────────────────────────────────────────────────────────────
-
 /**
  * Subscribe to local-agent metrics frames. `onFrame` is called for every frame
  * (latest identity is always used — no need to memoise it). Returns the shared
@@ -170,8 +165,6 @@ export function useLocalMetricsStream(
     const listener: FrameListener = (d) => onFrameRef.current?.(d);
     frameListeners.add(listener);
     acquire();
-    // Joining a live stream: hand over the current frame instead of waiting
-    // for the next one, so a tab switch paints immediately.
     if (latest && status.connected) listener(latest);
     return () => {
       frameListeners.delete(listener);

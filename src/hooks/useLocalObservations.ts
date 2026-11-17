@@ -40,7 +40,7 @@ function toDetectedInsight(raw: RawLocalObservation): DetectedInsight {
     recommendation:    raw.recommendation,
     resolution_steps:  raw.resolution_steps,
     action_id:         raw.action_id as DetectedInsight['action_id'],
-    requiredMs:        300_000, // 5 min observation window
+    requiredMs:        300_000,
     observedMs:        raw.confidence_ratio * 300_000,
     confidence:        raw.confidence as DetectedInsight['confidence'],
     confidenceRatio:   raw.confidence_ratio,
@@ -77,7 +77,6 @@ export function useLocalObservations(skip = false): UseLocalObservationsResult {
         setObservations(raw.map(toDetectedInsight));
       }
     } catch {
-      // Agent may not support this endpoint yet — fail silently
       if (mountedRef.current) setObservations([]);
     } finally {
       if (mountedRef.current) setLoading(false);

@@ -15,8 +15,6 @@
  * source of truth across language boundaries.
  */
 
-// ── Types ──────────────────────────────────────────────────────────────────
-
 export interface PerplexityEntry {
   /** KL divergence vs FP16 baseline (Wikitext-2). 0 = lossless. */
   kld:            number;
@@ -53,8 +51,6 @@ export interface QualityCost {
   matchedFamily: string;
 }
 
-// ── Quality bands ──────────────────────────────────────────────────────────
-
 /**
  * Map KL divergence to a human-readable quality band.
  *
@@ -86,8 +82,6 @@ export const QUALITY_BAND_TONE: Record<QualityBand, string> = {
   unusable:      'text-red-400',
 };
 
-// ── Model-family normalisation ─────────────────────────────────────────────
-
 /**
  * Map a free-form model name to a canonical family key.
  *
@@ -104,24 +98,19 @@ export const QUALITY_BAND_TONE: Record<QualityBand, string> = {
  */
 export function normalizeModelFamily(name: string | null | undefined): string | null {
   if (!name) return null;
-  // Strip any HF org prefix and any GGUF extension.
   const stripped = name.split('/').pop()!.replace(/\.gguf$/i, '');
   const lower = stripped.toLowerCase();
 
-  // Special-case Phi (uses both "phi3:mini" and "phi-3-mini" forms).
   if (/phi[-_]?3[-_]?mini/i.test(lower) || /^phi3:mini/.test(lower))   return 'phi-3-mini';
   if (/phi[-_]?3[-_]?medium/i.test(lower))                              return 'phi-3-medium';
   if (/phi[-_]?3[-_]?small/i.test(lower))                               return 'phi-3-small';
 
-  // DeepSeek-R1 distills carry the underlying model size.
   const dsr1 = lower.match(/deepseek-r1-distill-(llama|qwen)-(\d+(?:\.\d+)?)b/);
   if (dsr1) return `deepseek-r1-distill-${dsr1[1]}-${dsr1[2]}b`;
 
-  // Mixtral MoE — preserve "8x7b" form.
   const mixtral = lower.match(/mixtral-(\d+x\d+(?:\.\d+)?)b/);
   if (mixtral) return `mixtral-${mixtral[1]}b`;
 
-  // Generic "<family>-<version>-<size>b" pattern.
   const generic = lower.match(/(llama|qwen|mistral|gemma|deepseek|yi|cohere|phi)[-_]?(\d+(?:\.\d+)?)[-_]?(\d+(?:\.\d+)?)b/);
   if (generic) {
     const family  = generic[1];
@@ -130,7 +119,6 @@ export function normalizeModelFamily(name: string | null | undefined): string | 
     return `${family}-${version}-${size}b`;
   }
 
-  // Family + size only (e.g. "mistral-7b").
   const familySize = lower.match(/(llama|qwen|mistral|gemma|deepseek|yi|cohere|phi)[-_]?(\d+(?:\.\d+)?)b/);
   if (familySize) return `${familySize[1]}-${familySize[2]}b`;
 
@@ -150,13 +138,10 @@ export function normalizeQuant(quant: string | null | undefined): string | null 
   if (!quant) return null;
   let q = quant.toUpperCase().replace(/\.GGUF$/, '');
   if (q.startsWith('UD-')) q = q.slice(3);
-  // FP16 and F16 are the same; canonicalise.
   if (q === 'FP16') q = 'F16';
   if (q === 'FP32') q = 'F32';
   return q;
 }
-
-// ── Data loader ────────────────────────────────────────────────────────────
 
 let _cache: PerplexityBaseline | null = null;
 let _loadingPromise: Promise<PerplexityBaseline | null> | null = null;
@@ -189,8 +174,6 @@ export async function loadPerplexityBaseline(): Promise<PerplexityBaseline | nul
   return _loadingPromise;
 }
 
-// ── Lookup ─────────────────────────────────────────────────────────────────
-
 /**
  * Resolve quality cost for a given model + quant pair.
  *
@@ -214,7 +197,6 @@ export function lookupPerplexity(
   const q      = normalizeQuant(quant);
   if (!q) return null;
 
-  // Try exact family match.
   if (family && baseline.families[family]) {
     const entry = baseline.families[family].quants[q];
     if (entry) {
@@ -228,7 +210,6 @@ export function lookupPerplexity(
     }
   }
 
-  // Fall back to default family.
   const def = baseline.families['default'];
   if (def) {
     const entry = def.quants[q];

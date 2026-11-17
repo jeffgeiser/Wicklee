@@ -101,7 +101,6 @@ const AuditLogSection: React.FC<Props> = ({ subscriptionTier, getToken, onNaviga
   const [filter,     setFilter]     = useState('');
   const [exporting,  setExporting]  = useState(false);
 
-  // SIEM drain state
   const [drain,       setDrain]       = useState<DrainStatus | null>(null);
   const [drainUrl,    setDrainUrl]    = useState('');
   const [drainSecret, setDrainSecret] = useState<string | null>(null);
@@ -129,7 +128,6 @@ const AuditLogSection: React.FC<Props> = ({ subscriptionTier, getToken, onNaviga
       const data = await res.json();
       const rows: AuditEntry[] = data.entries ?? [];
       setEntries(prev => append ? [...prev, ...rows] : rows);
-      // Only offer "load more" when the page came back full.
       setNextBefore(rows.length === PAGE_SIZE ? (data.next_before ?? null) : null);
     } catch {
       setError('Failed to load audit log');
@@ -138,7 +136,6 @@ const AuditLogSection: React.FC<Props> = ({ subscriptionTier, getToken, onNaviga
     }
   }, [isBusinessOrAbove, getToken, filter]);
 
-  // Reload from the top whenever the filter changes (or on mount).
   useEffect(() => { fetchPage(null, false); }, [fetchPage]);
 
   const fetchDrain = useCallback(async () => {
@@ -149,7 +146,7 @@ const AuditLogSection: React.FC<Props> = ({ subscriptionTier, getToken, onNaviga
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (res.ok) setDrain(await res.json());
-    } catch { /* status panel is best-effort */ }
+    } catch { }
   }, [isBusinessOrAbove, getToken]);
 
   useEffect(() => { fetchDrain(); }, [fetchDrain]);
@@ -240,7 +237,6 @@ const AuditLogSection: React.FC<Props> = ({ subscriptionTier, getToken, onNaviga
     }
   };
 
-  // ── Locked state ───────────────────────────────────────────────────────────
   if (!isBusinessOrAbove) {
     return (
       <div className="bg-gray-800 border border-gray-700 rounded-2xl">
@@ -274,7 +270,6 @@ const AuditLogSection: React.FC<Props> = ({ subscriptionTier, getToken, onNaviga
     );
   }
 
-  // ── Active state ───────────────────────────────────────────────────────────
   return (
     <div className="bg-gray-800 border border-gray-700 rounded-2xl">
       <div className="px-6 py-4 border-b border-gray-700 flex items-center gap-3">
@@ -382,7 +377,6 @@ const AuditLogSection: React.FC<Props> = ({ subscriptionTier, getToken, onNaviga
         )}
       </div>
 
-      {/* ── SIEM drain ── */}
       <div className="px-6 py-4 border-t border-gray-700 space-y-3">
         <div className="flex items-center gap-2">
           <Send size={12} className="text-amber-400 shrink-0" />

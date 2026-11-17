@@ -23,9 +23,7 @@ describe('median', () => {
 
 describe('efficiencyRegressions', () => {
   const series = (recent: number, baseline: number) => [
-    // 20 baseline buckets, 2–6 days ago
     ...Array.from({ length: 20 }, (_, i) => ({ ts_ms: NOW - 2 * 24 * HOUR - i * 30 * MIN, penalized_wes: baseline })),
-    // 8 recent buckets, last 4 h
     ...Array.from({ length: 8 }, (_, i) => ({ ts_ms: NOW - i * 30 * MIN, penalized_wes: recent })),
   ];
 
@@ -40,7 +38,7 @@ describe('efficiencyRegressions', () => {
   });
 
   it('skips nodes without enough baseline', () => {
-    const pts = series(6, 10).slice(15); // only 5 baseline buckets left
+    const pts = series(6, 10).slice(15);
     expect(efficiencyRegressions([{ node_id: 'a', hostname: 'a', points: pts }], NOW)).toEqual([]);
   });
 
@@ -51,12 +49,11 @@ describe('efficiencyRegressions', () => {
 });
 
 describe('memoryForecasts', () => {
-  const rising = Array.from({ length: 24 }, (_, i) => ({ ts_ms: NOW - (23 - i) * 5 * MIN, mem_pct: 50 + i * (10 / 12) })); // +10 pts/h
+  const rising = Array.from({ length: 24 }, (_, i) => ({ ts_ms: NOW - (23 - i) * 5 * MIN, mem_pct: 50 + i * (10 / 12) }));
 
   it('projects time to the threshold from the 2 h slope', () => {
     const [f] = memoryForecasts([{ node_id: 'a', hostname: 'a', points: rising }], NOW);
     expect(f.slopePctPerHour).toBeCloseTo(10, 0);
-    // current ≈ 69.2 → 95 at 10/h ≈ 2.6 h
     expect(f.etaMs! / HOUR).toBeCloseTo((95 - f.currentPct) / f.slopePctPerHour, 3);
   });
 
@@ -85,7 +82,7 @@ describe('coldStarts', () => {
     const ttft = [200, 210, 190, 205, 2500, 195, 200, 800, 3000];
     const pts = ttft.map((t, i) => ({ ts_ms: NOW - (ttft.length - i) * 5 * MIN, ttft_ms: t }));
     const [c] = coldStarts([{ node_id: 'a', hostname: 'a', points: pts }]);
-    expect(c.spikes).toBe(2); // 800 is ≥ 3× median but under the 1 s floor
+    expect(c.spikes).toBe(2);
     expect(c.worstTtftMs).toBe(3000);
     expect(c.lastSpikeMs).toBe(pts[8].ts_ms);
   });
@@ -131,7 +128,7 @@ describe('inferenceDensity', () => {
       { node_id: 'a', hostname: 'a', points: [{ ts_ms: 9 * HOUR, tok_s: 30, duty_pct: 50 }, { ts_ms: 33 * HOUR, tok_s: 10 }] },
       { node_id: 'b', hostname: 'b', points: [{ ts_ms: 9 * HOUR, tok_s: 20, duty_pct: 100 }, { ts_ms: 14 * HOUR, tok_s: 5 }] },
     ], hourOf)!;
-    expect(d.byHour[9]).toBe(30); // (30+20 + 10) / 2 buckets
+    expect(d.byHour[9]).toBe(30);
     expect(d.byHour[14]).toBe(5);
     expect(d.byHour[0]).toBeNull();
     expect(d.peakHour).toBe(9);

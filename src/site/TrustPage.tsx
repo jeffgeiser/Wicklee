@@ -34,7 +34,6 @@ const TrustPage: React.FC<TrustPageProps> = ({ onNavigate }) => {
 
   return (
     <div className="min-h-screen bg-gray-900 text-gray-300">
-      {/* Header */}
       <div className="border-b border-gray-700 bg-gray-900/80 backdrop-blur-md sticky top-0 z-20">
         <div className="max-w-4xl mx-auto px-4 sm:px-8 py-4 flex items-center gap-4">
           <button onClick={() => onNavigate('/')} className="text-gray-500 hover:text-white transition-colors">
@@ -46,7 +45,6 @@ const TrustPage: React.FC<TrustPageProps> = ({ onNavigate }) => {
       </div>
 
       <div className="max-w-4xl mx-auto px-4 sm:px-8 py-12 space-y-14">
-        {/* Hero */}
         <div className="space-y-3">
           <h1 className="text-3xl font-bold text-white">Sovereign by architecture, not by policy</h1>
           <p className="text-gray-400 leading-relaxed max-w-2xl">
@@ -103,7 +101,6 @@ const TrustPage: React.FC<TrustPageProps> = ({ onNavigate }) => {
           </ul>
         </Section>
 
-        {/* CTA */}
         <div className="rounded-2xl border border-emerald-500/25 bg-emerald-500/5 p-6 space-y-3">
           <div className="flex items-center gap-2">
             <Lock className="w-4 h-4 text-emerald-400" />

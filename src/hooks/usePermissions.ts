@@ -1,8 +1,6 @@
 import { User, UserRole, SubscriptionTier, InsightsTier } from '../types';
 import { isProOrAbove, isTeamOrAbove, isBusinessOrAbove } from '../utils/tier';
 
-// ── Tier mappings ──────────────────────────────────────────────────────────────
-
 const SUBSCRIPTION_TO_INSIGHTS: Record<SubscriptionTier, InsightsTier> = {
   community:  'live_session',
   pro:        'persistent',
@@ -24,23 +22,21 @@ const INSIGHTS_ORDER: InsightsTier[] = [
  * Source of truth: docs/INSIGHTS.md § Gating Implementation
  */
 const INSIGHT_TIER_GATE: Record<number, InsightsTier> = {
-  1:  'live_session',   // Thermal Degradation     — Community
-  2:  'live_session',   // Power Anomaly            — Community
-  3:  'live_session',   // Memory Exhaustion        — Community
-  4:  'live_session',   // Model Fit Score          — Community (was Pro)
-  5:  'live_session',   // Model Eviction           — Community (was Pro)
-  6:  'live_session',   // Idle Resource Cost       — Community
-  7:  'live_session',   // WES Peer Leaderboard     — Community
-  8:  'trend',          // Efficiency Regression    — Team
-  9:  'trend',          // Memory Forecast          — Team
-  10: 'live_session',   // Quantization ROI         — Community (was Team)
-  11: 'trend',          // Hardware Cold Start      — Team
-  12: 'trend',          // Fleet Thermal Diversity  — Team
-  13: 'trend',          // Inference Density        — Team
-  14: 'predictive',     // Sovereignty Audit        — Enterprise
+  1:  'live_session',
+  2:  'live_session',
+  3:  'live_session',
+  4:  'live_session',
+  5:  'live_session',
+  6:  'live_session',
+  7:  'live_session',
+  8:  'trend',
+  9:  'trend',
+  10: 'live_session',
+  11: 'trend',
+  12: 'trend',
+  13: 'trend',
+  14: 'predictive',
 };
-
-// ── Hook ──────────────────────────────────────────────────────────────────────
 
 export const usePermissions = (user: User | null) => {
   const hasRole = (roles: UserRole[]) => {
@@ -48,8 +44,6 @@ export const usePermissions = (user: User | null) => {
     return roles.includes(user.role);
   };
 
-  // Resolve subscription tier from Clerk publicMetadata (set by Paddle webhook).
-  // Default: community (free tier).
   const subscriptionTier: SubscriptionTier = user?.tier ?? 'community';
 
   const insightsTier: InsightsTier = SUBSCRIPTION_TO_INSIGHTS[subscriptionTier];
@@ -65,7 +59,6 @@ export const usePermissions = (user: User | null) => {
   };
 
   return {
-    // ── RBAC (role-based) ──────────────────────────────────────────────────
     isOwner:          user?.role === 'Owner',
     isCollaborator:   user?.role === 'Collaborator',
     isViewer:         user?.role === 'Viewer',
@@ -73,25 +66,17 @@ export const usePermissions = (user: User | null) => {
     canRunAIAnalysis: hasRole(['Owner', 'Collaborator']),
     canManageTeam:    hasRole(['Owner']),
 
-    // ── Subscription tier ─────────────────────────────────────────────────
     subscriptionTier,
     insightsTier,
     canViewInsight,
 
-    // ── History depth ─────────────────────────────────────────────────────
     historyDays: (
       { community: 1, pro: 7, team_10: 90, team: 90, business: 365, enterprise: Infinity } as Record<SubscriptionTier, number>
     )[subscriptionTier],
 
-    // ── Enterprise capabilities ───────────────────────────────────────────
-    // canGoSovereign: Enterprise-only. Airgapped mode — no outbound telemetry,
-    //   no cloud pairing. On-prem Docker/Helm deployment path.
     canGoSovereign: subscriptionTier === 'enterprise',
-    // hasPrometheusExport: Team and above. The cloud's /metrics endpoint
-    //   (Prometheus exposition format) accepts Team-tier API keys.
     hasPrometheusExport: isTeamOrAbove(subscriptionTier),
 
-    // ── Convenience booleans ──────────────────────────────────────────────
     isPro:        isProOrAbove(subscriptionTier),
     isTeamOrAbove:  isTeamOrAbove(subscriptionTier),
     isBusinessOrAbove: isBusinessOrAbove(subscriptionTier),

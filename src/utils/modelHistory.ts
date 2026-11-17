@@ -117,20 +117,13 @@ export function projectTpsForVariant(
    *  contract (returns null on empty history). */
   chipName?: string | null,
 ): TpsProjection | null {
-  // Theoretical-fallback path when no telemetry is available. Used by the
-  // empty-fleet case so Discovery shows a useful tok/s estimate from the
-  // moment a node comes online — same physics as the bandwidth heuristic
-  // below, just sourced from the chip's spec sheet rather than measurement.
   const theoreticalFallback = (): TpsProjection | null => {
     if (!chipName || variantFileSizeMb <= 0) return null;
     const tps = theoreticalTpsForChip(chipName, variantFileSizeMb / 1024);
     if (tps == null || !isFinite(tps) || tps <= 0) return null;
-    // ±20% spread reflects the uncertainty of a pure-spec estimate — thermals,
-    // KV cache pressure, and longer-than-spec context all push the real
-    // number down from this ceiling.
     return {
       min: Math.round(tps * 0.80),
-      max: Math.round(tps * 1.00),  // theoretical is the ceiling, not a band midpoint
+      max: Math.round(tps * 1.00),
       count: 0,
       confidence: 'theoretical',
     };
@@ -151,10 +144,8 @@ export function projectTpsForVariant(
   }
   if (sized.length === 0) return theoreticalFallback();
 
-  // Tier 1+2: same-size matches (within ±40%)
   const sameSize = sized.filter(s => s.sizeMb >= lo && s.sizeMb <= hi);
   if (sameSize.length > 0) {
-    // Tier 1: prefer same quant family with ≥2 observations
     if (targetFamily) {
       const sameFam = sameSize.filter(s => quantFamily(extractQuant(s.row.model) ?? '') === targetFamily);
       if (sameFam.length >= 2) {
@@ -162,30 +153,18 @@ export function projectTpsForVariant(
         return { min: Math.min(...tps), max: Math.max(...tps), count: sameFam.length, confidence: 'cohort' };
       }
     }
-    // Still in same-size — return range from all same-size matches (any quant)
     if (sameSize.length >= 2) {
       const tps = sameSize.map(c => c.row.avg_tok_s as number);
       return { min: Math.min(...tps), max: Math.max(...tps), count: sameSize.length, confidence: 'cohort' };
     }
-    // Tier 2: single same-size sample → point estimate ±10%
     const single = sameSize[0].row.avg_tok_s as number;
     return { min: Math.round(single * 0.9), max: Math.round(single * 1.1), count: 1, confidence: 'sample' };
   }
 
-  // Tier 3: bandwidth-scaling fallback. Use the closest-size historical
-  // observation and scale linearly by inverse size ratio. The assumption:
-  // LLM inference at batch=1 is memory-bandwidth-bound, so tok/s ∝ 1/size
-  // on the same hardware. This is the same physics quantSweet.ts uses for
-  // its quant-recommendation projections — borrowing the technique here so
-  // Discovery shows useful numbers from day one rather than waiting for
-  // cohorts to form organically.
   sized.sort((a, b) => Math.abs(a.sizeMb - variantFileSizeMb) - Math.abs(b.sizeMb - variantFileSizeMb));
   const baseline = sized[0];
   const baselineTps = baseline.row.avg_tok_s as number;
   const projected = baselineTps * (baseline.sizeMb / variantFileSizeMb);
-  // ±15% spread acknowledges the bandwidth heuristic's inherent imprecision
-  // (model architecture variations, varying quant overhead) without being so
-  // wide it becomes useless guidance.
   return {
     min: Math.round(projected * 0.85),
     max: Math.round(projected * 1.15),

@@ -2,10 +2,7 @@
 
 use crate::*;
 
-// ── Rollup & maintenance ─────────────────────────────────────────────────────
-
 pub(crate) async fn run_rollup(pool: &sqlx::PgPool) {
-    // Aggregate metrics_raw rows older than 24h into 5-minute buckets.
     let result = sqlx::query(&rollup_sql()).execute(pool).await;
 
     match result {
@@ -87,8 +84,6 @@ pub(crate) fn rollup_sql() -> String {
 }
 
 async fn delete_rolled_up_raw(pool: &sqlx::PgPool) {
-    // Delete rolled-up raw rows. TimescaleDB retention policy also handles this,
-    // but explicit deletion ensures data is rolled up first.
     let _ = sqlx::query(
         "DELETE FROM metrics_raw
          WHERE ts < to_timestamp(floor(EXTRACT(EPOCH FROM NOW() - INTERVAL '24 hours') / 300) * 300)
@@ -107,30 +102,24 @@ async fn delete_rolled_up_raw(pool: &sqlx::PgPool) {
 pub(crate) async fn run_nightly_maintenance(pool: &sqlx::PgPool) {
     let now = now_ms() as i64;
 
-    // Prune metrics_raw older than 2 days (fallback — TimescaleDB retention handles this if active).
     let _ = sqlx::query("DELETE FROM metrics_raw WHERE ts < to_timestamp($1::float8 / 1000.0)")
         .bind(now - 2 * 86_400_000).execute(pool).await;
 
-    // Prune node_events older than 30 days.
     let _ = sqlx::query("DELETE FROM node_events WHERE ts < to_timestamp($1::float8 / 1000.0)")
         .bind(now - 30 * 86_400_000).execute(pool).await;
 
-    // Prune metrics_5min older than 365 days (Business tier gets full year).
     let _ = sqlx::query("DELETE FROM metrics_5min WHERE ts < to_timestamp($1::float8 / 1000.0)")
         .bind(now - 365 * 86_400_000).execute(pool).await;
 
-    // Prune resolved/acknowledged observations older than 30 days.
     let _ = sqlx::query(
         "DELETE FROM fleet_observations WHERE state != 'open' AND fired_at_ms < $1"
     ).bind(now - 30 * 86_400_000).execute(pool).await;
 
-    // ANALYZE key tables for query planner.
     let _ = sqlx::query("ANALYZE metrics_raw").execute(pool).await;
     let _ = sqlx::query("ANALYZE metrics_5min").execute(pool).await;
     let _ = sqlx::query("ANALYZE node_events").execute(pool).await;
     let _ = sqlx::query("ANALYZE fleet_observations").execute(pool).await;
 
-    // Refresh HuggingFace GGUF model catalog (24h cycle).
     let _ = refresh_cloud_model_catalog(pool).await;
 
     println!("[nightly] maintenance complete — pruned + ANALYZE + catalog refresh");

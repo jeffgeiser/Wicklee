@@ -17,8 +17,6 @@ import { useRef, useState, useEffect } from 'react';
 import type { SentinelMetrics, FleetEvent, LiveActivityEvent } from '../types';
 import { getNodePowerW } from '../utils/power';
 
-// ── Constants ─────────────────────────────────────────────────────────────────
-
 const MAX_EVENTS = 50;
 
 /**
@@ -32,8 +30,6 @@ const POWER_ANOMALY_THRESHOLD = 0.30;
 
 /** Minimum watts baseline below which power anomaly detection is suppressed. */
 const POWER_ANOMALY_MIN_BASELINE_W = 10;
-
-// ── Types ─────────────────────────────────────────────────────────────────────
 
 interface PendingChange {
   type:          FleetEvent['type'];
@@ -52,8 +48,6 @@ interface LocalPending {
 
 const uid = () => Math.random().toString(36).slice(2);
 
-// ── Hook ──────────────────────────────────────────────────────────────────────
-
 /**
  * @param sentinel  Latest SentinelMetrics from the local agent, or null when offline.
  * @param connected Whether the local WS/SSE connection is active.
@@ -64,14 +58,12 @@ export function useLocalEvents(
 ): FleetEvent[] {
   const [events, setEvents] = useState<FleetEvent[]>([]);
 
-  // ── Observation refs — previous frame values ──────────────────────────────
   const prevConnected  = useRef<boolean | undefined>(undefined);
   const prevThermal    = useRef<string | null | undefined>(undefined);
   const prevModel      = useRef<string | null | undefined>(undefined);
   const prevPower      = useRef<number | null | undefined>(undefined);
   const pending        = useRef<LocalPending>({});
 
-  // Deduplicate live_activity events — track seen timestamp+message pairs.
   const seenActivityIds = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -83,15 +75,12 @@ export function useLocalEvents(
     const newEvents: FleetEvent[] = [];
     const np = pending.current;
 
-    // ── Source 1: live_activities embedded in the payload ─────────────────
     if (sentinel?.live_activities?.length) {
       for (const act of sentinel.live_activities) {
-        // Deduplicate by timestamp + message (agent may replay recent events on startup)
         const key = `${act.timestamp_ms}:${act.message}`;
         if (seenActivityIds.current.has(key)) continue;
         seenActivityIds.current.add(key);
 
-        // Cap seen-set size to avoid unbounded growth
         if (seenActivityIds.current.size > 500) {
           const iter = seenActivityIds.current.values();
           seenActivityIds.current.delete(iter.next().value);
@@ -99,7 +88,7 @@ export function useLocalEvents(
 
         const type: FleetEvent['type'] = act.level === 'error'
           ? 'error'
-          : 'node_online'; // reuse node_online as a generic "system info" event for info/warn
+          : 'node_online';
 
         newEvents.push({
           id:       uid(),
@@ -112,14 +101,11 @@ export function useLocalEvents(
       }
     }
 
-    // ── Source 2: delta watcher ───────────────────────────────────────────
-    // Only run when sentinel is live.
     if (sentinel != null) {
       const curThermal = sentinel.thermal_state ?? null;
       const curPower   = getNodePowerW(sentinel);
       const curModel   = sentinel.ollama_active_model ?? null;
 
-      // ── 1. CONNECTIVITY ──────────────────────────────────────────────────
       if (prevConnected.current !== undefined && connected !== prevConnected.current) {
         const type: FleetEvent['type'] = connected ? 'node_online' : 'node_offline';
         if (!np.connectivity) {
@@ -131,7 +117,7 @@ export function useLocalEvents(
           };
         } else if (np.connectivity.targetValue !== connected) {
           if (connected === np.connectivity.originalValue) {
-            delete np.connectivity; // reverted — cancel
+            delete np.connectivity;
           } else {
             np.connectivity.type        = type;
             np.connectivity.targetValue = connected;
@@ -149,7 +135,6 @@ export function useLocalEvents(
         }
       }
 
-      // ── 2. THERMAL / THROTTLE ────────────────────────────────────────────
       if (prevThermal.current !== undefined && prevThermal.current !== curThermal) {
         const isThrottledNow = curThermal != null && ['serious', 'critical'].includes(curThermal.toLowerCase());
         const wasThrottled   = prevThermal.current != null && ['serious', 'critical'].includes(prevThermal.current.toLowerCase());
@@ -190,7 +175,6 @@ export function useLocalEvents(
         }
       }
 
-      // ── 3. MODEL SWAP ────────────────────────────────────────────────────
       if (
         prevModel.current !== undefined &&
         prevModel.current !== curModel &&
@@ -226,10 +210,6 @@ export function useLocalEvents(
         }
       }
 
-      // ── 4. POWER ANOMALY ─────────────────────────────────────────────────
-      // Compare against the pending window's ORIGINAL baseline once one is
-      // open — prevPower advances every frame, so a sustained step cancelled
-      // itself on the next frame (see FleetStreamContext for the full note).
       const prevP = prevPower.current ?? null;
       const powerBaseline = np.power ? Number(np.power.originalValue) : prevP;
       if (
@@ -252,7 +232,6 @@ export function useLocalEvents(
           np.power.detail      = `${np.power.originalValue}W ${direction} ${curPower.toFixed(0)}W`;
         }
       } else if (np.power) {
-        // Returned to (near) the original baseline — cancel.
         delete np.power;
       }
 
@@ -262,7 +241,6 @@ export function useLocalEvents(
         delete np.power;
       }
 
-      // ── Advance observation refs ──────────────────────────────────────────
       prevThermal.current = curThermal;
       prevModel.current   = curModel;
       prevPower.current   = curPower;
@@ -270,19 +248,13 @@ export function useLocalEvents(
 
     prevConnected.current = connected;
 
-    // ── Commit new events ─────────────────────────────────────────────────
     if (newEvents.length > 0) {
       setEvents(prev =>
         [...newEvents.sort((a, b) => b.ts - a.ts), ...prev].slice(0, MAX_EVENTS)
       );
     }
-  // sentinel reference changes every frame (new object each WS/SSE message).
-  // connected is a primitive — changes are always caught.
   }, [sentinel, connected]);
 
-  // On every fresh connect, fetch the agent's recent-events ring buffer.
-  // This catches the startup event and any lifecycle events that fired
-  // before the browser was opened (agent starts on boot, browser opens later).
   useEffect(() => {
     if (!connected) return;
 
@@ -310,7 +282,7 @@ export function useLocalEvents(
           );
         }
       })
-      .catch(() => { /* agent not yet ready — silently ignore */ });
+      .catch(() => { });
   }, [connected]);
 
   return events;

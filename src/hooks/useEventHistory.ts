@@ -47,14 +47,8 @@ export function useEventHistory(opts: UseEventHistoryOptions = {}): UseEventHist
   const [error,   setError]   = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(true);
 
-  // Track whether the last fetch failed — prevents infinite retry loops when
-  // a dependency change recreates fetchPage and re-triggers useEffect.
   const lastFetchFailed = useRef(false);
 
-  // The Clerk token rotates on a 50s interval in the caller. Keep it in a
-  // ref so rotation does NOT recreate fetchPage — when it was a dep, every
-  // rotation re-ran the initial-load effect, refetching page 1 and wiping
-  // any pages the user had accumulated with "load more".
   const tokenRef = useRef(opts.token);
   tokenRef.current = opts.token;
 
@@ -69,8 +63,6 @@ export function useEventHistory(opts: UseEventHistoryOptions = {}): UseEventHist
       if (opts.eventType)  params.set('event_type', opts.eventType);
       if (opts.nodeId)     params.set('node_id', opts.nodeId);
 
-      // Local agent paths are relative: same-origin when served by the agent,
-      // Vite-proxied to :7700 in dev.
       const baseUrl = isFleet ? CLOUD_URL : '';
       const path    = isFleet ? '/api/fleet/events/history' : '/api/events/history';
       const headers: Record<string, string> = {};
@@ -88,10 +80,8 @@ export function useEventHistory(opts: UseEventHistoryOptions = {}): UseEventHist
       lastFetchFailed.current = false;
 
       if (before != null) {
-        // Append (pagination)
         setEvents(prev => [...prev, ...page]);
       } else {
-        // Fresh load
         setEvents(page);
       }
     } catch (e: unknown) {
@@ -102,10 +92,6 @@ export function useEventHistory(opts: UseEventHistoryOptions = {}): UseEventHist
     }
   }, [limit, opts.eventType, opts.nodeId, isFleet]);
 
-  // Initial load (skipped while waiting for auth).
-  // Don't auto-retry when the last fetch failed — a filter change recreates
-  // fetchPage, which would otherwise loop 502s forever.
-  // The user can still manually retry via the refresh button.
   useEffect(() => {
     if (opts.skip) return;
     if (lastFetchFailed.current) return;

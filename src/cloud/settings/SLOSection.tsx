@@ -69,7 +69,6 @@ const SLOSection: React.FC<Props> = ({ subscriptionTier, getToken, nodes, onNavi
   const [error,   setError]   = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
 
-  // Form state
   const [fName,      setFName]      = useState('');
   const [fMetric,    setFMetric]    = useState('ttft_p95_ms');
   const [fThreshold, setFThreshold] = useState('');
@@ -153,7 +152,6 @@ const SLOSection: React.FC<Props> = ({ subscriptionTier, getToken, nodes, onNavi
     }
   };
 
-  // ── Locked state ───────────────────────────────────────────────────────────
   if (!isTeamOrAbove) {
     return (
       <div className="bg-gray-800 border border-gray-700 rounded-2xl">
@@ -189,7 +187,6 @@ const SLOSection: React.FC<Props> = ({ subscriptionTier, getToken, nodes, onNavi
 
   const fm = metricMeta(fMetric);
 
-  // ── Active state ───────────────────────────────────────────────────────────
   return (
     <div className="bg-gray-800 border border-gray-700 rounded-2xl">
       <div className="px-6 py-4 border-b border-gray-700 flex items-center gap-3">
@@ -328,7 +325,6 @@ const SLOSection: React.FC<Props> = ({ subscriptionTier, getToken, nodes, onNavi
                     </button>
                   </div>
                 </div>
-                {/* Error budget bar */}
                 <div>
                   <div className="flex items-center justify-between text-[9px] text-gray-600 mb-1">
                     <span>Error budget burn</span>

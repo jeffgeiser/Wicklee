@@ -15,7 +15,6 @@ const ClerkAccountActions: React.FC<{ onClose: () => void }> = ({ onClose }) => 
 
   const handleSignOut = async () => {
     onClose();
-    // Revoke stream tokens before signing out (fire-and-forget).
     try {
       const jwt = await getToken();
       if (jwt) {
@@ -24,7 +23,7 @@ const ClerkAccountActions: React.FC<{ onClose: () => void }> = ({ onClose }) => 
           headers: { Authorization: `Bearer ${jwt}` },
         }).catch(() => {});
       }
-    } catch { /* best-effort */ }
+    } catch { }
     signOut({ redirectUrl: '/' });
   };
 

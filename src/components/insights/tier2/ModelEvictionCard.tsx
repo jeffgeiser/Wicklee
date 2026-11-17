@@ -21,8 +21,6 @@ import { Flame, Loader2 } from 'lucide-react';
 import type { SentinelMetrics } from '../../../types';
 import InsightCard from '../InsightCard';
 
-// ── Constants ─────────────────────────────────────────────────────────────────
-
 /** Ollama's default keep_alive: 5 minutes. */
 const KEEP_ALIVE_MS = 5 * 60 * 1_000;
 
@@ -31,8 +29,6 @@ const WARN_AFTER_MS = 3 * 60 * 1_000;
 
 /** Success / failure toast duration. */
 const SUCCESS_DURATION_MS = 3_000;
-
-// ── Props ─────────────────────────────────────────────────────────────────────
 
 interface Props {
   node:            SentinelMetrics;
@@ -51,8 +47,6 @@ interface Props {
   onKeepWarm?:     () => void;
 }
 
-// ── Component ─────────────────────────────────────────────────────────────────
-
 const ModelEvictionCard: React.FC<Props> = ({
   node,
   idleSinceMs,
@@ -62,7 +56,6 @@ const ModelEvictionCard: React.FC<Props> = ({
 }) => {
   const [keepWarmState, setKeepWarmState] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
 
-  // Must have an Ollama model loaded and be in idle state
   if (!node.ollama_running || !node.ollama_active_model) return null;
   if (idleSinceMs == null) return null;
 
@@ -70,7 +63,6 @@ const ModelEvictionCard: React.FC<Props> = ({
   const remainingMs  = Math.max(0, KEEP_ALIVE_MS - inactiveMs);
   const remainingMin = Math.ceil(remainingMs / 60_000);
 
-  // Only show when inactive for at least 3 minutes
   if (inactiveMs < WARN_AFTER_MS) return null;
 
   const activeModel  = node.ollama_active_model;
@@ -93,7 +85,6 @@ const ModelEvictionCard: React.FC<Props> = ({
       });
       ok = res.ok;
     } catch {
-      // Ollama unreachable — reported below, never shown as success.
     }
     setKeepWarmState(ok ? 'success' : 'error');
     if (ok) onKeepWarm?.();
@@ -110,7 +101,6 @@ const ModelEvictionCard: React.FC<Props> = ({
     >
       <div className="px-5 py-4 space-y-3">
 
-        {/* ── Model + time remaining ───────────────────────────────────────── */}
         <div className="flex items-center gap-2 text-sm flex-wrap">
           <span className="font-mono text-gray-200 text-xs">{activeModel}</span>
           <span className="text-gray-500">·</span>
@@ -122,13 +112,11 @@ const ModelEvictionCard: React.FC<Props> = ({
           </span>
         </div>
 
-        {/* ── Description ──────────────────────────────────────────────────── */}
         <p className="text-sm text-gray-400 leading-relaxed">
           Ollama will unload this model due to inactivity. The next inference
           request will pay the cold start penalty.
         </p>
 
-        {/* ── Keep Warm CTA ─────────────────────────────────────────────────── */}
         <div className="pt-1">
           {canKeepWarm ? (
             <button

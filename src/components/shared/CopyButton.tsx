@@ -38,7 +38,7 @@ export async function copyToClipboard(text: string): Promise<boolean> {
       await navigator.clipboard.writeText(text);
       return true;
     }
-  } catch { /* fall through to the textarea fallback */ }
+  } catch { }
   return copyWithTextarea(text);
 }
 

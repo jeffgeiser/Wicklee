@@ -3,10 +3,6 @@
 
 use super::*;
 
-// ── MCP (Model Context Protocol) JSON-RPC 2.0 Types ─────────────────────────
-// Lightweight MCP server — wraps existing agent endpoints for AI agent consumption.
-// No additional crate dependencies; just serde_json over Axum.
-
 #[derive(Deserialize)]
 pub(crate) struct JsonRpcRequest {
     #[allow(dead_code)]
@@ -266,24 +262,11 @@ pub(crate) async fn handle_mcp(
     axum::extract::Extension(probe_active):          axum::extract::Extension<Arc<std::sync::atomic::AtomicBool>>,
     axum::extract::Extension(proxy_ports):           axum::extract::Extension<ProxyPorts>,
     axum::extract::Extension(node_id):               axum::extract::Extension<NodeId>,
-    // The whole request rather than `Json<JsonRpcRequest>`, for two reasons.
-    //
-    // Axum stops implementing `Handler` past sixteen extractors, and the three
-    // /v1 tools need five more things than this handler used to take: the
-    // runtime port, the capability record, the residency tracker, the store
-    // and the observation cache. Taking the request itself is one extractor
-    // for all of them.
-    //
-    // And it lets a malformed body answer as JSON-RPC. `Json<T>` rejects with
-    // a 400 and a plain-text reason, which a JSON-RPC client has no way to
-    // read; a parse error is -32700 and belongs in the envelope.
     request: axum::extract::Request,
 ) -> Json<JsonRpcResponse> {
     let (parts, body) = request.into_parts();
     let port_rx = match parts.extensions.get::<OllamaPortRx>() {
         Some(OllamaPortRx(rx)) => rx.clone(),
-        // Only reachable if the router stopped layering it, which would break
-        // every /v1 route too. Answered rather than panicked.
         None => {
             return Json(JsonRpcResponse::error(
                 serde_json::Value::Null,
@@ -324,8 +307,6 @@ pub(crate) async fn handle_mcp(
         .get::<crate::observations::ObservationCache>()
         .cloned()
         .map(axum::extract::Extension);
-    // On musl there is no DuckDB, so neither exists and the handler serves
-    // the in-memory evaluation — the same as the HTTP route does there.
     #[cfg(target_env = "musl")]
     let store: crate::http_api::MaybeStore = None;
     #[cfg(target_env = "musl")]
@@ -345,7 +326,6 @@ pub(crate) async fn handle_mcp(
     };
     let id = req.id.clone();
 
-    // Helper: read all shared state into local snapshots.
     let read_snapshot = || -> serde_json::Value {
         let apple    = apple_metrics.lock().map(|g| g.clone()).unwrap_or_default();
         let nvidia   = nvidia_metrics.lock().map(|g| g.clone()).unwrap_or_default();
@@ -358,8 +338,6 @@ pub(crate) async fn handle_mcp(
         let swap     = swap_metrics.read();
         let hostname = sysinfo::System::host_name().unwrap_or_else(|| node_id.0.to_string());
 
-        // Get basic system info — only memory + the CPU list are read, so skip
-        // the full process/disk/network enumeration `new_all()` would do.
         let mut sys = sysinfo::System::new();
         sys.refresh_memory();
         sys.refresh_cpu();
@@ -372,12 +350,11 @@ pub(crate) async fn handle_mcp(
             total, used, total.saturating_sub(used), sys.cpus().len(),
             &node_id.0, &hostname,
             proxy_ports.listen, proxy_ports.target,
-            None, // model_baseline — not wired through Extension, acceptable for MCP
+            None,
         )
     };
 
     match req.method.as_str() {
-        // ── Protocol lifecycle ───────────────────────────────────────────────
         "initialize" => Json(JsonRpcResponse::success(id, serde_json::json!({
             "protocolVersion": "2024-11-05",
             "serverInfo": {
@@ -392,7 +369,6 @@ pub(crate) async fn handle_mcp(
 
         "notifications/initialized" => Json(JsonRpcResponse::success(id, serde_json::json!({}))),
 
-        // ── Tools ────────────────────────────────────────────────────────────
         "tools/list" => Json(JsonRpcResponse::success(id, serde_json::json!({
             "tools": mcp_tools_list()
         }))),
@@ -513,19 +489,6 @@ pub(crate) async fn handle_mcp(
                     }
                 }
 
-                // ── The /v1 surface, as tools ────────────────────────────────
-                //
-                // Each one calls the same handler the HTTP route calls and
-                // passes its body through. That is how "tool output equals the
-                // HTTP JSON" is true by construction rather than by two
-                // implementations agreeing for now — and it is why these three
-                // do not fetch over loopback the way the older tools do, which
-                // also spares them the hardcoded :7700 those carry.
-                //
-                // `fingerprint` and `verify` are deliberately absent. They are
-                // the only routes that load models, and an agent able to
-                // trigger one could take a colleague's model out of memory
-                // while answering a question about it.
                 "wicklee_state" => {
                     let body = handle_v1_state(
                         axum::extract::Extension(OllamaPortRx(port_rx.clone())),
@@ -572,9 +535,6 @@ pub(crate) async fn handle_mcp(
                         axum::extract::Extension(Arc::clone(&apple_metrics)),
                         axum::extract::Extension(Arc::clone(&nvidia_metrics)),
                         axum::extract::Extension(node_id.clone()),
-                        // Moved, not cloned: this is their only use, and on a
-                        // build with no store both are the unit type, where a
-                        // clone of a Copy value is a clippy error.
                         store,
                         observations,
                     )
@@ -584,10 +544,6 @@ pub(crate) async fn handle_mcp(
                     })))
                 }
 
-                // Retired in step 6's successor: readiness and inspect replace
-                // them. Answered with a pointer rather than "unknown tool",
-                // because an agent that called one yesterday deserves to be
-                // told where the answer moved rather than that it vanished.
                 "get_model_fit" => Json(JsonRpcResponse::error(
                     id,
                     -32601,
@@ -609,7 +565,6 @@ pub(crate) async fn handle_mcp(
             }
         }
 
-        // ── Resources ────────────────────────────────────────────────────────
         "resources/list" => Json(JsonRpcResponse::success(id, serde_json::json!({
             "resources": mcp_resources_list()
         }))),
@@ -657,17 +612,10 @@ pub(crate) async fn handle_mcp(
             }
         }
 
-        // ── Unknown method ───────────────────────────────────────────────────
         _ => Json(JsonRpcResponse::error(id, -32601, format!("Method not found: {}", req.method))),
     }
 }
 
-// ── MCP stdio transport ──────────────────────────────────────────────────────
-// Thin proxy: reads JSON-RPC lines from stdin, POSTs to the running agent's
-// HTTP MCP endpoint, writes JSON-RPC responses to stdout.  This lets Claude
-// Desktop, Claude Code, and other MCP clients use the native stdio transport
-// without requiring HTTPS.  The agent must already be running (service or
-// foreground).
 pub(crate) async fn run_mcp_stdio() {
     use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -678,7 +626,6 @@ pub(crate) async fn run_mcp_stdio() {
     let url = format!("http://127.0.0.1:{port}/mcp");
     let client = reqwest::Client::new();
 
-    // Verify agent is reachable before entering the read loop.
     match client.get(format!("http://127.0.0.1:{port}/api/pair/status")).send().await {
         Ok(r) if r.status().is_success() => {}
         _ => {
@@ -700,7 +647,6 @@ pub(crate) async fn run_mcp_stdio() {
         let line = line.trim().to_string();
         if line.is_empty() { continue; }
 
-        // Forward to agent HTTP MCP endpoint.
         let resp = match client
             .post(&url)
             .header("Content-Type", "application/json")
@@ -712,7 +658,6 @@ pub(crate) async fn run_mcp_stdio() {
                 match r.text().await {
                     Ok(body) => body,
                     Err(e) => {
-                        // Extract id from request for error response.
                         let id = serde_json::from_str::<serde_json::Value>(&line)
                             .ok()
                             .and_then(|v| v.get("id").cloned())
@@ -738,7 +683,6 @@ pub(crate) async fn run_mcp_stdio() {
             }
         };
 
-        // Write response to stdout (one JSON object per line).
         println!("{resp}");
     }
 }
@@ -771,16 +715,10 @@ mod tool_surface_tests {
                 "wicklee_inspect",
             ],
         );
-        // Retired in step 7. Readiness and inspect replace them, and a call to
-        // either is answered with that pointer rather than "unknown tool".
         assert!(!names.contains(&"get_model_fit"));
         assert!(!names.contains(&"get_observations"));
-        // Neither test run is exposed: an agent that could trigger one could
-        // take a colleague's model out of memory while answering a question.
         assert!(!names.iter().any(|n| n.contains("fingerprint") || n.contains("verify")));
 
-        // Every tool declares a schema, even the ones taking no arguments: an
-        // absent inputSchema makes some clients refuse the tool outright.
         for t in tools.as_array().expect("an array") {
             assert_eq!(t["inputSchema"]["type"], "object", "{}", t["name"]);
             assert!(t["description"].as_str().is_some_and(|d| d.len() > 40), "{}", t["name"]);

@@ -17,8 +17,6 @@ import type { SentinelMetrics } from '../../../types';
 import InsightCard from '../InsightCard';
 import { getNodePowerW } from '../../../utils/power';
 
-// ── Power helpers ─────────────────────────────────────────────────────────────
-
 /** Returns the active board/CPU power watts for a node. */
 function currentWatts(node: SentinelMetrics): number | null {
   return getNodePowerW(node);
@@ -29,15 +27,11 @@ function gpuUtil(node: SentinelMetrics): number | null {
   return node.gpu_utilization_percent ?? node.nvidia_gpu_utilization_percent ?? null;
 }
 
-// ── Props ─────────────────────────────────────────────────────────────────────
-
 interface Props {
   node:           SentinelMetrics;
   baselineWatts:  number | null;
   showNodeHeader?: boolean;
 }
-
-// ── Component ─────────────────────────────────────────────────────────────────
 
 const PowerAnomalyCard: React.FC<Props> = ({ node, baselineWatts, showNodeHeader = false }) => {
   const watts = currentWatts(node);
@@ -63,7 +57,6 @@ const PowerAnomalyCard: React.FC<Props> = ({ node, baselineWatts, showNodeHeader
     >
       <div className="px-5 py-4 space-y-3">
 
-        {/* ── Watts + GPU line ─────────────────────────────────────────────── */}
         <div className="flex items-center gap-2 text-sm flex-wrap">
           <span className="font-telin text-red-400">{watts.toFixed(1)} W</span>
           <span className="text-gray-500">at</span>
@@ -76,7 +69,6 @@ const PowerAnomalyCard: React.FC<Props> = ({ node, baselineWatts, showNodeHeader
           )}
         </div>
 
-        {/* ── Description ──────────────────────────────────────────────────── */}
         <p className="text-sm text-gray-400 leading-relaxed">
           This node is drawing{' '}
           <span className="font-telin text-gray-300">{watts.toFixed(1)} W</span>
@@ -86,12 +78,10 @@ const PowerAnomalyCard: React.FC<Props> = ({ node, baselineWatts, showNodeHeader
           inference work — background process, memory leak, or runaway job.
         </p>
 
-        {/* ── Hostname (fleet mode only) ───────────────────────────────────── */}
         {showNodeHeader && node.hostname && node.hostname !== node.node_id && (
           <p className="text-xs text-gray-500 font-mono">{node.hostname}</p>
         )}
 
-        {/* ── Recommendations ──────────────────────────────────────────────── */}
         <div className="pt-1 border-t border-gray-700">
           <p className="text-[10px] text-gray-500 uppercase tracking-widest font-semibold mb-1.5">
             Recommended

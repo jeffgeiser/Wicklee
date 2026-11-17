@@ -15,8 +15,6 @@
 
 import type { FleetNode, SentinelMetrics } from '../types';
 
-// Mulberry32 — tiny deterministic PRNG; seeded per (node, tick) so frames
-// are reproducible and independent of render timing.
 function rand(seed: number): number {
   let t = (seed + 0x6D2B79F5) | 0;
   t = Math.imul(t ^ (t >>> 15), t | 1);
@@ -37,16 +35,16 @@ interface DemoNodeDef {
   tags:         string;
   gpu:          'apple' | 'nvidia';
   gpu_name:     string;
-  baseTok:      number;   // tok/s center
+  baseTok:      number;
   baseWatts:    number;
   vramTotalMb:  number | null;
   model:        string;
-  altModel:     string;   // swapped in periodically
+  altModel:     string;
   modelSizeGb:  number;
   quant:        string;
   profile:      string;
   memTotalMb:   number;
-  phase:        number;   // noise phase offset
+  phase:        number;
   story?:       'thermal' | 'flaky';
 }
 
@@ -96,7 +94,7 @@ function metricsFor(def: DemoNodeDef, nowMs: number): SentinelMetrics {
   const tSec = Math.floor(nowMs / 1000);
   const seed = tSec * 31 + def.phase * 1000;
   const w = wobble(tSec, def.phase);
-  const n = () => (rand(seed + Math.floor(rand(seed) * 97)) - 0.5) * 2; // [-1,1]
+  const n = () => (rand(seed + Math.floor(rand(seed) * 97)) - 0.5) * 2;
 
   const throttling = def.story === 'thermal' && miniThrottling(tSec);
   const swap = def.hostname === 'rig-4090-b' && altModelActive(tSec);
@@ -153,7 +151,6 @@ function metricsFor(def: DemoNodeDef, nowMs: number): SentinelMetrics {
     agent_version: '0.11.0',
   } as SentinelMetrics;
 
-  // Fields many panels read via the SSOT inference/thermal path.
   const extra = m as unknown as Record<string, unknown>;
   extra.inference_state = tok > 1 ? 'live' : 'idle';
   extra.thermal_penalty = thermal === 'Serious' ? 1.75 : thermal === 'Fair' ? 1.25 : 1.0;
@@ -169,8 +166,6 @@ export function demoFrame(nowMs: number): { nodes: FleetNode[] } {
     const offline = def.story === 'flaky' && edgeOffline(tSec);
     return {
       node_id: def.node_id,
-      // Offline node: stale last_seen, no metrics — the dashboard's own
-      // staleness logic does the rest.
       last_seen_ms: offline ? nowMs - 120_000 : nowMs,
       metrics: offline ? null : metricsFor(def, nowMs),
       restricted: false,

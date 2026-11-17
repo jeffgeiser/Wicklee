@@ -3,13 +3,9 @@
 
 use super::*;
 
-// ── Embedded Frontend ─────────────────────────────────────────────────────────
-
 #[derive(RustEmbed)]
 #[folder = "frontend/dist"]
 pub(crate) struct StaticAssets;
-
-// ── Response Types ────────────────────────────────────────────────────────────
 
 #[derive(Serialize)]
 pub(crate) struct TagsResponse { pub(crate) models: Vec<ModelInfo> }
@@ -66,24 +62,6 @@ pub(crate) async fn handle_put_deployment_profile(
     Json(serde_json::json!({ "profile": next.as_str() })).into_response()
 }
 
-// ── API Handlers ──────────────────────────────────────────────────────────────
-
-// ── /api/history ─────────────────────────────────────────────────────────────
-// Returns historical metric samples from the local DuckDB store.
-//
-// Query parameters:
-//   node_id    — required; the node to query
-//   from       — Unix ms; default = now - 1h
-//   to         — Unix ms; default = now
-//   resolution — "raw" | "1min" | "1hr" | "auto" (default)
-//
-// Resolution "auto" picks the best tier for the window width:
-//   < 2h  → raw (1-Hz samples)
-//   < 7d  → 1-minute aggregates
-//   else  → 1-hour aggregates
-//
-// Not available on musl targets (DuckDB bundled C++ unsupported there).
-
 #[cfg(not(target_env = "musl"))]
 #[derive(serde::Deserialize)]
 pub(crate) struct HistoryQuery {
@@ -109,10 +87,9 @@ pub(crate) async fn handle_history(
     };
 
     let now    = now_ms() as i64;
-    let from   = q.from.unwrap_or(now - 3_600_000);  // default: last hour
+    let from   = q.from.unwrap_or(now - 3_600_000);
     let to     = q.to.unwrap_or(now);
 
-    // Parse resolution; "auto" and unknown strings both fall back to auto.
     let res = q.resolution
         .as_deref()
         .filter(|s| *s != "auto")
@@ -131,10 +108,6 @@ pub(crate) async fn handle_history(
         ).into_response(),
     }
 }
-
-// ── /api/traces ──────────────────────────────────────────────────────────────
-// Returns recent inference traces from the local DuckDB store.
-// Query parameters: node_id (optional), limit (optional, default 100, max 500).
 
 #[cfg(not(target_env = "musl"))]
 #[derive(serde::Deserialize)]
@@ -164,10 +137,6 @@ pub(crate) async fn handle_traces(
         ).into_response(),
     }
 }
-
-// ── Event history endpoint ────────────────────────────────────────────────────
-//
-// GET /api/events/history — paginated, persisted Live Activity events from DuckDB.
 
 #[cfg(not(target_env = "musl"))]
 #[derive(Deserialize)]
@@ -202,18 +171,13 @@ pub(crate) async fn handle_events_history(
     }
 }
 
-// ── Audit Log Export ─────────────────────────────────────────────────────────
-//
-// GET /api/export — download a unified audit log (events + traces + dismissals)
-// as CSV or JSON. Joins all three DuckDB audit tables into flat records.
-
 #[cfg(not(target_env = "musl"))]
 #[derive(Deserialize)]
 pub(crate) struct ExportQuery {
-    pub(crate) format: Option<String>,   // "csv" (default) or "json"
-    pub(crate) from:   Option<i64>,      // start ts_ms (default: 24h ago)
-    pub(crate) to:     Option<i64>,      // end ts_ms (default: now)
-    pub(crate) limit:  Option<i64>,      // max records (default: 10000, max: 50000)
+    pub(crate) format: Option<String>,
+    pub(crate) from:   Option<i64>,
+    pub(crate) to:     Option<i64>,
+    pub(crate) limit:  Option<i64>,
 }
 
 #[cfg(not(target_env = "musl"))]
@@ -258,8 +222,6 @@ pub(crate) async fn handle_export(
     };
 
     let node_id = System::host_name().unwrap_or_else(|| "node".to_string());
-    // Correct civil date (UTC) from system time — no chrono needed.
-    // Howard Hinnant's days-from-epoch → y/m/d algorithm; exact across leap years.
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -267,13 +229,13 @@ pub(crate) async fn handle_export(
     let days = (secs / 86400) as i64;
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;                                   // [0, 146096]
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365; // [0, 399]
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
     let y_civil = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);             // [0, 365]
-    let mp = (5 * doy + 2) / 153;                                  // [0, 11]
-    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;               // [1, 31]
-    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;          // [1, 12]
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
     let y = if m <= 2 { y_civil + 1 } else { y_civil };
     let date = format!("{y}-{m:02}-{day:02}");
     let filename = format!("wicklee-audit-{node_id}-{date}");
@@ -289,7 +251,6 @@ pub(crate) async fn handle_export(
             body,
         ).into_response()
     } else {
-        // CSV
         let mut csv = String::from("timestamp,record_type,node_id,level,event_type,message,model,latency_ms,ttft_ms,tpot_ms\n");
         for r in &records {
             csv.push_str(&format!(
@@ -327,15 +288,6 @@ pub(crate) fn csv_escape(s: &str) -> String {
         s.to_string()
     }
 }
-
-// ── Insight dismiss endpoints ─────────────────────────────────────────────────
-//
-// POST /api/insights/dismiss  — persist a dismiss decision for a pattern.
-// GET  /api/insights/dismissed — return all active (non-expired) dismissals.
-//
-// Both are gated on `#[cfg(not(target_env = "musl"))]` because they require
-// the DuckDB store.  musl builds (e.g., ARM Linux static) use localStorage-
-// only dismissals and never call these endpoints.
 
 #[cfg(not(target_env = "musl"))]
 #[derive(serde::Deserialize)]
@@ -414,8 +366,6 @@ pub(crate) async fn handle_dismissed_list(
         ).into_response(),
     }
 }
-
-// ── Inference Intelligence endpoints (Pro+) ─────────────────────────────────
 
 /// GET /api/sla?window_min=60&model=&target_ttft_ms=500 — Inference SLA Monitor.
 ///
@@ -629,7 +579,7 @@ pub(crate) async fn handle_events_recent(
         Arc<Mutex<std::collections::VecDeque<LiveActivityEvent>>>
     >,
 ) -> axum::Json<Vec<LiveActivityEvent>> {
-    let cutoff = now_ms().saturating_sub(5 * 60 * 1_000); // 5-minute window
+    let cutoff = now_ms().saturating_sub(5 * 60 * 1_000);
     let events: Vec<LiveActivityEvent> = log.lock().unwrap()
         .iter()
         .filter(|e| e.timestamp_ms >= cutoff)
@@ -667,9 +617,6 @@ pub(crate) async fn handle_tags(
             .send().await.ok()?;
         let parsed: crate::ollama_client::TagsResponse = resp.json().await.ok()?;
         if let Ok(mut c) = caps.lock() { c.observe_tags(&parsed); }
-        // Installed file sizes for the residency tracker. /api/tags is read on
-        // demand rather than polled, so this is the only place they arrive, and
-        // it adds no request of its own.
         let installed: Vec<(String, u64)> = parsed.models.iter()
             .filter_map(|m| {
                 let name = m.name.clone().or_else(|| m.model.clone())?;
@@ -781,8 +728,6 @@ pub(crate) async fn handle_v1_state(
         "runtime": {
             "name":      "ollama",
             "port":      port,
-            // Whether this request could read the runtime, not whether a
-            // process was once discovered on that port.
             "reachable": runtime_reachable,
         },
         "models":        models,
@@ -811,12 +756,6 @@ pub(crate) async fn handle_v1_readiness(
     >,
     axum::extract::Extension(node_id_ext): axum::extract::Extension<NodeId>,
 ) -> axum::response::Response {
-    // Same on-demand read as /v1/state, so `wicklee ready` works on a host
-    // where nothing is loaded instead of reporting an empty world.
-    //
-    // The port is copied out on its own statement first: a `watch::Ref` taken
-    // inside the awaited expression lives to the end of the statement, and it
-    // is not Send, which makes the whole handler future not Send.
     let port = *port_rx.borrow();
     learn_installed(port, &caps, &residency).await;
 
@@ -833,9 +772,6 @@ pub(crate) async fn handle_v1_readiness(
     let nvidia_now = nvidia.lock().map(|g| g.clone()).unwrap_or_default();
     let headroom = crate::readiness::headroom(&apple_now, &nvidia_now, &refs);
     let calibration = crate::readiness::calibrate(&refs);
-    // The only activity signal in Phase 1 so far. A rule that needs a missing
-    // capability does not run, and without expires_at there is no way to tell
-    // an idle model from a busy one, so in_use comes back unknown.
     let activity_signal = caps.lock().map(|c| c.ps_expires_at).unwrap_or(false);
 
     let inputs = crate::readiness::Inputs {
@@ -864,8 +800,6 @@ pub(crate) async fn handle_v1_readiness(
     match params.get("model").map(String::as_str) {
         Some(model) => match crate::readiness::assess_one(&inputs, model) {
             Some(r) => Json(envelope(serde_json::json!({ "readiness": r }))).into_response(),
-            // Not an empty answer: this host has never seen the model, which is
-            // a different thing from it not being ready.
             None => (
                 axum::http::StatusCode::NOT_FOUND,
                 Json(serde_json::json!({
@@ -909,9 +843,6 @@ pub(crate) async fn handle_v1_inspect(
     store: MaybeStore,
     observations: MaybeObservations,
 ) -> axum::response::Response {
-    // An unparseable window is an error, not a silently ignored argument: a
-    // caller asking for the last hour and being given everything would read
-    // the answer as being about the last hour.
     let since_ms = match params.get("since") {
         Some(raw) => match crate::findings::parse_lookback_ms(raw) {
             Some(ms) => Some(ms),
@@ -943,8 +874,6 @@ pub(crate) async fn handle_v1_inspect(
     let refs: Vec<&crate::residency::ModelState> = states.iter().collect();
     let now_ms = crate::residency::now_ms();
 
-    // The rules carry their own windows; `since` narrows what they are allowed
-    // to see on top of that, so a shorter window can only reduce findings.
     let transitions: Vec<crate::residency::Transition> = match since_ms {
         Some(ms) => all_transitions
             .into_iter()
@@ -968,8 +897,6 @@ pub(crate) async fn handle_v1_inspect(
         transitions: &transitions,
         ps_context_length,
         ps_expires_at,
-        // Apple Silicon is one memory pool, so cpu_split has no boundary to
-        // find there and says so instead of never firing.
         unified_memory: cfg!(all(target_os = "macos", target_arch = "aarch64")),
         #[cfg(not(target_env = "musl"))]
         receipts: &stored_receipts,
@@ -978,8 +905,6 @@ pub(crate) async fn handle_v1_inspect(
         now_ms,
     });
 
-    // Phase 1 writes no new hardware rules; the ones that exist reach this
-    // report through the adapter, so one `inspect` covers the whole host.
     match adapted_observations(observations) {
         Some(adapted) => inspection.findings.extend(adapted),
         None => inspection.not_checked.push(crate::findings::NotChecked {
@@ -990,11 +915,6 @@ pub(crate) async fn handle_v1_inspect(
         }),
     }
 
-    // Reconcile here too. `inspect` is the command people actually run, so a
-    // finding that stopped firing should resolve on it rather than waiting for
-    // someone to call /v1/findings. The rows that come back are not used: this
-    // route reports what is true now, and the stored set is what
-    // /v1/findings?all=true is for.
     let findings_persisted = match store {
         Some(axum::extract::Extension(s)) => findings_from_store(
             s,
@@ -1023,22 +943,13 @@ pub(crate) async fn handle_v1_inspect(
         "node_id":        node_id_ext.0.as_str(),
         "observed_at_ms": now_ms,
         "since_ms":       since_ms,
-        // The renderer passes this to the readiness section, which says "not
-        // checked: whether any model is in use" without it.
         "activity_signal": ps_expires_at,
         "findings":       inspection.findings,
         "not_checked":    inspection.not_checked,
         "readiness":      readiness,
         "headroom":       headroom,
-        // What the rules actually had to read. A caller that sees two
-        // transitions should know whether that is the whole history or the
-        // tail of it.
         "history": {
             "transitions":     transitions.len(),
-            // Two different things, deliberately separate: whether the
-            // transition log survives a restart, and whether findings do. A
-            // store that stopped accepting writes leaves the first true and
-            // the second false.
             "persisted":       persisted,
             "findings_persisted": findings_persisted,
             "scope":           if persisted { "stored" } else { "this process only" },
@@ -1093,7 +1004,6 @@ fn adapted_observations(cache: MaybeObservations) -> Option<Vec<crate::findings:
     let axum::extract::Extension(cache) = cache?;
     match cache.lock() {
         Ok(obs) => Some(crate::findings::from_observations(&obs)),
-        // A poisoned cache is not an empty one.
         Err(_) => None,
     }
 }
@@ -1117,7 +1027,6 @@ async fn findings_from_store(
     include_resolved: bool,
     now_ms: i64,
 ) -> Option<serde_json::Value> {
-    // store.rs's rule: blocking database calls run off the async thread.
     tokio::task::spawn_blocking(move || {
         if let Err(e) = store.reconcile_findings(&node_id, &open, now_ms) {
             eprintln!("[findings] could not record this evaluation: {e}");
@@ -1198,8 +1107,6 @@ pub(crate) async fn handle_v1_findings(
         transitions: &transitions,
         ps_context_length,
         ps_expires_at,
-        // Apple Silicon is one memory pool, so cpu_split has no boundary to
-        // find there and says so instead of never firing.
         unified_memory: cfg!(all(target_os = "macos", target_arch = "aarch64")),
         #[cfg(not(target_env = "musl"))]
         receipts: &stored_receipts,
@@ -1207,8 +1114,6 @@ pub(crate) async fn handle_v1_findings(
         verify_runs: &stored_verify_runs,
         now_ms,
     });
-    // Same set as /v1/inspect, so the two routes cannot disagree about what is
-    // open — and so reconciliation resolves a hardware finding on either.
     match adapted_observations(observations) {
         Some(adapted) => inspection.findings.extend(adapted),
         None => inspection.not_checked.push(crate::findings::NotChecked {
@@ -1234,9 +1139,6 @@ pub(crate) async fn handle_v1_findings(
         None => None,
     };
 
-    // Whether `all` was actually honoured, which is only true when the rows
-    // came from the store. Asking for resolved findings and being given the
-    // open ones under a flag that said otherwise is the failure this guards.
     let persisted = stored.is_some();
     let includes_resolved = want_resolved && persisted;
     let rows = stored.unwrap_or_else(|| {
@@ -1274,8 +1176,6 @@ pub(crate) async fn handle_v1_findings(
         "findings":          rows,
         "not_checked":       inspection.not_checked,
         "includes_resolved": includes_resolved,
-        // False means findings last only until this process restarts, which is
-        // the musl case and the store-disabled case.
         "persisted":         persisted,
     }))
     .into_response()
@@ -1312,8 +1212,6 @@ pub(crate) async fn handle_health(
         crate::residency::SharedTracker,
     >,
 ) -> Json<serde_json::Value> {
-    // Routes that depend on the DuckDB store. Kept in sync with the
-    // store-gated block in the router builder below.
     const STORE_GATED_ROUTES: &[&str] = &[
         "/api/history", "/api/traces", "/api/events/history", "/api/export",
         "/api/insights/dismiss", "/api/insights/dismissed", "/api/observations",
@@ -1325,10 +1223,6 @@ pub(crate) async fn handle_health(
         "agent_version":  env!("CARGO_PKG_VERSION"),
         "build_target":   std::env::consts::OS.to_string() + "-" + std::env::consts::ARCH,
         "store_healthy":  store_healthy.0,
-        // Every outbound fleet request this process can make, and whether it
-        // is on. Listed one by one rather than as a single boolean: "cloud is
-        // off" is not one switch, and a reader checking whether this agent
-        // can rewrite the shared config wants the pairing line specifically.
         "cloud": {
             "telemetry_push": if cloud_disabled.0 { "disabled" } else { "enabled" },
             "self_update":    if cloud_disabled.0 { "disabled" } else { "enabled" },
@@ -1342,11 +1236,6 @@ pub(crate) async fn handle_health(
         "routes_available": if store_healthy.0 { STORE_GATED_ROUTES } else { &[] },
         "routes_unavailable": if store_healthy.0 { &[] as &[&str] } else { STORE_GATED_ROUTES },
         "residency": residency.lock().ok().map(|t| t.summary()),
-        // Which Ollama response fields this install has actually been observed
-        // to return. Step 0's rule: documented does not mean present, and
-        // nothing here is inferred from the version string. `unverified` lists
-        // what no response has proved yet, which is what gates a rule from
-        // running and what `inspect` reports as "not checked" from step 4.
         "ollama_caps": caps.lock().ok().map(|c| c.report()),
         "store_failure_hint": if store_healthy.0 {
             serde_json::Value::Null
@@ -1398,10 +1287,10 @@ pub(crate) async fn handle_metrics(
             match rx.recv().await {
                 Ok(json) => {
                     if out_tx.send(Ok(Event::default().data(json))).await.is_err() {
-                        break; // client disconnected
+                        break;
                     }
                 }
-                Err(broadcast::error::RecvError::Lagged(_)) => continue, // skip stale frames
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
                 Err(broadcast::error::RecvError::Closed)    => break,
             }
         }
@@ -1411,10 +1300,6 @@ pub(crate) async fn handle_metrics(
         .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
 }
 
-// ── Runtime Config (v0.9.0) ──────────────────────────────────────────────────
-// GET /api/runtime-config?model=<name> — returns the cached RuntimeConfig for
-// the named model. Available across Ollama, vLLM, and llama.cpp. Reads from
-// the in-memory cache populated by the harvesters; never blocks on I/O.
 pub(crate) async fn handle_runtime_config(
     axum::extract::Extension(cache): axum::extract::Extension<runtime_config::RuntimeConfigCache>,
     axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
@@ -1428,8 +1313,6 @@ pub(crate) async fn handle_runtime_config(
         None => (StatusCode::NOT_FOUND, "no cached config for this model").into_response(),
     }
 }
-
-// ── Static Asset Serving ──────────────────────────────────────────────────────
 
 pub(crate) async fn static_handler(uri: Uri) -> impl IntoResponse {
     let raw = uri.path().trim_start_matches('/');
@@ -1461,8 +1344,6 @@ pub(crate) fn serve_asset(path: &str) -> Response<Body> {
         ))
         .unwrap()
 }
-
-// ── /v1/receipts ──────────────────────────────────────────────────────────────
 
 /// What the agent knows about a model that the caller's payload cannot carry.
 ///
@@ -1551,7 +1432,6 @@ async fn sink_write(
     let s = s.clone();
     let node_id = node_id.to_string();
     let to_write = receipt.clone();
-    // store.rs's rule: blocking database calls run off the async thread.
     match tokio::task::spawn_blocking(move || s.write_receipt(&node_id, &to_write)).await {
         Ok(Ok(())) => Ok(true),
         Ok(Err(e)) => {
@@ -1695,8 +1575,6 @@ pub(crate) async fn handle_v1_receipts_post(
         Ok(r) => r,
         Err(e) => {
             let mut payload = serde_json::json!({ "error": e.message() });
-            // Name the offending field separately as well as in the sentence,
-            // so a caller can branch on it without parsing prose.
             if let crate::receipts::CallbackError::ContentPresent(f)
             | crate::receipts::CallbackError::NotANumber(f) = e
             {
@@ -1715,10 +1593,6 @@ pub(crate) async fn handle_v1_receipts_post(
         return f.response();
     }
 
-    // A posted receipt is activity: someone ran a request against this model,
-    // which is exactly what `in_use` is asking. Without this, a model serving
-    // real traffic through a caller that posts receipts reads as idle, and
-    // readiness would happily offer it up for displacement.
     let counted_as_activity = residency
         .lock()
         .map(|mut t| t.note_activity(&receipt.model, now_ms))
@@ -1730,12 +1604,7 @@ pub(crate) async fn handle_v1_receipts_post(
             "receipt": receipt,
             "decode_tps": receipt.decode_tps(),
             "prompt_tps": receipt.prompt_tps(),
-            // Whether it marked the model in use. False means the tracker has
-            // not polled this model as loaded yet, which is worth knowing: the
-            // receipt is stored either way.
             "counted_as_activity": counted_as_activity,
-            // False on a build with no store: the receipt is kept in memory
-            // and will not be there after a restart.
             "persisted": RECEIPTS_SURVIVE_RESTART,
         })),
     )
@@ -1754,7 +1623,6 @@ async fn receipts_for_rules(store: &MaybeStore, node_id: &str) -> Vec<crate::rec
     };
     let s = s.clone();
     let node_id = node_id.to_string();
-    // store.rs's rule: blocking database calls run off the async thread.
     tokio::task::spawn_blocking(move || s.query_receipts(&node_id, None, 500))
         .await
         .ok()
@@ -1805,9 +1673,6 @@ pub(crate) async fn handle_v1_receipts_get(
         Err(f) => return f.response(),
     };
 
-    // The rates alongside each receipt, computed once here rather than by
-    // every consumer: a caller that divides eval_count by the wrong duration
-    // gets a plausible wrong answer.
     let enriched: Vec<serde_json::Value> = receipts
         .iter()
         .map(|r| {
@@ -1823,16 +1688,11 @@ pub(crate) async fn handle_v1_receipts_get(
     axum::Json(serde_json::json!({
         "receipts": enriched,
         "count": enriched.len(),
-        // A range rather than a mean, for the reason Stats documents: three
-        // inference runs are not normally distributed.
         "decode_tps": crate::receipts::Stats::of(&decode),
-        // So a caller knows whether what it is reading will be here tomorrow.
         "persisted": RECEIPTS_SURVIVE_RESTART,
     }))
     .into_response()
 }
-
-// ── /v1/fingerprint ───────────────────────────────────────────────────────────
 
 /// POST /v1/fingerprint — a consented test run.
 ///
@@ -1903,8 +1763,6 @@ pub(crate) async fn handle_v1_fingerprint(
     let plan = match crate::fingerprint::plan(&spec, &refs, now_ms, force) {
         Ok(p) => p,
         Err(refusal) => {
-            // 409 rather than 400: the request is well formed and the host is
-            // the reason it cannot run, which is a state a caller can wait out.
             return (
                 StatusCode::CONFLICT,
                 axum::Json(serde_json::json!({
@@ -1928,8 +1786,6 @@ pub(crate) async fn handle_v1_fingerprint(
             .into_response();
     }
 
-    // No port means no runtime was found, which is a different answer from a
-    // run that failed.
     let Some(port) = *port_rx.borrow() else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -1948,9 +1804,6 @@ pub(crate) async fn handle_v1_fingerprint(
         .and_then(|j| serde_json::from_str::<serde_json::Value>(&j).ok())
         .and_then(|v| v.get("thermal_state").and_then(|t| t.as_str()).map(str::to_string));
 
-    // Tag every transition this run causes. Set before the first request and
-    // cleared on every exit path, including a panic — a flag left true would
-    // make the tracker attribute real user requests to a run that had ended.
     if let Ok(mut m) = ollama_metrics.lock() {
         m.fingerprint_active = true;
     }
@@ -1958,8 +1811,6 @@ pub(crate) async fn handle_v1_fingerprint(
     let cleared = scopeguard::guard((), move |()| {
         if let Ok(mut m) = metrics_guard.lock() {
             m.fingerprint_active = false;
-            // And claim the reset that lands after the last request, the way
-            // the probe claims its own.
             m.fingerprint_caused_next_reset = true;
         }
     });
@@ -1989,9 +1840,6 @@ pub(crate) async fn handle_v1_fingerprint(
     axum::Json(serde_json::json!({
         "outcome": outcome,
         "receipts": receipts,
-        // Said plainly rather than implied by a count: a run whose receipts
-        // were not kept still measured something, and the operator should know
-        // the baseline will not be there next time.
         "receipts_stored": stored,
         "receipts_persisted":
             RECEIPTS_SURVIVE_RESTART && stored == receipts.len() && !receipts.is_empty(),
@@ -2048,9 +1896,6 @@ pub(crate) async fn handle_v1_verify(
             .into_response();
     };
 
-    // The models come from the stored finding rather than the request: verify
-    // re-runs a finding's own test, and letting a caller name the models would
-    // make two runs of "the same" test measure different things.
     let lookup = {
         let s = store.clone();
         let node_id = node_id_ext.0.to_string();
@@ -2124,8 +1969,6 @@ pub(crate) async fn handle_v1_verify(
                 "finding": { "id": row.id, "rule": row.rule, "title": row.title, "models": row.models },
                 "plan": plan,
                 "consent_text": plan.consent_text(),
-                // Said before the run, because it changes what the result
-                // means: the first run is a baseline and nothing else.
                 "is_baseline": previous.is_empty(),
                 "previous_runs": previous.len(),
             })),
@@ -2165,8 +2008,6 @@ pub(crate) async fn handle_v1_verify(
         crate::fingerprint::run(&plan, port, &states, thermal, now_ms).await;
     drop(cleared);
 
-    // The configuration snapshot is the one taken before the first request,
-    // which is what the diff between two runs is about.
     let run = crate::fingerprint::verify_run_from(&finding_id, &outcome, &receipts, states);
 
     {
@@ -2187,10 +2028,6 @@ pub(crate) async fn handle_v1_verify(
         .await;
     }
 
-    // Compare against the first run, not the previous one: the baseline is
-    // the configuration the operator started from, and a chain of
-    // run-against-last would let three small regressions pass as three
-    // unmeasurable ones.
     let comparison = previous.first().map(|baseline| crate::fingerprint::compare(baseline, &run));
 
     axum::Json(serde_json::json!({

@@ -26,8 +26,6 @@ import { Lock } from 'lucide-react';
 import { SubscriptionTier } from '../../types';
 import { TIER_STYLE } from './tierStyle';
 
-// ── Props ─────────────────────────────────────────────────────────────────────
-
 interface InsightsTeaseCardProps {
   title: string;
   icon: React.ReactNode;
@@ -39,8 +37,6 @@ interface InsightsTeaseCardProps {
   liveContent: React.ReactNode;
   onUpgradeClick?: () => void;
 }
-
-// ── Component ─────────────────────────────────────────────────────────────────
 
 const InsightsTeaseCard: React.FC<InsightsTeaseCardProps> = ({
   title,
@@ -56,7 +52,6 @@ const InsightsTeaseCard: React.FC<InsightsTeaseCardProps> = ({
   return (
     <div className="bg-gray-800 border border-gray-700 rounded-2xl p-4 flex flex-col gap-3 relative overflow-hidden">
 
-      {/* Header */}
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
           <span className="text-gray-500 shrink-0">{icon}</span>
@@ -69,10 +64,8 @@ const InsightsTeaseCard: React.FC<InsightsTeaseCardProps> = ({
         </span>
       </div>
 
-      {/* Live content — fully visible, no blur */}
       <div>{liveContent}</div>
 
-      {/* Blurred trend placeholder — represents historical chart area */}
       <div className="relative mt-1">
         <div
           className="h-16 bg-gray-700/40 rounded-lg blur-sm select-none pointer-events-none"
@@ -83,7 +76,6 @@ const InsightsTeaseCard: React.FC<InsightsTeaseCardProps> = ({
         </div>
       </div>
 
-      {/* Upgrade CTA */}
       <button
         onClick={onUpgradeClick}
         className="text-xs text-indigo-500 hover:text-indigo-400 transition-colors text-left"

@@ -21,11 +21,8 @@ describe('sharedSmoothing', () => {
 
   it('ignores duplicate pushes of the same frame (same timestamp)', () => {
     pushAndGetSmoothed('n1', 'tps', 10, 1000);
-    // Second surface pushes the same frame in the same render pass —
-    // must not enter the window again.
     expect(pushAndGetSmoothed('n1', 'tps', 10, 1000)).toBe(10);
     expect(pushAndGetSmoothed('n1', 'tps', 10, 1000)).toBe(10);
-    // A genuinely new frame still moves the mean.
     expect(pushAndGetSmoothed('n1', 'tps', 30, 2000)).toBe(20);
   });
 
@@ -33,7 +30,6 @@ describe('sharedSmoothing', () => {
     for (const [v, ts] of [[1, 1], [2, 2], [3, 3], [4, 4], [5, 5]] as const) {
       pushAndGetSmoothed('n1', 'watts', v, ts * 1000);
     }
-    // Window holds [2, 3, 4, 5] → mean 3.5.
     expect(getSmoothed('n1', 'watts')).toBe(3.5);
   });
 

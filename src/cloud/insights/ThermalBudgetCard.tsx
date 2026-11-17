@@ -88,7 +88,6 @@ const ThermalBudgetCard: React.FC<ThermalBudgetCardProps> = ({
 
   useEffect(() => { fetchBudget(); }, [fetchBudget]);
 
-  // Pro upgrade gate
   if (!isProOrAbove) {
     return (
       <div className="bg-gray-800 border border-gray-700 rounded-2xl p-4">
@@ -114,7 +113,6 @@ const ThermalBudgetCard: React.FC<ThermalBudgetCardProps> = ({
 
   return (
     <div className="bg-gray-800 border border-gray-700 rounded-2xl p-4 space-y-3">
-      {/* Header */}
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <div className="flex items-center gap-2">
           <Thermometer className="w-3.5 h-3.5 text-gray-500" />
@@ -139,7 +137,6 @@ const ThermalBudgetCard: React.FC<ThermalBudgetCardProps> = ({
         </button>
       </div>
 
-      {/* Empty / loading / error states */}
       {!selectedNodeId && (
         <p className="text-xs text-gray-600 py-2">Select a node above to compute its thermal budget.</p>
       )}
@@ -157,7 +154,6 @@ const ThermalBudgetCard: React.FC<ThermalBudgetCardProps> = ({
 
       {data && data.confidence !== 'insufficient' && (
         <>
-          {/* Stat strip */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
             <div className="bg-gray-900 border border-gray-700 rounded-lg p-2.5">
               <div className="text-[9px] uppercase tracking-widest text-gray-600">Sustainable</div>
@@ -191,12 +187,10 @@ const ThermalBudgetCard: React.FC<ThermalBudgetCardProps> = ({
             </div>
           </div>
 
-          {/* Plain-English advice */}
           <p className="text-xs text-gray-300 leading-relaxed">
             {data.advice}
           </p>
 
-          {/* Footer with sample density */}
           <p className="text-[9px] text-gray-700 font-mono">
             {data.samples_analyzed} samples · 7-day window · 5-min rollups
           </p>

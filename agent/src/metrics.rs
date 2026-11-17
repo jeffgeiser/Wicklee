@@ -28,8 +28,6 @@ pub(crate) struct ModelLiveMetrics {
     pub(crate) wes: Option<f32>,
 }
 
-// Ollama runtime metrics — populated when Ollama is detected on 127.0.0.1:11434.
-// All fields are Option/bool-default so the payload serialises cleanly when absent.
 #[derive(Serialize, Clone, Default)]
 pub(crate) struct OllamaMetrics {
     pub(crate) ollama_running:           bool,
@@ -148,15 +146,12 @@ impl OllamaMetrics {
     /// `ollama_is_probing` in MetricsPayload so the UI can show "probing" badge.
     pub(crate) fn is_probing_display(&self) -> bool {
         match (self.last_probe_start, self.last_probe_end) {
-            (None, _)          => false,                         // never started
-            (Some(_), Some(e)) => e.elapsed().as_secs() < 5,    // finished — 5 s cool-down
-            (Some(s), None)    => s.elapsed().as_secs() < 60,   // still running (generous timeout)
+            (None, _)          => false,
+            (Some(_), Some(e)) => e.elapsed().as_secs() < 5,
+            (Some(s), None)    => s.elapsed().as_secs() < 60,
         }
     }
 }
-
-// vLLM runtime metrics — populated when vLLM is detected on localhost:8000.
-// All fields are Option/bool-default so the payload serialises cleanly when absent.
 
 #[derive(Serialize, Clone, Default)]
 pub(crate) struct VllmMetrics {
@@ -170,10 +165,8 @@ pub(crate) struct VllmMetrics {
     pub(crate) vllm_tokens_per_sec:   Option<f32>,
     pub(crate) vllm_cache_usage_perc: Option<f32>,
     pub(crate) vllm_requests_running: Option<u32>,
-    // Phase 1: queue/saturation gauges
     pub(crate) vllm_requests_waiting:     Option<u32>,
     pub(crate) vllm_requests_swapped:     Option<u32>,
-    // Phase 3: windowed histogram averages (computed from _sum/_count deltas)
     pub(crate) vllm_avg_ttft_ms:              Option<f32>,
     pub(crate) vllm_avg_e2e_latency_ms:       Option<f32>,
     pub(crate) vllm_avg_queue_time_ms:        Option<f32>,
@@ -185,7 +178,6 @@ pub(crate) struct VllmMetrics {
     /// See OllamaMetrics::baseline_fresh_until.
     #[serde(skip)]
     pub(crate) baseline_fresh_until: Option<std::time::Instant>,
-    // Histogram delta tracking (not serialized — internal state for windowed averages)
     #[serde(skip)]
     pub(crate) prev_ttft_sum:        Option<f64>,
     #[serde(skip)]
@@ -212,8 +204,6 @@ impl VllmMetrics {
     }
 }
 
-// llama.cpp / llama-box runtime metrics — populated when llama-server is detected.
-// All fields are Option/bool-default so the payload serialises cleanly when absent.
 #[derive(Serialize, Clone, Default)]
 pub(crate) struct LlamacppMetrics {
     pub(crate) llamacpp_running:          bool,
@@ -240,8 +230,6 @@ impl LlamacppMetrics {
     }
 }
 
-// NVIDIA GPU metrics — populated only on Linux/Windows nodes with NVIDIA drivers.
-// All fields are Option so the payload serialises cleanly as null on other platforms.
 #[derive(Serialize, Clone, Default)]
 pub(crate) struct NvidiaMetrics {
     pub(crate) nvidia_gpu_utilization_percent: Option<f32>,
@@ -255,7 +243,7 @@ pub(crate) struct NvidiaMetrics {
     /// Always Some(_) when NVML is active — 1.0 = no throttle, >1.0 = throttled.
     /// None on non-NVIDIA platforms. The WES sampler prefers this over string-inferred
     /// thermal_state because it is hardware-authoritative, not temperature-proxied.
-    #[serde(skip)]   // internal use only; not forwarded in MetricsPayload
+    #[serde(skip)]
     pub(crate) nvidia_throttle_penalty:        Option<f32>,
     /// GPU clock throttle percentage: 0.0 = running at full rated speed, 100.0 = fully throttled.
     /// Derived from nvmlDeviceGetClockInfo(GRAPHICS) / nvmlDeviceGetMaxClockInfo(GRAPHICS).
@@ -319,7 +307,6 @@ pub(crate) struct MetricsPayload {
     pub(crate) available_memory_mb:     u64,
     pub(crate) cpu_core_count:          usize,
     pub(crate) timestamp_ms:            u64,
-    // Apple Silicon deep-metal
     pub(crate) cpu_power_w:             Option<f32>,
     pub(crate) ecpu_power_w:            Option<f32>,
     pub(crate) pcpu_power_w:            Option<f32>,
@@ -340,13 +327,11 @@ pub(crate) struct MetricsPayload {
     /// (typically ~75% of physical RAM). None on non-Apple-Silicon nodes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) gpu_wired_limit_mb:      Option<u64>,
-    // NVIDIA GPU fields (null on non-NVIDIA platforms)
     pub(crate) nvidia_gpu_utilization_percent: Option<f32>,
     pub(crate) nvidia_vram_used_mb:            Option<u64>,
     pub(crate) nvidia_vram_total_mb:           Option<u64>,
     pub(crate) nvidia_gpu_temp_c:              Option<u32>,
     pub(crate) nvidia_power_draw_w:            Option<f32>,
-    // Ollama runtime (null/false when Ollama not running)
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub(crate) ollama_running:           bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -403,7 +388,6 @@ pub(crate) struct MetricsPayload {
     /// the probe fires a real Ollama request which would otherwise look like a user session.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) ollama_is_probing: Option<bool>,
-    // Ollama model architecture (from /api/show model_info — refreshed on model change)
     /// Context window size in tokens (llama.context_length or general.context_length).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) ollama_context_length: Option<u64>,
@@ -424,7 +408,6 @@ pub(crate) struct MetricsPayload {
     /// head_dim = embedding_dim / num_heads (computed on the frontend).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) ollama_embedding_dim: Option<u64>,
-    // vLLM runtime (null/false when vLLM not running)
     #[serde(default)]
     pub(crate) vllm_running:          bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -465,7 +448,6 @@ pub(crate) struct MetricsPayload {
     pub(crate) vllm_prompt_tokens_total: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) vllm_generation_tokens_total: Option<u64>,
-    // llama.cpp / llama-box runtime (null/false when not running)
     #[serde(default)]
     pub(crate) llamacpp_running:          bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -483,10 +465,6 @@ pub(crate) struct MetricsPayload {
     /// (e.g. self-update) emit a notable event. Frontend renders as Live Activity entries.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub(crate) live_activities: Vec<LiveActivityEvent>,
-
-    // ── WES v2 thermal-penalty window ─────────────────────────────────────────
-    // All optional — None until the first 2 s sampler tick completes (≈2 s after start).
-    // The cloud backend stores these in the reserved DuckDB columns (Phase 4B).
 
     /// Average thermal penalty over the last 30 samples (up to 60 s rolling window).
     /// 1.0 = no penalty (healthy), >1.0 = throttled. Three decimal places.
@@ -545,8 +523,6 @@ pub(crate) struct MetricsPayload {
     /// surfaces always display the same label — no frontend re-computation needed.
     pub(crate) inference_state: String,
 }
-
-// ── 1 Hz Metrics Broadcaster (WebSocket feed) ─────────────────────────────────
 
 /// Spawns a 1 s broadcast loop that serialises MetricsPayload and broadcasts
 /// the JSON string to every active WebSocket subscriber.
@@ -621,13 +597,7 @@ pub(crate) fn start_metrics_broadcaster(
     let (tx, _) = broadcast::channel::<String>(64);
     let tx_clone = tx.clone();
 
-    // Supervised: the metrics broadcast loop is the agent's most critical
-    // background task — if it dies, ALL telemetry stops. It's a pure infinite
-    // loop (no intentional exit), so the supervisor only restarts it on panic.
-    // State is cloned per-run in the factory prelude; the loop body is
-    // unchanged, so a restart re-runs warm-up and continues identically.
     supervisor::supervise("metrics-broadcast", move || {
-        // Clone per-run state so the factory is callable on each restart.
         let tx_clone = tx_clone.clone();
         let config_node_id = config_node_id.clone();
         let cpu_usage_atomic = cpu_usage_atomic.clone();
@@ -646,17 +616,13 @@ pub(crate) fn start_metrics_broadcaster(
         let runtime_config_cache = runtime_config_cache.clone();
         let runtime_port_overrides = runtime_port_overrides.clone();
         async move {
-        // Only CPU + memory are read below; `new()` skips the process/disk/
-        // network enumeration that `new_all()` would perform.
         let mut sys = System::new();
         let node_id = config_node_id;
         let hostname = System::host_name()
             .unwrap_or_else(|| node_id.clone());
 
-        // Cache chip_name once — CPU model never changes at runtime.
         let linux_chip_name = read_linux_chip_name();
 
-        // Warm-up: two reads separated by 200 ms gives sysinfo an accurate CPU delta.
         sys.refresh_cpu();
         sys.refresh_memory();
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -664,12 +630,8 @@ pub(crate) fn start_metrics_broadcaster(
         let mut interval = tokio::time::interval(Duration::from_millis(1_000));
         loop {
             interval.tick().await;
-            // This loop only reads CPU usage and memory from `sys`; refresh just
-            // those rather than `refresh_all()`, which would also re-enumerate
-            // every process/disk/network each second for no benefit.
             sys.refresh_cpu();
             sys.refresh_memory();
-            // Update shared CPU usage for WES sampler idle-thermal override.
             cpu_usage_atomic.store(
                 sys.global_cpu_info().cpu_usage().to_bits(),
                 std::sync::atomic::Ordering::Relaxed,
@@ -694,17 +656,13 @@ pub(crate) fn start_metrics_broadcaster(
             let wes           = wes_metrics.lock().map(|g| g.clone()).unwrap_or_default();
             let swap_mb_s     = swap_metrics.read();
 
-            // Read per-model baseline from shared cache (updated by store task on model change).
             let model_baseline_cache = model_baseline.lock().map(|g| *g).unwrap_or(None);
 
-            // Drain any pending live-activity events (normally empty, non-zero during update).
             let pending_events: Vec<LiveActivityEvent> = live_events
                 .lock()
                 .map(|mut v| std::mem::take(&mut *v))
                 .unwrap_or_default();
 
-            // Compute before struct literal so we can borrow `ollama` without
-            // conflicting with the field moves (Option<String> fields are not Copy).
             let ollama_is_probing_flag = if ollama.is_probing_display() { Some(true) } else { None };
             let hw = read_hardware_signals(&apple, &nvidia, &ollama, &vllm, &llamacpp, &probe_active);
             let inference_state_val = compute_inference_state(&hw).to_string();
@@ -720,7 +678,6 @@ pub(crate) fn start_metrics_broadcaster(
                 available_memory_mb:     available / 1024 / 1024,
                 cpu_core_count:          sys.cpus().len(),
                 timestamp_ms,
-                // macOS: powermetrics; Linux: RAPL powercap; Windows: null
                 cpu_power_w:             apple.cpu_power_w.or(rapl_power),
                 ecpu_power_w:            apple.ecpu_power_w,
                 pcpu_power_w:            apple.pcpu_power_w,
@@ -729,8 +686,6 @@ pub(crate) fn start_metrics_broadcaster(
                 gpu_utilization_percent: apple.gpu_utilization_percent,
                 memory_pressure_percent: apple.memory_pressure_percent,
                 gpu_wired_limit_mb:      apple.gpu_wired_limit_mb,
-                // macOS: pmset/sysctl; Linux: clock_ratio/coretemp/sysfs; Windows: WMI
-                // Idle CPU override applied for clock_ratio source (see resolve_thermal_state).
                 thermal_state:           resolve_thermal_state(&apple.thermal_state, &linux_thermal, sys.global_cpu_info().cpu_usage()),
                 nvidia_gpu_utilization_percent: nvidia.nvidia_gpu_utilization_percent,
                 nvidia_vram_used_mb:            nvidia.nvidia_vram_used_mb,
@@ -746,7 +701,6 @@ pub(crate) fn start_metrics_broadcaster(
                 ollama_proxy_avg_latency_ms: ollama.ollama_proxy_avg_latency_ms,
                 ollama_proxy_request_count:  ollama.ollama_proxy_request_count,
                 active_models: {
-                    // Enrich per-model metrics with WES using power + thermal data.
                     let total_power = apple.soc_power_w
                         .or(nvidia.nvidia_power_draw_w)
                         .or(rapl_power);
@@ -766,9 +720,6 @@ pub(crate) fn start_metrics_broadcaster(
                         }).collect()
                     })
                 },
-                // v0.9.0: Runtime Config Surface. Some(true) once any model
-                // has a cached config; None otherwise (saves payload bytes
-                // when the feature can't be used yet).
                 runtime_config_available: {
                     let c = runtime_config_cache.lock().unwrap();
                     if c.is_empty() { None } else { Some(true) }
@@ -815,7 +766,6 @@ pub(crate) fn start_metrics_broadcaster(
                 },
                 arch: std::env::consts::ARCH.to_string(),
                 live_activities: pending_events,
-                // WES v2 thermal-penalty window (None until first 2 s sampler tick)
                 penalty_avg:    wes.penalty_avg,
                 penalty_peak:   wes.penalty_peak,
                 thermal_source: wes.thermal_source,
@@ -837,17 +787,14 @@ pub(crate) fn start_metrics_broadcaster(
             };
 
             if let Ok(json) = serde_json::to_string(&payload) {
-                // send() only errors when there are zero subscribers — that's fine.
                 let _ = tx_clone.send(json);
             }
         }
-        } // async move
-    }); // supervise
+        }
+    });
 
     tx
 }
-
-// ── WebSocket Handler ─────────────────────────────────────────────────────────
 
 pub(crate) async fn handle_ws(
     ws: WebSocketUpgrade,
@@ -862,10 +809,10 @@ pub(crate) async fn ws_session(mut socket: WebSocket, tx: broadcast::Sender<Stri
         match rx.recv().await {
             Ok(json) => {
                 if socket.send(Message::Text(json)).await.is_err() {
-                    break; // client disconnected
+                    break;
                 }
             }
-            Err(broadcast::error::RecvError::Lagged(_)) => continue, // skip stale frames
+            Err(broadcast::error::RecvError::Lagged(_)) => continue,
             Err(broadcast::error::RecvError::Closed)    => break,
         }
     }

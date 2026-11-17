@@ -28,12 +28,6 @@
 //!   rules ignore that cause. Otherwise one consented measurement would
 //!   manufacture the churn finding it was taken to check for.
 
-// Every item here exists for one of the two configurations. A build with no
-// local store has no verify route and no stored-receipt rules, so the verify
-// comparison, the `Verified` evidence path and the row conversions the store
-// needs have no caller there — present and compiled, but unreached. Allowed
-// for that target only: the default build still fails on genuinely dead code
-// in this file, and every other module keeps its dead-code check on musl too.
 #![cfg_attr(target_env = "musl", allow(dead_code))]
 
 use serde::Serialize;
@@ -157,8 +151,6 @@ pub(crate) fn test_for(models: &[String]) -> TestSpec {
     TestSpec {
         kind: TestKind::DecodeRate,
         models: models.to_vec(),
-        // Never pinned: a verify run measures the model as the host has it,
-        // and pinning a context would either reload the model or refuse.
         num_ctx: None,
         runs: DEFAULT_RUNS,
     }
@@ -309,24 +301,18 @@ pub(crate) fn plan(
         let state = find(model);
         let resident = state.is_some_and(|s| s.size_vram_bytes.is_some() || s.context_length.is_some());
 
-        // A warm test has nothing to measure on a model that is not there.
-        // A cold test is allowed to start from either state: it unloads first
-        // if it has to, and loads from nothing if the model is already gone.
         if !resident && spec.kind == TestKind::DecodeRate {
             return Err(PlanRefusal::NotResident(model.clone()));
         }
 
         let running = state.and_then(|s| s.context_length);
         let num_ctx = match (spec.num_ctx, running) {
-            // The caller pinned it and the model agrees, or the model is not
-            // loaded so there is nothing to disagree with.
             (Some(asked), Some(run)) if asked == run => asked,
             (Some(asked), Some(run)) => {
                 return Err(PlanRefusal::ContextMismatch { model: model.clone(), asked, running: run });
             }
             (Some(asked), None) => asked,
             (None, Some(run)) => run,
-            // Not pinned and not reported. The one case with no safe answer.
             (None, None) => return Err(PlanRefusal::ContextUnknown(model.clone())),
         };
 
@@ -342,7 +328,6 @@ pub(crate) fn plan(
                     idle_for_s: idle_ms / 1_000,
                 });
             }
-            // Deduplicated: a replay may name one model more than once.
             if !disturbs.contains(model) {
                 disturbs.push(model.clone());
             }
@@ -355,7 +340,6 @@ pub(crate) fn plan(
         let runs = spec.runs.max(1);
         estimate += match spec.kind {
             TestKind::ColdLoad => f64::from(runs) * ASSUMED_LOAD_S,
-            // A generate is the tokens plus a second of request overhead.
             _ => f64::from(runs) * (OUTPUT_TOKENS as f64 / ASSUMED_TPS + 1.0),
         };
 
@@ -386,9 +370,6 @@ impl Plan {
     /// person saying yes knows which models move and what cannot be put back.
     pub(crate) fn consent_text(&self) -> String {
         let mut out = String::new();
-        // "steps", not "models": a replay may name the same model twice, and
-        // calling that two models is wrong in the one place the operator is
-        // reading carefully.
         out.push_str(&format!(
             "{} test · {} step{} · about {}s\n",
             self.kind.as_str(),
@@ -406,8 +387,6 @@ impl Plan {
                 s.num_ctx,
             ));
         }
-        // What the run will actually send, which is not the same for a cold
-        // test — consent text that describes the wrong request is not consent.
         if self.kind == TestKind::ColdLoad {
             out.push_str(
                 "  prompt: one token, enough for the runtime to report its own load time\n",
@@ -425,8 +404,6 @@ impl Plan {
             ));
         }
         if !self.will_restore.is_empty() {
-            // Said before the run, not after, because it is the part the
-            // operator cannot undo by declining later.
             out.push_str(&format!(
                 "  afterwards: {} reloaded. Its original keep-alive expiry cannot be restored — \
                  the runtime has no way to set one, so it will expire from the end of this run \
@@ -485,9 +462,6 @@ pub(crate) fn test_id(plan: &Plan, started_ms: i64) -> String {
         eat(s.model.as_bytes());
         eat(&s.num_ctx.to_le_bytes());
     }
-    // Two runs of the same plan are two measurements, so unlike a receipt this
-    // one does include the clock: step 6 compares a baseline against a later
-    // run of the identical plan.
     eat(&started_ms.to_le_bytes());
     format!("T-{:08x}", h & 0xffff_ffff)
 }
@@ -503,8 +477,6 @@ pub(crate) fn receipt_from_run(
 ) -> Receipt {
     let load_ns = resp.load_duration;
     Receipt {
-        // The test id plus the model and this run's own total duration: two
-        // runs in one test are two receipts, and a re-run is a new test.
         id: receipt_id(
             ReceiptSource::Fingerprint,
             &format!("{test_id}:{model}:{}", resp.total_duration.unwrap_or(wall_ms * 1_000_000)),
@@ -513,12 +485,9 @@ pub(crate) fn receipt_from_run(
         source: ReceiptSource::Fingerprint,
         model: model.to_string(),
         digest: ambient.digest.clone(),
-        // What the run actually asked for, not what the tracker last polled.
         context_length: Some(num_ctx),
         size_bytes: ambient.size_bytes,
         size_vram_bytes: ambient.size_vram_bytes,
-        // V9: a cold start can only ever be ColdUnknown. The page-cache state
-        // that would make it reproducible is not readable without unsafe FFI.
         start_state: if load_ns.is_some_and(|ns| ns > 100_000_000) {
             StartState::ColdUnknown
         } else {
@@ -531,9 +500,6 @@ pub(crate) fn receipt_from_run(
         eval_count: resp.eval_count,
         eval_ns: resp.eval_duration,
         total_ns: resp.total_duration,
-        // The one source that has a wall time worth recording: Wicklee sent
-        // this request itself, on the same host, so the figure is the
-        // request's and not a network hop's.
         wall_ms: Some(wall_ms),
         co_resident: ambient.co_resident.clone(),
         thermal_state: ambient.thermal_state.clone(),
@@ -577,9 +543,6 @@ async fn one_request(
 ) -> Result<(GenerateResponse, u64), String> {
     let url = format!("http://127.0.0.1:{port}/api/generate");
     let started = std::time::Instant::now();
-    // No total timeout: a cold load of a large model on a busy host legitimately
-    // takes minutes, and a test that gave up on it would report a failure that
-    // was its own.
     let resp = client
         .post(&url)
         .json(body)
@@ -656,7 +619,6 @@ async fn wait_until_absent(client: &reqwest::Client, port: u16, model: &str) -> 
         let gone = match client.get(&url).timeout(std::time::Duration::from_secs(3)).send().await {
             Ok(r) if r.status().is_success() => match r.json::<PsResponse>().await {
                 Ok(ps) => ps.find(model).is_none(),
-                // An unreadable /api/ps is not evidence the model is gone.
                 Err(_) => false,
             },
             _ => false,
@@ -696,8 +658,6 @@ pub(crate) async fn run(
     let mut results: Vec<ModelResult> = Vec::new();
     let mut loads_observed = 0_u32;
     let wall_started = std::time::Instant::now();
-    // Whether this kind of run generates enough tokens for a rate to mean
-    // anything. Only the cold test does not.
     let rates_are_measurements = plan.kind != TestKind::ColdLoad;
 
     for step in &plan.steps {
@@ -709,8 +669,6 @@ pub(crate) async fn run(
         let mut failures = Vec::new();
 
         for run_index in 0..step.runs {
-            // Every cold run unloads first, not just the first one: run two
-            // starts from whatever run one's load left resident.
             if plan.kind == TestKind::ColdLoad {
                 if let Err(e) = one_request(client, port, &load_body(&step.model, step.num_ctx, true)).await {
                     failures.push(format!("run {}: unload failed: {e}", run_index + 1));
@@ -728,8 +686,6 @@ pub(crate) async fn run(
             }
 
             let body = match plan.kind {
-                // One token, not none. See COLD_PROMPT for why the spec's
-                // no-prompt load does not work on this runtime.
                 TestKind::ColdLoad => {
                     request_body(&step.model, step.num_ctx, 1, COLD_PROMPT)
                 }
@@ -741,13 +697,6 @@ pub(crate) async fn run(
                     if resp.load_duration.is_some_and(|ns| ns > 100_000_000) {
                         loads_observed += 1;
                     }
-                    // A cold run generates one token, to make the runtime
-                    // report its load time. One token divided by its own
-                    // duration is not a rate: the first live run of this
-                    // printed "1000000.0 tok/s", which is a microsecond of
-                    // eval time presented as a measurement. The receipt keeps
-                    // the raw counts either way; what is suppressed is the
-                    // derived rate, which is the part that reads as a claim.
                     if rates_are_measurements {
                         if let Some(t) = resp.eval_tps() {
                             decode.push(f64::from(t));
@@ -787,9 +736,6 @@ pub(crate) async fn run(
         });
     }
 
-    // Put back what was taken. Best effort by necessity: if the reload fails
-    // the model is simply absent, which the operator can see, and failing the
-    // whole run over it would discard measurements that are already good.
     let mut restored = Vec::new();
     for model in &plan.will_restore {
         let ctx = plan
@@ -811,9 +757,6 @@ pub(crate) async fn run(
             results,
             restore_note: (!restored.is_empty()).then(|| RESTORE_NOTE.to_string()),
             restored,
-            // Only a sequence is asking about the whole run; for the other two
-            // the per-model wall range above is the answer, and one total
-            // would invite comparing runs of different lengths.
             total_wall_ms: (plan.kind == TestKind::WorkflowReplay)
                 .then(|| wall_started.elapsed().as_millis() as u64),
             loads_observed: (plan.kind == TestKind::WorkflowReplay).then_some(loads_observed),
@@ -823,16 +766,6 @@ pub(crate) async fn run(
         receipts,
     )
 }
-
-// ── Verify ────────────────────────────────────────────────────────────────────
-//
-// Verify is a workflow over fingerprint and receipts, not a second test
-// engine. It runs the test attached to a finding, stores the result with a
-// snapshot of the configuration it ran under, and compares two of those.
-//
-// The reason it is a workflow and not an engine: the question "did my change
-// help" is the same measurement twice with something altered in between. A
-// separate engine would be a second place for the protocol to drift.
 
 /// One stored run of a finding's test.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -1158,28 +1091,20 @@ mod tests {
 
     #[test]
     fn a_tiny_difference_is_no_measurable_change_even_without_an_overlap() {
-        // The live case: two runs of the same test on an idle host, nothing
-        // changed, adjacent bands that happen not to touch. The fourth
-        // evidence rule alone called this "worse".
         let baseline = run(1, 3, 27.9, 27.7, 27.9);
         let current = run(2, 3, 27.4, 26.6, 27.5);
         let c = compare(&baseline, &current);
         assert_eq!(c.verdict, Verdict::NoMeasurableChange);
         let why = c.not_measurable_because.expect("a reason");
-        // 1.8% of these medians; the live run printed its own rounded 1.5%.
         assert!(why.contains("1.8%"), "{why}");
         assert!(why.contains("not to overlap"), "{why}");
 
-        // Over the floor, and still separated, is a verdict.
         let clear = run(3, 3, 24.0, 23.8, 24.2);
         assert_eq!(compare(&baseline, &clear).verdict, Verdict::Worse);
     }
 
     #[test]
     fn overlapping_ranges_are_no_measurable_change_and_say_why() {
-        // A 12% median difference that three runs cannot resolve. The honest
-        // answer is not "unchanged" — the change may be real and too small to
-        // see — so the verdict names the overlap.
         let baseline = run(1, 3, 20.0, 18.0, 22.0);
         let current = run(2, 3, 22.4, 21.0, 24.0);
         let c = compare(&baseline, &current);
@@ -1192,8 +1117,6 @@ mod tests {
 
     #[test]
     fn fewer_than_three_receipts_a_side_is_never_a_verdict() {
-        // The fourth evidence rule. Two runs cannot show a range, so a
-        // difference between two pairs is not a measurement.
         let thin = run(1, 2, 20.0, 19.9, 20.1);
         let full = run(2, 3, 40.0, 39.0, 41.0);
         let c = compare(&thin, &full);
@@ -1203,7 +1126,6 @@ mod tests {
         let c = compare(&full, &thin);
         assert!(c.not_measurable_because.unwrap().contains("current run has 2 receipts"));
 
-        // And the statement constructor refuses the same pair.
         assert_eq!(
             crate::findings::Statement::verified_change("faster", &thin, &full),
             Err(crate::findings::EvidenceError::TooFewReceipts { side: "baseline", had: 2 }),
@@ -1218,7 +1140,6 @@ mod tests {
             loaded("helper:3b", Some(4096), None),
         ];
         let mut after_model = loaded("coder:14b", Some(4096), None);
-        // Part of the footprint moved outside accelerator memory.
         after_model.size_bytes = Some(8_000_000_000);
         after_model.size_vram_bytes = Some(4_000_000_000);
         let after = vec![after_model, loaded("other:7b", Some(2048), None)];
@@ -1232,8 +1153,6 @@ mod tests {
         assert!(d.iter().any(|s| s == "no longer loaded: helper:3b"), "{d:?}");
         assert!(d.iter().any(|s| s == "also loaded: other:7b"), "{d:?}");
 
-        // Two identical snapshots differ in nothing, which is itself an
-        // answer: a change with no visible cause is where to look next.
         assert!(config_diff(&before, &before).is_empty());
     }
 
@@ -1282,7 +1201,6 @@ mod tests {
             test_id: Some("T-1".into()),
             finding_id: None,
         };
-        // 100 tokens in 4 s, 5 s and 10 s: 25, 20 and 10 tok/s.
         let mut rateless = rate(0);
         rateless.id = "R-none".into();
         rateless.eval_ns = None;
@@ -1296,8 +1214,6 @@ mod tests {
         assert!((v.low - 10.0).abs() < 1e-9);
         assert!((v.high - 25.0).abs() < 1e-9);
 
-        // A run with nothing measurable gets zeros and no receipts rather
-        // than a fabricated rate; compare() then says no measurable change.
         let empty = verify_run_from("F-abc123", &outcome, &[rateless], Vec::new());
         assert!(empty.receipts.is_empty());
         assert_eq!(empty.median, 0.0);
@@ -1324,7 +1240,6 @@ mod tests {
     fn the_prompt_is_fixed_and_carries_no_content() {
         let p = synthetic_prompt(PROMPT_TOKENS);
         assert_eq!(p.split_whitespace().count(), PROMPT_TOKENS);
-        // Identical on every host, or the numbers are not comparable.
         assert_eq!(p, synthetic_prompt(PROMPT_TOKENS));
         assert!(p.split_whitespace().all(|w| w == "measure"));
     }
@@ -1337,8 +1252,6 @@ mod tests {
         assert_eq!(body["options"]["seed"], 0);
         assert_eq!(body["options"]["num_predict"], 128);
         assert_eq!(body["stream"], false);
-        // Sending keep_alive would overwrite the operator's OLLAMA_KEEP_ALIVE
-        // as a side effect of measuring.
         assert!(body.get("keep_alive").is_none());
     }
 
@@ -1360,11 +1273,9 @@ mod tests {
         let s = loaded("coder:14b", None, None);
         let err = plan(&TestSpec::warm(vec!["coder:14b".into()]), &[&s], T0, false).unwrap_err();
         assert_eq!(err, PlanRefusal::ContextUnknown("coder:14b".into()));
-        // The refusal has to say why, because "it refused" reads as a bug.
         assert!(err.message().contains("4096"), "{}", err.message());
         assert!(err.message().contains("--num-ctx"));
 
-        // Stating it explicitly is the way through.
         let spec = TestSpec { num_ctx: Some(8192), ..TestSpec::warm(vec!["coder:14b".into()]) };
         assert_eq!(plan(&spec, &[&s], T0, false).unwrap().steps[0].num_ctx, 8192);
     }
@@ -1412,23 +1323,17 @@ mod tests {
         assert_eq!(forced.will_restore, vec!["coder:14b".to_string()]);
         let text = forced.consent_text();
         assert!(text.contains("--force"), "{text}");
-        // The irreversible part is stated before the run, not after.
         assert!(text.contains("expiry cannot be restored"), "{text}");
 
-        // A warm test does not move it, so being in use is not a refusal.
         let warm = plan(&TestSpec::warm(vec!["coder:14b".into()]), &[&s], T0, false).unwrap();
         assert!(warm.disturbs_in_use.is_empty());
 
-        // And once it has been idle a while, the cold test may run.
         let idle = loaded("coder:14b", Some(8192), Some(T0 - 300_000));
         assert!(plan(&cold, &[&idle], T0, false).is_ok());
     }
 
     #[test]
     fn a_replay_of_a_busy_model_is_not_refused_and_names_it_once() {
-        // The first draft refused this and said the model "will be unloaded
-        // anyway". A replay unloads nothing; it sends requests to models it
-        // names, exactly as a warm test does.
         let s = loaded("a:7b", Some(4096), Some(T0 - 3_000));
         let spec = TestSpec {
             kind: TestKind::WorkflowReplay,
@@ -1440,10 +1345,8 @@ mod tests {
         assert!(p.disturbs_in_use.is_empty());
         assert!(p.will_restore.is_empty(), "a replay takes nothing away");
         assert_eq!(p.steps.len(), 2, "both steps, named model repeated");
-        // And the header counts steps, not models.
         assert!(p.consent_text().contains("2 steps"), "{}", p.consent_text());
 
-        // A cold test naming it twice disturbs and restores it once.
         let cold = TestSpec { kind: TestKind::ColdLoad, ..spec };
         let forced = plan(&cold, &[&s], T0, true).unwrap();
         assert_eq!(forced.disturbs_in_use, vec!["a:7b".to_string()]);
@@ -1495,7 +1398,6 @@ mod tests {
         assert_eq!(r.start_state, StartState::Loaded);
         assert!((r.decode_tps().unwrap() - 26.3).abs() < 0.1);
 
-        // Two runs in one test are two receipts.
         let mut second = resp.clone();
         second.total_duration = Some(8_120_000_000);
         assert_ne!(
@@ -1522,8 +1424,6 @@ mod tests {
             assert_eq!(TestKind::from_name(k.as_str()), Some(k));
         }
         assert_eq!(TestKind::from_name("vibes"), None);
-        // Only the cold test unloads. A replay sends requests to models it
-        // names and takes nothing away from anyone.
         assert!(!TestKind::DecodeRate.unloads_models());
         assert!(TestKind::ColdLoad.unloads_models());
         assert!(!TestKind::WorkflowReplay.unloads_models());

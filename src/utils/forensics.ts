@@ -51,8 +51,6 @@ export function median(values: number[]): number | null {
   return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
 }
 
-// ── 8 · Efficiency Regression ────────────────────────────────────────────────
-
 export interface EfficiencyRegression {
   node_id: string;
   hostname: string;
@@ -65,8 +63,8 @@ export interface EfficiencyRegression {
 }
 
 /** Minimum samples (30-min buckets at 7d range) on each side of the split. */
-const MIN_RECENT_BUCKETS   = 4;   // 2 h in the last 24 h
-const MIN_BASELINE_BUCKETS = 12;  // 6 h in the prior 6 days
+const MIN_RECENT_BUCKETS   = 4;
+const MIN_BASELINE_BUCKETS = 12;
 
 /**
  * Last-24h median WES vs. the prior-6-day median, per node, worst first.
@@ -96,8 +94,6 @@ export function efficiencyRegressions(nodes: WesHistoryNode[], nowMs: number): E
   }
   return out.sort((a, b) => a.deltaPct - b.deltaPct);
 }
-
-// ── 9 · Memory Forecast ──────────────────────────────────────────────────────
 
 export interface MemoryForecast {
   node_id: string;
@@ -152,8 +148,6 @@ export function memoryForecasts(
   });
 }
 
-// ── 11 · Hardware Cold Start ─────────────────────────────────────────────────
-
 export interface ColdStartSummary {
   node_id: string;
   hostname: string;
@@ -192,8 +186,6 @@ export function coldStarts(nodes: MetricsHistoryNode[]): ColdStartSummary[] {
   }
   return out.sort((a, b) => b.spikes - a.spikes || b.worstTtftMs - a.worstTtftMs);
 }
-
-// ── 12 · Fleet Thermal Diversity ─────────────────────────────────────────────
 
 export interface ThermalDiversity {
   /** Nodes with at least one thermal sample in the window. */
@@ -243,8 +235,6 @@ export function thermalDiversity(nodes: WesHistoryNode[]): ThermalDiversity | nu
   perNode.sort((a, b) => b.warmPct - a.warmPct);
   return { nodeCount: perNode.length, perNode, correlatedBuckets: correlated, sharedBuckets: shared, risk };
 }
-
-// ── 13 · Inference Density (Historical) ──────────────────────────────────────
 
 export interface InferenceDensity {
   /** Average fleet tok/s for each local hour of day (index 0–23); null = no data. */

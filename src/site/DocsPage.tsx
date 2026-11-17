@@ -7,8 +7,6 @@ interface DocsPageProps {
   onNavigate?: (path: string) => void;
 }
 
-// ── Code block ────────────────────────────────────────────────────────────────
-
 const Code: React.FC<{ children: string; lang?: string }> = ({ children, lang }) => (
   <div className="relative group bg-gray-900 border border-gray-700 rounded-xl overflow-hidden my-4">
     {lang && (
@@ -25,8 +23,6 @@ const Code: React.FC<{ children: string; lang?: string }> = ({ children, lang })
   </div>
 );
 
-// ── Callout boxes ─────────────────────────────────────────────────────────────
-
 const NoteBox: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <div className="flex gap-3 bg-blue-500/5 border border-blue-500/20 rounded-xl px-4 py-3 text-sm text-gray-400 leading-relaxed">
     <Info className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" />
@@ -40,8 +36,6 @@ const TipBox: React.FC<{ children: React.ReactNode }> = ({ children }) => (
     <span>{children}</span>
   </div>
 );
-
-// ── Section heading ───────────────────────────────────────────────────────────
 
 const Section: React.FC<{
   id: string;
@@ -61,8 +55,6 @@ const Section: React.FC<{
   </section>
 );
 
-// ── Table ─────────────────────────────────────────────────────────────────────
-
 const Th: React.FC<{ children: React.ReactNode; className?: string }> = ({ children, className }) => (
   <th className={`text-left text-xs font-semibold text-gray-500 uppercase tracking-wider pb-2 pr-6 ${className ?? ''}`}>
     {children}
@@ -74,8 +66,6 @@ const Td: React.FC<{ children: React.ReactNode; mono?: boolean; className?: stri
     {children}
   </td>
 );
-
-// ── Sidebar nav items ─────────────────────────────────────────────────────────
 
 const NAV = [
   { id: 'quickstart',  label: 'Quick Start' },
@@ -99,13 +89,10 @@ const NAV = [
   { id: 'platforms',   label: 'Platform Support' },
 ];
 
-// ─────────────────────────────────────────────────────────────────────────────
-
 const DocsPage: React.FC<DocsPageProps> = ({ onNavigate }) => {
   return (
     <div className="min-h-screen bg-gray-900 text-white">
 
-      {/* ── Top nav ── */}
       <nav className="sticky top-0 z-30 bg-gray-900/90 backdrop-blur border-b border-gray-700/60">
         <div className="max-w-7xl mx-auto px-4 sm:px-8 py-4 flex items-center justify-between">
           <button
@@ -127,7 +114,6 @@ const DocsPage: React.FC<DocsPageProps> = ({ onNavigate }) => {
 
       <div className="max-w-7xl mx-auto px-4 sm:px-8 py-12 flex gap-12">
 
-        {/* ── Sidebar nav (desktop only) ── */}
         <aside className="hidden lg:block shrink-0 w-48 sticky top-28 self-start">
           <p className="text-[10px] font-bold text-gray-600 uppercase tracking-widest mb-4">On this page</p>
           <nav className="space-y-1">
@@ -166,10 +152,8 @@ const DocsPage: React.FC<DocsPageProps> = ({ onNavigate }) => {
           </div>
         </aside>
 
-        {/* ── Main content ── */}
         <main className="min-w-0 flex-1 space-y-16">
 
-          {/* Page title */}
           <div>
             <p className="text-xs font-bold text-blue-400 uppercase tracking-widest mb-3">Documentation</p>
             <h1 className="text-3xl sm:text-4xl font-extrabold text-white tracking-tight mb-3">
@@ -181,7 +165,6 @@ const DocsPage: React.FC<DocsPageProps> = ({ onNavigate }) => {
             </p>
           </div>
 
-          {/* ── Quick Start ── */}
           <Section
             id="quickstart"
             icon={<Terminal className="w-5 h-5" />}
@@ -190,7 +173,6 @@ const DocsPage: React.FC<DocsPageProps> = ({ onNavigate }) => {
           >
             <p>Install the Wicklee agent with a single command. No account required — the agent runs a full local dashboard at <code className="text-gray-300 font-mono text-xs bg-gray-800 px-1.5 py-0.5 rounded">localhost:7700</code>.</p>
 
-            {/* Option 1 — Try it */}
             <div className="space-y-3">
               <div className="flex items-center gap-2">
                 <span className="shrink-0 w-5 h-5 rounded-full bg-blue-500/15 border border-blue-500/30 flex items-center justify-center text-[10px] font-bold text-blue-400">1</span>
@@ -209,7 +191,6 @@ const DocsPage: React.FC<DocsPageProps> = ({ onNavigate }) => {
               <p>Open <a href="http://localhost:7700" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 underline underline-offset-2">localhost:7700</a> in your browser to see your local dashboard.</p>
             </div>
 
-            {/* Option 2 — Sudo for full metrics */}
             <div className="space-y-3">
               <div className="flex items-center gap-2">
                 <span className="shrink-0 w-5 h-5 rounded-full bg-blue-500/15 border border-blue-500/30 flex items-center justify-center text-[10px] font-bold text-blue-400">2</span>
@@ -235,7 +216,6 @@ const DocsPage: React.FC<DocsPageProps> = ({ onNavigate }) => {
               </NoteBox>
             </div>
 
-            {/* Option 3 — System service */}
             <div className="space-y-3">
               <div className="flex items-center gap-2">
                 <span className="shrink-0 w-5 h-5 rounded-full bg-blue-500/15 border border-blue-500/30 flex items-center justify-center text-[10px] font-bold text-blue-400">3</span>
@@ -255,7 +235,6 @@ const DocsPage: React.FC<DocsPageProps> = ({ onNavigate }) => {
               </NoteBox>
             </div>
 
-            {/* Upgrading */}
             <div>
               <p className="font-semibold text-white mb-2">Upgrading Wicklee</p>
               <p className="mb-3">Upgrades use the same two commands as a fresh install. The install script detects an existing <code className="font-mono text-xs text-gray-300">/usr/local/bin/wicklee</code> and prints the exact follow-up command:</p>
@@ -276,7 +255,6 @@ sudo ~/.wicklee/bin/wicklee --install-service   # re-install as daemon`}</Code>
             </div>
           </Section>
 
-          {/* ── CLI Reference ── */}
           <Section
             id="cli"
             icon={<Terminal className="w-5 h-5" />}
@@ -285,7 +263,6 @@ sudo ~/.wicklee/bin/wicklee --install-service   # re-install as daemon`}</Code>
           >
             <p>Two kinds of command. The <strong className="text-white">subcommands</strong> ask a running agent a question and print the answer — they are clients of <code className="font-mono text-xs text-gray-300">localhost:7700</code>, like <code className="font-mono text-xs text-gray-300">--status</code>, and they never start a server. The <strong className="text-white">flags</strong> are parsed at startup: the agent exits immediately for one-shot flags and runs the full server for everything else.</p>
 
-            {/* Subcommands */}
             <div className="overflow-x-auto">
               <table className="w-full text-sm border-collapse">
                 <thead>
@@ -365,7 +342,6 @@ sudo ~/.wicklee/bin/wicklee --install-service   # re-install as daemon`}</Code>
               </table>
             </div>
 
-            {/* Environment variables */}
             <div className="space-y-2 mt-2">
               <p className="font-semibold text-white">Environment variables</p>
               <div className="overflow-x-auto">
@@ -406,7 +382,6 @@ sudo ~/.wicklee/bin/wicklee --install-service   # re-install as daemon`}</Code>
           </Section>
 
 
-          {/* ── Diagnostics ── */}
           <Section
             id="diagnostics"
             icon={<Stethoscope className="w-5 h-5" />}
@@ -912,7 +887,6 @@ WES Version:     2
             </NoteBox>
           </Section>
 
-          {/* ── Latency & TTFT ── */}
           <Section
             id="latency"
             icon={<Clock className="w-5 h-5" />}
@@ -1010,7 +984,6 @@ WES Version:     2
             </div>
           </Section>
 
-          {/* ── Multi-Model Monitoring ── */}
           <Section
             id="multi-model"
             icon={<BarChart2 className="w-5 h-5" />}
@@ -1095,7 +1068,6 @@ WES Version:     2
             </NoteBox>
           </Section>
 
-          {/* ── Model Discovery ── */}
           <Section
             id="model-discovery"
             icon={<Zap className="w-5 h-5" />}
@@ -1148,7 +1120,6 @@ WES Version:     2
               </div>
             </div>
 
-            {/* ── Tok/s Projection Methodology ───────────────────────────── */}
             <div className="mt-6">
               <p className="font-semibold text-white mb-1">Tok/s Projection Methodology</p>
               <p className="text-xs text-gray-500 mb-3">Every Discovery row carries a projected tok/s number — even on a fresh node with zero telemetry. The hover tooltip on each row tells you which tier produced the number.</p>
@@ -1202,7 +1173,6 @@ WES Version:     2
               </p>
             </div>
 
-            {/* ── Cost-per-Million-Tokens ───────────────────────────────── */}
             <div className="mt-6">
               <p className="font-semibold text-white mb-1">Cost-per-Million-Tokens Methodology</p>
               <p className="text-xs text-gray-500 mb-3">Cost is only displayed when the user has explicitly set their <code className="font-mono text-[11px] text-gray-400">$/kWh</code> rate in <strong className="text-gray-300">Settings</strong> (a non-default value, persisted to localStorage). Showing a confident dollar number based on the system default would be misleading.</p>
@@ -1361,7 +1331,6 @@ WES Version:     2
               The Rust agent evaluates 18 patterns against a 10-minute DuckDB buffer every 10 seconds. All 18 run on every host; there is no gating. <code className="text-gray-400 font-mono text-xs">GET /v1/inspect</code> carries the same conditions with each statement labelled by its evidence, which is the supported way to read them.
             </p>
 
-            {/* ── Agent-evaluated observations ── */}
             <p className="text-xs font-bold text-emerald-400 uppercase tracking-wider mt-4">Agent Observations (18 patterns)</p>
             <p className="text-xs text-gray-500 mb-2">Evaluated by the Rust agent against the local 10-minute DuckDB buffer via <code className="text-gray-400 font-mono text-xs">GET /api/observations</code>, or with evidence labels via <code className="text-gray-400 font-mono text-xs">GET /v1/inspect</code>. No network connection of any kind is required.</p>
             <div className="overflow-x-auto">
@@ -1617,7 +1586,6 @@ WES Version:     2
             </p>
           </Section>
 
-          {/* ── Deep Intelligence ── */}
           <Section
             id="deep-intel"
             icon={<Lightbulb className="w-5 h-5" />}
@@ -1658,7 +1626,6 @@ WES Version:     2
             </NoteBox>
           </Section>
 
-          {/* ── Localhost API ── */}
           <Section
             id="api-local"
             icon={<Globe className="w-5 h-5" />}
@@ -2389,14 +2356,12 @@ sudo systemctl restart wicklee`}
             </NoteBox>
           </Section>
 
-          {/* ── Platform support ── */}
           <Section
             id="platforms"
             icon={<Cpu className="w-5 h-5" />}
             accent="border-green-500/20"
             title="Platform Support"
           >
-            {/* Runtime support matrix */}
             <div>
               <p className="font-semibold text-white mb-2">Agent platform support</p>
               <div className="overflow-x-auto">
@@ -2464,7 +2429,6 @@ sudo systemctl restart wicklee`}
               </div>
             </div>
 
-            {/* Metric availability by inference runtime */}
             <div>
               <p className="font-semibold text-white mb-2">Metric availability by inference runtime</p>
               <div className="overflow-x-auto">
@@ -2518,7 +2482,6 @@ sudo systemctl restart wicklee`}
             </div>
           </Section>
 
-          {/* Footer */}
           <div className="pt-8 border-t border-gray-700 flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between text-xs text-gray-600">
             <span>&copy; 2026 Wicklee. All rights reserved.</span>
             <div className="flex items-center gap-6">

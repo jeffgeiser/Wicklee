@@ -18,7 +18,6 @@ describe('parseParamCountFromModelName', () => {
   it('applies the shared-weight discount to MoE names (Mixtral 8x7B is 46.7B, not 56B)', () => {
     const mixtral = parseParamCountFromModelName('Mixtral-8x7B-Instruct')!;
     expect(mixtral).toBe(Math.round(8 * 7 * 0.83 * 1e9));
-    // Within 5% of the published 46.7B total.
     expect(Math.abs(mixtral - 46.7e9) / 46.7e9).toBeLessThan(0.05);
   });
 });
@@ -47,14 +46,13 @@ describe('computeContextRunway', () => {
     expect(runway.arch.isExact).toBe(true);
     expect(runway.arch.headDim).toBe(128);
     const at4k = runway.points.find(p => p.tokens === 4_096)!;
-    // 2 × 32 layers × 8 KV heads × 128 dim × 4096 tokens × 2 bytes = 0.5 GiB
     expect(at4k.kvGb).toBeCloseTo(0.5, 2);
   });
 
   it('reports the largest fitting milestone', () => {
     const runway = computeContextRunway(
       makeNode({ ollama_active_model: 'llama3.1:8b', ...llama8bArch }),
-      1.0, // 1 GB headroom: 4k (0.5 GB) fits, 16k (2 GB) does not
+      1.0,
     )!;
     expect(runway.maxFitsCtx).toBe(4_096);
   });

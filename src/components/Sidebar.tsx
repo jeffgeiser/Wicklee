@@ -4,10 +4,6 @@ import { ConnectionState, DashboardTab, User, TIER_BADGE } from '../types';
 import { usePermissions } from '../hooks/usePermissions';
 import { IS_AGENT, IS_DEMO } from '../utils/buildTarget';
 
-// In agent and demo builds ClerkProvider is absent — IS_AGENT / IS_DEMO gate all useClerk() calls.
-
-// Clerk account actions are lazy-loaded so @clerk/clerk-react is never imported
-// in agent builds. The dynamic import is tree-shaken when IS_AGENT is true.
 const LazyClerkAccountActions = IS_AGENT ? ((() => null) as never) : React.lazy(() => import('../cloud/ClerkAccountActions'));
 
 interface SidebarProps {
@@ -42,17 +38,10 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
     { id: DashboardTab.AI_INSIGHTS,  icon: Cpu,        label: 'Insights',        show: permissions.canRunAIAnalysis },
     { id: DashboardTab.NODES,        icon: Server,     label: 'Management',      show: true },
     { id: DashboardTab.TRACES,       icon: Activity,   label: 'Observability',   show: true },
-    // Clerk organization members/roles (TeamManagement). Owner-only, matching
-    // the App.tsx guard on DashboardTab.TEAM; cloud dashboard only (agent,
-    // demo and localhost builds have no Clerk).
     { id: DashboardTab.TEAM,         icon: Users,      label: 'Team Management', show: permissions.canManageTeam && !IS_AGENT && !IS_DEMO && !isLocalHost },
   ];
 
   return (
-    // ── Nav rail ──────────────────────────────────────────────────────────────
-    // Collapsed (default): 64px icon rail, fixed position so it never pushes content.
-    // Expanded (hover):    transitions to 256px, overlays the content area.
-    // group/nav drives label opacity so text appears only when expanded.
     <aside
       onMouseLeave={() => setIsAvatarMenuOpen(false)}
       className={[
@@ -65,7 +54,6 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
         'group/nav',
       ].join(' ')}>
 
-      {/* Nav items — pt-16 clears the sticky header zone (header height = 64px = 4rem) */}
       <nav className="flex-1 space-y-1 pt-16 pb-4 overflow-hidden px-0 group-hover/nav:px-2">
         {items.filter(i => i.show).map((item) => (
           <button
@@ -86,9 +74,6 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
       </nav>
 
       <div className="p-4 border-t border-gray-200 dark:border-gray-700 space-y-1">
-        {/* Avatar / profile — dropdown opens upward; only reachable when nav is expanded.
-            Collapsed state: avatar centered in the rail (justify-center, no gap/px).
-            Expanded state:  left-aligned with gap + px-3 padding (group-hover/nav variants). */}
         <div className="relative" ref={avatarMenuRef}>
           <button
             onClick={() => setIsAvatarMenuOpen(v => !v)}
@@ -102,10 +87,8 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
             </span>
           </button>
 
-          {/* Upward dropdown */}
           {isAvatarMenuOpen && (
             <div className="absolute bottom-full left-0 mb-2 w-[240px] bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-2xl z-50 p-1.5 animate-in fade-in slide-in-from-bottom-2 duration-200">
-              {/* User info */}
               <div className="px-3 py-3 mb-1 border-b border-gray-100 dark:border-gray-700/50 flex items-center gap-3">
                 <div className="h-8 w-8 rounded-lg bg-gray-200 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 flex items-center justify-center shrink-0">
                   <UserIcon className="w-4 h-4 text-gray-600 dark:text-gray-300" />
@@ -119,7 +102,6 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
                 </div>
               </div>
 
-              {/* Menu items */}
               <div className="space-y-0.5">
                 <button
                   onClick={() => { setActiveTab(DashboardTab.SETTINGS); setIsAvatarMenuOpen(false); }}
@@ -130,9 +112,6 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
                 </button>
                 <button
                   onClick={() => {
-                    // In localhost (agent) mode, always open the canonical cloud docs
-                    // in a new tab — users see the latest published version, not the
-                    // docs embedded in whichever binary version they have installed.
                     if (isLocalHost) {
                       window.open('https://wicklee.dev/docs', '_blank', 'noopener,noreferrer');
                     } else {
@@ -164,7 +143,6 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
                 </a>
               </div>
 
-              {/* Manage Account + Sign out — cloud build only (ClerkProvider present) */}
               {!IS_AGENT && !IS_DEMO && !isLocalHost && (
                 <Suspense fallback={
                   <div className="mt-1.5 pt-1.5 border-t border-gray-100 dark:border-gray-700/50 space-y-0.5">

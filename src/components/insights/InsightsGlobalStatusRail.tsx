@@ -11,8 +11,6 @@
 
 import React from 'react';
 
-// ── Types ─────────────────────────────────────────────────────────────────────
-
 export interface FiringAlert {
   /** Unique key for React + anchor link target */
   id: string;
@@ -34,8 +32,6 @@ interface InsightsGlobalStatusRailProps {
   activeObsCount?: number;
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
 function fmtElapsed(ms: number): string {
   const s = Math.floor(ms / 1000);
   if (s < 60)  return `${s}s ago`;
@@ -43,8 +39,6 @@ function fmtElapsed(ms: number): string {
   if (m < 60)  return `${m} min ago`;
   return `${Math.floor(m / 60)}h ago`;
 }
-
-// ── Component ─────────────────────────────────────────────────────────────────
 
 const InsightsGlobalStatusRail: React.FC<InsightsGlobalStatusRailProps> = ({
   firingAlerts,
@@ -56,7 +50,6 @@ const InsightsGlobalStatusRail: React.FC<InsightsGlobalStatusRailProps> = ({
   const isFiring    = firingAlerts.length > 0;
   const hasCritical = firingAlerts.some(a => a.severity === 'red');
 
-  // ── Active state ───────────────────────────────────────────────────────────
   if (isFiring) {
     return (
       <div
@@ -66,14 +59,12 @@ const InsightsGlobalStatusRail: React.FC<InsightsGlobalStatusRailProps> = ({
             : 'bg-amber-950 border-amber-900/50'
         }`}
       >
-        {/* Severity pulse bar */}
         <div
           className={`w-0.5 self-stretch rounded-full shrink-0 animate-pulse ${
             hasCritical ? 'bg-red-500' : 'bg-amber-500'
           }`}
         />
 
-        {/* Alert rows — scrollable on narrow viewports */}
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 min-w-0 overflow-hidden">
           {firingAlerts.map((alert, i) => (
             <React.Fragment key={alert.id}>
@@ -93,13 +84,11 @@ const InsightsGlobalStatusRail: React.FC<InsightsGlobalStatusRailProps> = ({
     );
   }
 
-  // ── Nominal state ──────────────────────────────────────────────────────────
   const hasObs = activeObsCount > 0;
   return (
     <div className={`w-full px-4 py-2.5 border-b flex items-center gap-3 min-h-[40px] ${
       hasObs ? 'bg-amber-950/30 border-amber-900/30' : 'bg-gray-800 border-gray-700'
     }`}>
-      {/* Status dot */}
       <div className={`w-1.5 h-1.5 rounded-full shrink-0 animate-pulse ${
         hasObs
           ? 'bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.4)]'
@@ -115,7 +104,6 @@ const InsightsGlobalStatusRail: React.FC<InsightsGlobalStatusRailProps> = ({
         </span>
       </div>
 
-      {/* Fleet stats ticker — right-aligned */}
       <div className="ml-auto flex items-center gap-4">
         {fleetWes != null && (
           <span className="font-telin text-[10px] text-gray-600 uppercase tracking-widest">

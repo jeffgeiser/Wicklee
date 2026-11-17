@@ -11,25 +11,14 @@
  * deletion of the client-side pattern engine (Phase 7E).
  */
 
-// ── ActionId — machine-readable action classification ─────────────────────────
-//
-// Stable string keys used by:
-//   - GET /api/v1/insights/latest
-//   - Automation scripts polling the agent endpoint
-//   - Pattern dismissal audit trail
-//
-// Never rename — these are external API contract values.
-
 export type ActionId =
-  | 'evict_idle_models'    // ollama stop / unload VRAM
-  | 'reduce_batch_size'    // lower concurrent request batch
-  | 'check_thermal_zone'   // physical intervention — airflow / ambient
-  | 'investigate_phantom'  // diagnose idle-but-loaded model
-  | 'schedule_offpeak'     // defer workload to off-peak window
-  | 'switch_quantization'  // reduce model precision to lower memory bandwidth demand
-  | 'check_power_limits';  // lift BIOS/driver/OS power cap constraining clock speed
-
-// ── Output types ───────────────────────────────────────────────────────────────
+  | 'evict_idle_models'
+  | 'reduce_batch_size'
+  | 'check_thermal_zone'
+  | 'investigate_phantom'
+  | 'schedule_offpeak'
+  | 'switch_quantization'
+  | 'check_power_limits';
 
 type PatternTier = 'community' | 'pro' | 'team';
 export type PatternConfidence = 'building' | 'moderate' | 'high';

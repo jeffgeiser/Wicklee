@@ -67,12 +67,8 @@ pub(crate) enum StartupDecision {
 /// an operator writes and what the OS resolves to a loopback address.
 pub(crate) fn bind_is_loopback(bind: &str) -> bool {
     let host = bind.trim();
-    // Accept a bracketed IPv6 literal, with or without a port, and a bare
-    // "host:port" — config holds a host today, but tolerate both spellings.
     let host = host.strip_prefix('[').and_then(|h| h.split(']').next()).unwrap_or(host);
     let host = match host.rsplit_once(':') {
-        // Only strip a trailing :port when what remains still parses or is a
-        // name — otherwise this is a bare IPv6 address full of colons.
         Some((h, p)) if !h.is_empty() && p.chars().all(|c| c.is_ascii_digit()) && !h.contains(':') => h,
         _ => host,
     };
@@ -81,7 +77,6 @@ pub(crate) fn bind_is_loopback(bind: &str) -> bool {
     }
     match host.parse::<IpAddr>() {
         Ok(ip) => ip.is_loopback(),
-        // Unparseable, or a DNS name we will not resolve here: fail closed.
         Err(_) => false,
     }
 }
@@ -103,8 +98,6 @@ pub(crate) fn evaluate_startup(
     token: Option<&str>,
     allow_unauthenticated: bool,
 ) -> StartupDecision {
-    // An empty or whitespace-only token is a configuration mistake, not a
-    // credential. Treat it as absent so it cannot become a guessable secret.
     let token = token.map(str::trim).filter(|t| !t.is_empty()).map(str::to_owned);
 
     if bind_is_loopback(bind) {
@@ -232,9 +225,6 @@ pub(crate) fn authorize(policy: &AuthPolicy, peer: IpAddr, bearer: Option<&str>)
             Some(_) => AuthOutcome::Unauthorized("invalid bearer token"),
             None => AuthOutcome::Unauthorized("missing bearer token"),
         },
-        // No token configured. Only the explicit override permits this; without
-        // it the agent would have refused to start on a non-loopback bind, so
-        // reaching here at all means the operator opted in.
         None if policy.allow_unauthenticated => AuthOutcome::Allow,
         None => AuthOutcome::Unauthorized("remote access is not configured"),
     }
@@ -247,8 +237,6 @@ pub(crate) fn authorize(policy: &AuthPolicy, peer: IpAddr, bearer: Option<&str>)
 /// connection, so trusting them would let any remote caller claim to be
 /// loopback and bypass the whole check.
 pub(crate) fn peer_ip(addr: &SocketAddr) -> IpAddr {
-    // An IPv4-mapped IPv6 peer (::ffff:127.0.0.1) arrives when the listener is
-    // a dual-stack socket. Unmap it so `is_loopback()` sees the real address.
     match addr.ip() {
         IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
             Some(v4) => IpAddr::V4(v4),
@@ -279,9 +267,6 @@ pub(crate) async fn require_auth(
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
 
-    // Fail closed. A missing ConnectInfo means the router was not built with
-    // `into_make_service_with_connect_info`, which is a wiring bug — denying is
-    // the safe reading, and the message names the cause so it is diagnosable.
     let Some(axum::extract::ConnectInfo(addr)) = connect_info else {
         return unauthorized("peer address unavailable").into_response();
     };

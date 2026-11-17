@@ -17,13 +17,9 @@ import { IS_LOCAL_HOST } from '../utils/buildTarget';
  *   insight-dismissed:<cardId>            (fleet-wide cards)
  */
 
-const PERSIST_MS   = 24 * 60 * 60 * 1_000; // 24 hours (default TTL)
-// Relative: same-origin when served by the agent, Vite-proxied in dev. Only
-// used when talking to a local agent — in cloud mode these paths don't exist.
+const PERSIST_MS   = 24 * 60 * 60 * 1_000;
 const DISMISS_URL   = '/api/insights/dismiss';
 const DISMISSED_URL = '/api/insights/dismissed';
-
-// ── localStorage helpers ──────────────────────────────────────────────────────
 
 function lsKey(cardId: string, nodeId?: string): string {
   return nodeId
@@ -48,11 +44,8 @@ function writeDismissed(key: string, expiresAt: number): void {
   try {
     localStorage.setItem(key, JSON.stringify({ dismissed: true, expiresAt }));
   } catch {
-    /* QuotaExceededError — degrade gracefully */
   }
 }
-
-// ── Agent sync (module-level, runs once) ─────────────────────────────────────
 
 /**
  * On first load, pull active dismissals from the agent and merge into
@@ -69,11 +62,9 @@ function syncDismissalsFromAgent(): void {
     .then((data: { dismissals?: Array<{ pattern_id: string; node_id: string; expires_at_ms: number }> } | null) => {
       if (!data?.dismissals) return;
       for (const d of data.dismissals) {
-        // node_id is '' for fleet-wide (agent sentinel)
         const key = d.node_id
           ? `insight-dismissed:${d.pattern_id}:${d.node_id}`
           : `insight-dismissed:${d.pattern_id}`;
-        // Only write if the agent has a longer-lived record than what's in localStorage
         const existing = (() => {
           try {
             const raw = localStorage.getItem(key);
@@ -85,15 +76,12 @@ function syncDismissalsFromAgent(): void {
         }
       }
     })
-    .catch(() => { /* agent offline — no-op */ });
+    .catch(() => { });
 }
-
-// ── Hook ─────────────────────────────────────────────────────────────────────
 
 export function useInsightDismiss(cardId: string, nodeId?: string) {
   const key = lsKey(cardId, nodeId);
 
-  // Sync from agent once per page load (fires on first hook instantiation)
   useEffect(() => {
     syncDismissalsFromAgent();
   }, []);
@@ -111,12 +99,9 @@ export function useInsightDismiss(cardId: string, nodeId?: string) {
     const safeExpiry = Number.isFinite(expiresInMs) ? expiresInMs : 10 * 365 * 24 * 60 * 60 * 1_000;
     const expiresAt  = Date.now() + safeExpiry;
 
-    // 1. Write localStorage immediately — zero-latency, works offline.
     writeDismissed(key, expiresAt);
     setDismissed(true);
 
-    // 2. Persist to agent — best-effort, fire-and-forget. Cloud mode has no
-    //    agent endpoint; localStorage alone is authoritative there.
     if (!IS_LOCAL_HOST) return;
     fetch(DISMISS_URL, {
       method:  'POST',
@@ -128,7 +113,7 @@ export function useInsightDismiss(cardId: string, nodeId?: string) {
         note:          note ?? null,
       }),
       signal: AbortSignal.timeout?.(4_000) ?? undefined,
-    }).catch(() => { /* agent offline — localStorage is the source of truth */ });
+    }).catch(() => { });
   };
 
   return { dismissed, dismiss };

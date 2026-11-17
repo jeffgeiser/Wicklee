@@ -47,9 +47,6 @@ import { parseQuantFromAnyModelName, quantFamily, quantCompressionRatio, resolve
 import { lookupPerplexity, QUALITY_BAND_LABEL, QUALITY_BAND_TONE, type QualityCost } from '../../../utils/perplexity';
 import { pushAndGetSmoothed } from '../../../utils/sharedSmoothing';
 
-// ── Styled hover tooltip ──────────────────────────────────────────────────────
-// Lightweight version of MetricTooltip — no metricId/link needed for labels.
-
 interface TipProps {
   text: string;
   children: React.ReactNode;
@@ -93,13 +90,6 @@ const Tip: React.FC<TipProps> = ({ text, children, side = 'top', width = 'w-56' 
   );
 };
 
-// ── Quantization helpers ───────────────────────────────────────────────────────
-// Quant parsing, family bucketing, and compression ratios all come from
-// src/utils/quantSize.ts — the single source of truth shared with the fit
-// scorer and the agent. The parser there also handles IQ-quants, FP8/BF16,
-// and AWQ/GPTQ tags that the old local regex missed (vLLM models showed
-// "Unknown" quant in this card while the fit math parsed them fine).
-
 /**
  * Quant tradeoff summary shown in tooltips and quant insight rows.
  * Claims are conservative and reflect consensus perplexity benchmarks
@@ -115,8 +105,6 @@ const QUANT_DESCRIPTION: Record<string, string> = {
   F16: 'Full-precision baseline. Maximum quality at maximum VRAM cost.',
   F32: 'Double-precision. Rarely needed for inference — consider F16 or Q8.',
 };
-
-// ── Efficiency scoring (aligned with wesColorClass thresholds in wes.ts) ───────
 
 type EfficiencyLevel = 'excellent' | 'good' | 'acceptable' | 'low';
 
@@ -185,8 +173,6 @@ function efficiencyLevel(wes: number | null): EfficiencyLevel {
   return 'excellent';
 }
 
-// ── Per-model data ─────────────────────────────────────────────────────────────
-
 interface ModelEntry {
   modelName:   string;
   base:        string;
@@ -197,7 +183,7 @@ interface ModelEntry {
   w1k:         number | null;
   wes:         number | null;
   effLevel:    EfficiencyLevel;
-  vramSavedGb: number | null; // estimated savings vs FP16 baseline; null if unknown or N/A
+  vramSavedGb: number | null;
 }
 
 function deriveModelEntry(
@@ -212,35 +198,18 @@ function deriveModelEntry(
 ): ModelEntry {
   const quant  = quantRaw?.toUpperCase() ?? parseQuantFromAnyModelName(modelName) ?? null;
   const family = quantFamily(quant);
-  // Ratio from the concrete quant tag (handles AWQ/FP8/etc. whose family is
-  // "Unknown"); null when the quant itself is unknown — no fabricated savings.
   const ratio  = quantCompressionRatio(quant);
 
-  // W/1K tkn — facility-load adjusted to match Overview row formula.
-  // Overview's per-row W/1K omits PUE, so we mirror that exactly here:
-  // (watts / tps) × 1000 with raw watts.  Lower = more efficient.
   const w1k = tps != null && watts != null && tps > 0
     ? (watts / tps) * 1_000
     : null;
 
-  // WES — canonical formula tps / (watts × PUE × thermal_penalty).
-  // Prefer the agent-provided per-model WES when present (active_models[].wes
-  // carries proxy-based per-model attribution that node-level math can't
-  // reproduce).  The agent computes it WITHOUT PUE (it doesn't know the
-  // user's facility multiplier), so divide by PUE here — WES is linear in
-  // 1/watts, so wes/pue equals exactly what computeWES would produce.
-  // Without this, a table could mix PUE-adjusted (computed) and unadjusted
-  // (agent) rows whenever the user sets PUE ≠ 1.0.
   const wes = modelWes != null
     ? (pue > 0 ? modelWes / pue : modelWes)
     : (tps != null && watts != null && tps > 0 && watts > 0
         ? computeWES(tps, watts, thermalState, pue)
         : null);
 
-  // Estimated VRAM savings vs FP16 baseline.
-  // fp16Est = what this model would require at full FP16 precision.
-  // Only meaningful when current quant is below FP16 (ratio < 1.0)
-  // and we have an observed model size to anchor the estimate.
   const fp16Est     = sizeGb != null && ratio != null && ratio > 0 && ratio < 1.0 ? sizeGb / ratio : null;
   const vramSavedGb = fp16Est != null && sizeGb != null && fp16Est > sizeGb
     ? fp16Est - sizeGb
@@ -252,8 +221,6 @@ function deriveModelEntry(
 
   return { modelName, base, tag, quant, family, tps, w1k, wes, effLevel: efficiencyLevel(wes), vramSavedGb };
 }
-
-// ── Props ─────────────────────────────────────────────────────────────────────
 
 interface ModelFitAnalysisProps {
   node:        SentinelMetrics;
@@ -273,8 +240,6 @@ interface ModelFitAnalysisProps {
   getNodeSettings?: (nodeId: string) => { pue?: number; locationLabel?: string | null } | undefined;
 }
 
-// ── Fleet table helpers ────────────────────────────────────────────────────────
-
 interface FleetRow {
   nodeId:         string;
   hostname:       string;
@@ -283,11 +248,9 @@ interface FleetRow {
   memScore:       FitScore | null;
   memReason:      string | null;
   memHeadroomPct: number | null;
-  maxFitsCtx:     number | null | undefined; // undefined = runway not computable
+  maxFitsCtx:     number | null | undefined;
   runwayExact:    boolean;
 }
-
-// ── Component ─────────────────────────────────────────────────────────────────
 
 const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
   node: defaultNode,
@@ -297,26 +260,12 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
 }) => {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
-  // ── Canonical WES + W/1K math (shared smoothing store) ────────────────────
-  // All telemetry surfaces — Fleet Status row, MFA, Summary Strip — read
-  // and write the same module-level ring buffers in src/utils/sharedSmoothing.
-  // That guarantees identical smoothed values regardless of which tab the
-  // user has open or which component mounted first.
-  //
-  //   WES  = tok/s ÷ (smoothed_watts × PUE × thermal_penalty)
-  //   W/1K = (smoothed_watts / tok/s) × 1000
-  //
-  // systemIdleW deliberately NOT subtracted — that knob is for active-
-  // inference cost displays, not WES.
   function wattsFor(n: SentinelMetrics): number | null {
     return pushAndGetSmoothed(n.node_id, 'watts', getNodePowerW(n), n.timestamp_ms ?? 0);
   }
   function pueFor(n: SentinelMetrics): number {
     return getNodeSettings?.(n.node_id)?.pue ?? 1.0;
   }
-  // Combine Ollama + vLLM tok/s when both runtimes are reporting non-null
-  // values on the same node — same convention as Overview.estimateTps's
-  // `rawCombined`.  Single-runtime nodes get the one value.
   function combinedTpsFor(n: SentinelMetrics): number | null {
     const o = n.ollama_tokens_per_second ?? null;
     const v = n.vllm_tokens_per_sec      ?? null;
@@ -331,8 +280,6 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
       const hasPerModelThroughput = n.active_models.some(am => am.tok_s != null);
       const nodeTps = combinedTpsFor(n);
       return n.active_models.map(am => {
-        // When no per-model throughput (no proxy), attribute node-level tok/s
-        // to whichever model was most recently active — others show —.
         const isActive = !hasPerModelThroughput && am.model === n.ollama_active_model;
         const tps = am.tok_s ?? (isActive ? nodeTps : null);
         return deriveModelEntry(am.model, tps, am.wes ?? null, am.quantization ?? null, am.size_gb ?? null, watts, pue, n.thermal_state);
@@ -352,10 +299,6 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
     )];
   }
 
-  // ── Fleet view ─────────────────────────────────────────────────────────────
-  // Drop into detail view when the operator has clicked a row — preserves
-  // the back-to-fleet affordance via the `cameFromFleet` flag rendered in
-  // the detail view header.
   const cameFromFleet = fleetView && selectedNodeId != null;
   if (fleetView && !selectedNodeId) {
     const rows: FleetRow[] = [];
@@ -381,12 +324,6 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
 
     const activeNodeCount = new Set(rows.map(r => r.nodeId)).size;
 
-    // Separate memory issues (genuinely actionable — risk of OOM /
-    // swapping) from efficiency-low (often physics-bound on big-iron
-    // hardware running smaller workloads where idle baseline power
-    // dominates). Rolling them into a single "needs attention" bucket
-    // misled users into thinking a Spark with naturally low WES needed
-    // a fix when it's just doing what big GPUs do at batch=1.
     const memPoorCount = rows.filter(r => r.memScore === 'poor').length;
     const memFairCount = rows.filter(r => r.memScore === 'fair').length;
     const effLowCount  = rows.filter(r =>
@@ -397,9 +334,6 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
       r.entry.effLevel === 'acceptable' && r.entry.wes != null
     ).length;
 
-    // "Needs attention" = ONLY memory-poor rows. Everything else is
-    // informational. Fair count combines memory-fair + efficiency-acceptable
-    // as a soft signal worth a glance but not urgent.
     const poorCount = memPoorCount;
     const fairCount = memFairCount + effFairCount;
     const goodCount = rows.length - poorCount - fairCount - effLowCount;
@@ -407,7 +341,6 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
     return (
       <div className="bg-gray-800 border border-gray-700 rounded-2xl p-4 flex flex-col gap-3">
 
-        {/* Header */}
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <Cpu className="w-3.5 h-3.5 text-gray-500 shrink-0" />
@@ -427,12 +360,6 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
           </span>
         </div>
 
-        {/* Plain-English fleet verdict sentence — "needs attention" is
-            reserved for genuine memory risk (OOM / swap pressure). Low
-            WES alone is a planning observation, not a fix-now signal:
-            big-iron GPUs running batch=1 small workloads will always
-            show low WES because their idle baseline power dominates,
-            and the bandwidth_ceiling_reached pattern explains why. */}
         {rows.length > 0 && (() => {
           const total       = rows.length;
           const dominantTone =
@@ -443,9 +370,6 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
             poorCount > 0 ? `${poorCount} of ${total} model${total !== 1 ? 's' : ''} need attention`
             : fairCount > 0 ? `${fairCount} of ${total} model${total !== 1 ? 's' : ''} fit but warrant a check`
             : `all ${total} model${total !== 1 ? 's' : ''} fit comfortably`;
-          // Footnote when efficiency is low but memory is fine —
-          // "this is hardware/workload mismatch, not a problem you can
-          // 'fix' from this view." Linked to bandwidth_ceiling_reached.
           const effNote = effLowCount > 0
             ? ` ${effLowCount} model${effLowCount !== 1 ? 's run' : ' runs'} below efficiency baseline (often expected at batch=1 on large GPUs).`
             : '';
@@ -463,9 +387,6 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
           );
         })()}
 
-        {/* Fleet headline counts. Memory-poor is the only "needs
-            attention" bucket; efficiency-low gets a softer tone since
-            it's often expected (batch=1 on large GPUs). */}
         <div className="flex items-center gap-3 text-[10px] flex-wrap">
           <span className="text-gray-500">
             {activeNodeCount} node{activeNodeCount !== 1 ? 's' : ''} · {rows.length} model{rows.length !== 1 ? 's' : ''}
@@ -599,7 +520,6 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
           </div>
         )}
 
-        {/* Footer note when any row lacks efficiency data */}
         {rows.some(r => r.entry.wes == null) && (
           <p className="text-[9px] text-gray-700 mt-1">
             — Efficiency and tok/s require active inference data. CPU-only nodes and multi-model setups need proxy instrumentation for per-model throughput.
@@ -609,7 +529,6 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
     );
   }
 
-  // ── Detail view (single node or node-picker drill-down) ────────────────────
   const node     = selectedNodeId ? nodes.find(n => n.node_id === selectedNodeId) ?? defaultNode : defaultNode;
   const entries  = buildEntries(node);
   const memFit   = computeModelFitScore(node);
@@ -629,7 +548,6 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
     );
   }
 
-  // Memory bar segments as % of totalGb
   const memUsedGb   = memFit ? memFit.totalGb - memFit.headroomGb : 0;
   const modelBarPct = memFit ? Math.min((memFit.modelSizeGb / memFit.totalGb) * 100, 100) : 0;
   const otherBarPct = memFit ? Math.max(0, Math.min(
@@ -640,7 +558,6 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
   return (
     <div className="bg-gray-800 border border-gray-700 rounded-2xl p-4 flex flex-col gap-3">
 
-      {/* Header */}
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
           {cameFromFleet && (
@@ -666,7 +583,6 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
         </span>
       </div>
 
-      {/* Plain-English verdict sentence — the first thing the user reads. */}
       {(() => {
         if (!memFit) return null;
         const primary    = entries[0];
@@ -702,7 +618,6 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
         );
       })()}
 
-      {/* Node picker — multi-node detail mode (Insights / Performance tab) */}
       {nodes.length > 1 && (
         <div className="flex flex-wrap gap-1">
           {nodes.map(n => {
@@ -726,7 +641,6 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
         </div>
       )}
 
-      {/* Per-model entries */}
       {entries.map((e, i) => {
         const effCfg = EFF_CONFIG[e.effLevel];
         const memCfg = memFit ? MEM_CONFIG[memFit.score] : null;
@@ -734,7 +648,6 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
         return (
           <div key={e.modelName} className={entries.length > 1 && i > 0 ? 'pt-3 border-t border-gray-700/50' : ''}>
 
-            {/* Identity row: model name + quant badge */}
             <div className="flex items-center gap-2 flex-wrap mb-2.5">
               <span className={`w-2 h-2 rounded-full shrink-0 ${e.wes != null ? effCfg.dotColor : 'bg-gray-600'} ${e.effLevel === 'low' && e.wes != null ? 'animate-pulse' : ''}`} />
               <span className="font-mono text-xs text-gray-200">
@@ -751,7 +664,6 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
               )}
             </div>
 
-            {/* Metrics row: tok/s · W/1K · WES */}
             <div className="grid grid-cols-3 gap-3 mb-2.5">
               <div>
                 <p className="text-[9px] text-gray-600 uppercase tracking-widest mb-0.5">Tok/s</p>
@@ -786,7 +698,6 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
               </div>
             </div>
 
-            {/* Memory picture — shown once (represents overall node memory state) */}
             {i === 0 && memFit && (
               <div className="mb-2.5">
                 <div className="flex items-center justify-between mb-1">
@@ -809,7 +720,6 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
                     </span>
                   )}
                 </div>
-                {/* Stacked bar: model (indigo) · other used (gray) · free (dark bg) */}
                 <div className="h-1.5 w-full bg-gray-700 rounded-full overflow-hidden flex mb-1">
                   <div
                     className="h-full bg-indigo-500/80"
@@ -838,14 +748,11 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
               </div>
             )}
 
-            {/* Context Runway — shown once, after memory bar, on first entry */}
             {i === 0 && memFit && (() => {
               const runway = computeContextRunway(node, memFit.headroomGb);
               if (!runway) return null;
 
               const approx = runway.arch.isExact ? '' : '~';
-              // "Compact" mode: model max context is small enough that every milestone fits.
-              // Showing bars for a single passing row is noisy — use an inline badge instead.
               const isCompact = runway.points.length === 1 ||
                 (runway.maxFitsCtx != null && runway.maxFitsCtx >= runway.arch.maxCtx);
 
@@ -871,7 +778,6 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
                 );
               }
 
-              // Multi-milestone bar chart
               const visiblePoints = runway.points.slice(0, 5);
               const scale = Math.max(...visiblePoints.map(p => p.kvGb), memFit.headroomGb * 0.1);
 
@@ -932,7 +838,6 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
               );
             })()}
 
-            {/* Quant Sweet Spot — shown on first entry when quant + size are known */}
             {i === 0 && e.family !== 'Unknown' && memFit != null && (() => {
               const rec = computeQuantRecommendation(
                 e.family,
@@ -980,10 +885,6 @@ const ModelFitAnalysis: React.FC<ModelFitAnalysisProps> = ({
               );
             })()}
 
-            {/* Perplexity Tax — empirical quality cost vs FP16 baseline.
-                Renders only when the loaded quant has an entry in the
-                bundled perplexity_baseline.json. Falls back silently
-                otherwise so we never display fabricated numbers. */}
             {i === 0 && e.quant != null && (() => {
               const cost: QualityCost | null = lookupPerplexity(
                 node.ollama_active_model

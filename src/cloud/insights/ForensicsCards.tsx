@@ -19,8 +19,6 @@ import {
   type WesHistoryNode, type MetricsHistoryNode,
 } from '../../utils/forensics';
 
-// ── Data ──────────────────────────────────────────────────────────────────────
-
 export interface ForensicsHistory {
   wes7d: WesHistoryNode[] | null;
   metrics24h: MetricsHistoryNode[] | null;
@@ -44,8 +42,6 @@ export function useForensicsHistory(
     wes7d: null, metrics24h: null, metrics7d: null, loading: false, error: null, fetchedAt: null,
   });
 
-  // Latest getToken without making it a dependency: the demo build passes an
-  // inline arrow (new identity every render), which would refetch every frame.
   const getTokenRef = useRef(getToken);
   getTokenRef.current = getToken;
   const hasToken = !!getToken;
@@ -84,8 +80,6 @@ export function useForensicsHistory(
 
   return state;
 }
-
-// ── Shared chrome ─────────────────────────────────────────────────────────────
 
 const Card: React.FC<{ title: string; icon: React.ReactNode; badge?: string; children: React.ReactNode }> = ({
   title, icon, badge = 'Team', children,
@@ -128,8 +122,6 @@ function statusBody(h: ForensicsHistory, hasCloud: boolean, series: unknown): Re
 
 interface CardProps { history: ForensicsHistory; hasCloud: boolean }
 
-// ── 8 · Efficiency Regression ─────────────────────────────────────────────────
-
 /** "+4%", "-12%", "0%" (Math.round, unlike toFixed, never yields "-0"). */
 const fmtDelta = (pct: number) => {
   const r = Math.round(pct) || 0;
@@ -167,8 +159,6 @@ export const EfficiencyRegressionCard: React.FC<CardProps> = ({ history, hasClou
   );
 };
 
-// ── 9 · Memory Forecast ───────────────────────────────────────────────────────
-
 export const MemoryForecastCard: React.FC<CardProps> = ({ history, hasCloud }) => {
   const status = statusBody(history, hasCloud, history.metrics24h);
   const rows = history.metrics24h ? memoryForecasts(history.metrics24h, Date.now()) : [];
@@ -197,8 +187,6 @@ export const MemoryForecastCard: React.FC<CardProps> = ({ history, hasCloud }) =
   );
 };
 
-// ── 11 · Hardware Cold Start ──────────────────────────────────────────────────
-
 export const ColdStartCard: React.FC<CardProps> = ({ history, hasCloud }) => {
   const status = statusBody(history, hasCloud, history.metrics24h);
   const rows = history.metrics24h ? coldStarts(history.metrics24h) : [];
@@ -226,8 +214,6 @@ export const ColdStartCard: React.FC<CardProps> = ({ history, hasCloud }) => {
     </Card>
   );
 };
-
-// ── 12 · Fleet Thermal Diversity ──────────────────────────────────────────────
 
 const RISK_STYLE = { low: 'text-green-400', elevated: 'text-amber-400', high: 'text-red-400' } as const;
 
@@ -260,8 +246,6 @@ export const ThermalDiversityCard: React.FC<CardProps> = ({ history, hasCloud })
   );
 };
 
-// ── 13 · Inference Density (Historical) ───────────────────────────────────────
-
 const fmtHour = (h: number) => `${String(h).padStart(2, '0')}:00`;
 
 export const InferenceDensityCard: React.FC<CardProps> = ({ history, hasCloud }) => {
@@ -293,8 +277,6 @@ export const InferenceDensityCard: React.FC<CardProps> = ({ history, hasCloud })
     </Card>
   );
 };
-
-// ── 14 · Sovereignty Audit (Enterprise) ───────────────────────────────────────
 
 /**
  * The signed audit report is produced on request for Enterprise accounts;

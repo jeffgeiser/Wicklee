@@ -2,8 +2,6 @@
 
 use crate::*;
 
-// ── Cloud MCP Server (Team+ tier) ─────────────────────────────────────────────
-
 pub(crate) async fn handle_cloud_mcp_manifest() -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "schema_version": "2024-11-05",
@@ -46,13 +44,11 @@ pub(crate) async fn handle_cloud_mcp(
         Some(v) => v,
         None => return mcp_err(&req_id, -32000, "Invalid or expired session"),
     };
-    // Org-aware: org members are entitled by the org subscription.
     let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
     if !is_team_or_above(&tier) {
         return mcp_err(&req_id, -32000, "Cloud MCP requires Team tier or above");
     }
 
-    // Rate limit: sliding window (600 req/60s, same as Team-tier API)
     {
         let now_rate = now_ms();
         let window_ms = 60_000u64;
@@ -73,7 +69,6 @@ pub(crate) async fn handle_cloud_mcp(
     ).bind(tval).fetch_all(&state.pool).await.unwrap_or_default();
     let now = now_ms();
 
-    // Snapshot metrics into owned data so no RwLockReadGuard crosses an await point.
     let metrics_snapshot: HashMap<String, MetricsEntry> = {
         let map = state.metrics.read().unwrap();
         node_ids.iter().filter_map(|nid| {
@@ -167,9 +162,6 @@ pub(crate) async fn handle_cloud_mcp(
                     let avg = if wv.is_empty() { None } else { Some((wv.iter().sum::<f32>() / wv.len() as f32 * 10.0).round() / 10.0) };
                     let tv: Vec<f32> = node_ids.iter().filter_map(|n| { let e = map.get(n)?; if now.saturating_sub(e.last_seen_ms) >= ONLINE_THRESHOLD_MS { return None; } let m = e.metrics.as_ref()?; if m.vllm_running { m.vllm_tokens_per_sec } else { m.ollama_tokens_per_second } }).collect();
                     let ftps = if tv.is_empty() { None } else { Some((tv.iter().sum::<f32>() * 10.0).round() / 10.0) };
-                    // tval, not user_id — observations are keyed by tenant
-                    // (org id for org sessions; node listing above already
-                    // scopes by tval).
                     let obs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM fleet_observations WHERE tenant_id = $1 AND state = 'open'")
                         .bind(tval).fetch_one(&state.pool).await.unwrap_or(0);
                     mcp_tool(&req_id, serde_json::json!({ "fleet": { "online": online, "total": node_ids.len(), "avg_wes": avg, "fleet_tok_s": ftps }, "active_observations": obs }))
@@ -198,7 +190,6 @@ pub(crate) async fn handle_cloud_mcp(
                     let map = &metrics_snapshot;
                     let e = map.get(target);
                     let m = e.and_then(|e| e.metrics.as_ref());
-                    // Return current snapshot as a profile point + guidance to use the agent's local /api/profile endpoint for full history
                     let current = m.map(|p| serde_json::json!({
                         "ts_ms": p.timestamp_ms,
                         "model": p.ollama_active_model.as_deref().or(p.vllm_model_name.as_deref()),
@@ -226,7 +217,6 @@ pub(crate) async fn handle_cloud_mcp(
                     if target.is_empty() { return mcp_err(&req_id, -32602, "node_id required"); }
                     if ts == 0 { return mcp_err(&req_id, -32602, "ts_ms required (Unix milliseconds of the slow request)"); }
                     if !node_ids.contains(&target.to_string()) { return mcp_err(&req_id, -32602, "Node not in your fleet"); }
-                    // Cloud doesn't have per-request traces — return current hardware context + guidance
                     let map = &metrics_snapshot;
                     let e = map.get(target);
                     let m = e.and_then(|e| e.metrics.as_ref());
@@ -269,7 +259,6 @@ pub(crate) async fn handle_cloud_mcp(
                         let quant    = m.ollama_quantization.as_deref().unwrap_or("").to_string();
                         let tps      = if m.vllm_running { m.vllm_tokens_per_sec } else { m.ollama_tokens_per_second };
 
-                        // Memory pool: VRAM for NVIDIA, RAM otherwise
                         let (pool_label, pool_total_gb, pool_avail_gb) = if let (Some(vt), Some(vu)) = (m.nvidia_vram_total_mb, m.nvidia_vram_used_mb) {
                             let t = vt as f64 / 1024.0;
                             let a = (vt.saturating_sub(vu)) as f64 / 1024.0;
@@ -280,7 +269,6 @@ pub(crate) async fn handle_cloud_mcp(
                             ("RAM", t, a)
                         };
 
-                        // Memory Fit
                         let (mem_score, mem_reason) = match model_gb {
                             Some(mgb) => {
                                 let pct = if pool_total_gb > 0.0 { pool_avail_gb / pool_total_gb * 100.0 } else { 0.0 };
@@ -297,7 +285,6 @@ pub(crate) async fn handle_cloud_mcp(
                             None => ("unknown", "Model size unavailable".into()),
                         };
 
-                        // Efficiency (WES)
                         let power_w = m.nvidia_power_draw_w.or(m.apple_soc_power_w).or(m.cpu_power_w).map(|w| w as f64);
                         let penalty = m.penalty_avg.map(|p| p as f64).unwrap_or(1.0).max(0.01);
                         let (wes_val, wes_level) = match (tps, power_w) {
@@ -309,7 +296,6 @@ pub(crate) async fn handle_cloud_mcp(
                             _ => (None, "unknown"),
                         };
 
-                        // Quant Recommendation (same logic as agent)
                         let bits: Option<u32> = if quant.starts_with('F') || quant.starts_with('f') {
                             if quant.contains("16") { Some(16) } else if quant.contains("32") { Some(32) } else { None }
                         } else {

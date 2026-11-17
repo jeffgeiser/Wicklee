@@ -2,13 +2,11 @@
 
 use crate::*;
 
-// ── OpenTelemetry Export (Team+ tier) ─────────────────────────────────────────
-
 #[derive(Serialize, Deserialize, Clone)]
 pub(crate) struct OtelConfig {
     pub(crate) enabled: bool,
     pub(crate) endpoint_url: String,
-    pub(crate) auth_headers: String,   // JSON string: {"Authorization": "Bearer xxx"}
+    pub(crate) auth_headers: String,
     pub(crate) export_interval_s: i32,
 }
 
@@ -25,7 +23,6 @@ pub(crate) async fn handle_get_otel_config(
         Some(v) => v,
         None => return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "Invalid session"}))).into_response(),
     };
-    // Org-aware: org members are entitled by the org subscription.
     let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
     if !is_team_or_above(&tier) {
         return upgrade_required("OpenTelemetry export", UpgradePlan::Team);
@@ -56,7 +53,6 @@ pub(crate) async fn handle_put_otel_config(
         None => return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "Invalid session"}))).into_response(),
     };
     if !role.can_mutate() { return role_forbidden("member"); }
-    // Org-aware: org members are entitled by the org subscription.
     let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
     if !is_team_or_above(&tier) {
         return upgrade_required("OpenTelemetry export", UpgradePlan::Team);
@@ -79,14 +75,12 @@ pub(crate) async fn handle_put_otel_config(
 
 /// Background task: reads enabled OTel configs and POSTs OTLP JSON to configured endpoints.
 pub(crate) async fn otel_exporter_task(state: AppState) {
-    // Wait for metrics to populate before starting exports.
     tokio::time::sleep(Duration::from_secs(60)).await;
 
     let mut interval = tokio::time::interval(Duration::from_secs(30));
     loop {
         interval.tick().await;
 
-        // Load all enabled configs.
         let configs: Vec<(String, String, String, i32)> = sqlx::query_as(
             "SELECT user_id, endpoint_url, auth_headers, export_interval_s FROM otel_config WHERE enabled = true AND endpoint_url != ''"
         ).fetch_all(&state.pool).await.unwrap_or_default();
@@ -94,14 +88,12 @@ pub(crate) async fn otel_exporter_task(state: AppState) {
         if configs.is_empty() { continue; }
 
         for (user_id, endpoint_url, auth_headers_json, _interval) in &configs {
-            // Find this user's nodes.
             let node_ids: Vec<String> = sqlx::query_scalar(
                 "SELECT wk_id FROM nodes WHERE user_id = $1"
             ).bind(user_id).fetch_all(&state.pool).await.unwrap_or_default();
 
             if node_ids.is_empty() { continue; }
 
-            // Read metrics from in-memory cache.
             let cache = state.metrics.read().unwrap();
             let mut resource_metrics = Vec::new();
 
@@ -115,7 +107,6 @@ pub(crate) async fn otel_exporter_task(state: AppState) {
                     None => continue,
                 };
 
-                // Resolve power: NVIDIA > SoC > CPU
                 let watts = m.nvidia_power_draw_w.or(m.apple_soc_power_w).or(m.cpu_power_w);
                 let tok_s = m.ollama_tokens_per_second.or(m.vllm_tokens_per_sec);
                 let wes = match (tok_s, watts, m.penalty_avg) {
@@ -147,7 +138,6 @@ pub(crate) async fn otel_exporter_task(state: AppState) {
                 add_gauge("wicklee.memory.pressure", "%", m.memory_pressure_percent.map(|v| v as f64));
                 add_gauge("wicklee.inference.ttft_ms", "ms", ttft.map(|v| v as f64));
 
-                // Add inference_state as a special data point with string attribute
                 data_points.push(serde_json::json!({
                     "name": "wicklee.inference.state",
                     "unit": "1",
@@ -184,7 +174,6 @@ pub(crate) async fn otel_exporter_task(state: AppState) {
             let endpoint = endpoint_url.clone();
             let headers_str = auth_headers_json.clone();
 
-            // Fire-and-forget: POST to OTLP endpoint using ureq in a blocking task.
             tokio::task::spawn_blocking(move || {
                 let target = match resolve_outbound_blocking(&format!("{}/v1/metrics", endpoint.trim_end_matches('/'))) {
                     Ok(t) => t,
@@ -194,7 +183,6 @@ pub(crate) async fn otel_exporter_task(state: AppState) {
                     .post(target.url.as_str())
                     .set("Content-Type", "application/json");
 
-                // Parse auth headers JSON and apply them.
                 if let Ok(hdrs) = serde_json::from_str::<HashMap<String, String>>(&headers_str) {
                     for (k, v) in &hdrs {
                         req = req.set(k, v);
@@ -214,17 +202,10 @@ pub(crate) async fn otel_exporter_task(state: AppState) {
     }
 }
 
-// ── Prometheus Scrape Endpoint (Team+ tier, API key auth) ────────────────────
-
 pub(crate) async fn handle_prometheus_metrics(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    // Validate API key through the same path as the V1 endpoints — the
-    // previous inline query referenced an `expires_at` column that doesn't
-    // exist on api_keys, so it errored on every call and this endpoint
-    // returned 401 unconditionally. validate_api_key also brings the
-    // per-key rate limit and `last_used_ms` bookkeeping for free.
     let api_key = match extract_api_key(&headers) {
         Some(k) if !k.is_empty() => k,
         _ => return (StatusCode::UNAUTHORIZED, "X-API-Key required").into_response(),
@@ -234,14 +215,10 @@ pub(crate) async fn handle_prometheus_metrics(
         None => return (StatusCode::UNAUTHORIZED, "Invalid API key or rate limit exceeded").into_response(),
     };
 
-    // Tier gate — Team and above (was `!= "team" && != "enterprise"`, which
-    // wrongly locked Business out of a feature its tier includes).
     if !is_team_or_above(&tier) {
         return upgrade_required("Prometheus metrics", UpgradePlan::Team);
     }
 
-    // Build Prometheus text format from the tenant's nodes (org fleet for
-    // org keys, personal nodes otherwise).
     let (tcol, tval) = tenant_scope(&user_id, &key_org);
     let node_ids: Vec<String> = sqlx::query_scalar(&format!("SELECT wk_id FROM nodes WHERE {tcol} = $1"))
         .bind(tval).fetch_all(&state.pool).await.unwrap_or_default();

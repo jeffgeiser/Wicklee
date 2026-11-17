@@ -37,7 +37,6 @@ pub(crate) struct RuntimeConfig {
     /// show "captured 3 min ago" and gauge staleness.
     pub captured_at_ms: i64,
 
-    // ── Cross-runtime common fields (best-effort, may be None) ──────────
     /// Context window size in tokens.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_length: Option<u64>,
@@ -51,7 +50,6 @@ pub(crate) struct RuntimeConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parameter_count: Option<u64>,
 
-    // ── Ollama-specific fields ─────────────────────────────────────────
     /// Prompt template — Ollama only. Stays local; not pushed to cloud.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub template: Option<String>,
@@ -59,7 +57,6 @@ pub(crate) struct RuntimeConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system_prompt: Option<String>,
 
-    // ── vLLM / llama.cpp-specific fields ───────────────────────────────
     /// Full command-line process args. Populated for vLLM / llama.cpp via
     /// either the runtime's introspection endpoint or `ps aux` fallback.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -96,18 +93,13 @@ pub(crate) fn build_ollama_config(
     let parameter_count = mi["general.parameter_count"].as_u64()
         .or_else(|| mi["llama.parameter_count"].as_u64());
 
-    // Quantization heuristic — Ollama exposes it in details.quantization_level
-    // (e.g. "Q4_K_M"). Some older builds use file_type from model_info.
     let quantization = show_json["details"]["quantization_level"]
         .as_str().map(String::from)
         .or_else(|| mi["general.file_type"].as_str().map(String::from));
 
-    // Template + system prompt come at the top level of /api/show output.
     let template = show_json["template"].as_str().map(String::from);
     let system_prompt = show_json["system"].as_str().map(String::from);
 
-    // n_gpu_layers isn't directly in /api/show, but it's in the parameters
-    // string if the user set it explicitly. Best-effort parse.
     let n_gpu_layers = show_json["parameters"]
         .as_str()
         .and_then(|p| {
@@ -141,7 +133,6 @@ pub(crate) async fn fetch_vllm_config(
     client: &reqwest::Client,
     base_url: &str,
 ) -> Result<RuntimeConfig, String> {
-    // Attempt #1: /v1/server_info (structured response)
     if let Ok(resp) = client
         .get(format!("{base_url}/v1/server_info"))
         .timeout(Duration::from_secs(2))
@@ -170,14 +161,12 @@ pub(crate) async fn fetch_vllm_config(
                 });
             }
 
-    // Attempt #2: ps aux fallback — finds the vllm process and parses args
     let args = parse_process_args("vllm").await
         .map_err(|e| format!("vllm probe: server_info missing AND ps aux failed: {e}"))?;
     if args.is_empty() {
         return Err("vllm probe: no /v1/server_info, no vllm process found via ps aux".into());
     }
 
-    // Heuristic extraction from CLI args
     let model = extract_arg(&args, &["--model", "-m"]).unwrap_or_else(|| "unknown".to_string());
     let context_length = extract_arg(&args, &["--max-model-len"])
         .and_then(|s| s.parse::<u64>().ok());
@@ -207,7 +196,6 @@ pub(crate) async fn fetch_llamacpp_config(
     client: &reqwest::Client,
     base_url: &str,
 ) -> Result<RuntimeConfig, String> {
-    // Attempt #1: /props (llama-server's structured introspection)
     if let Ok(resp) = client
         .get(format!("{base_url}/props"))
         .timeout(Duration::from_secs(2))
@@ -239,8 +227,6 @@ pub(crate) async fn fetch_llamacpp_config(
                 });
             }
 
-    // Attempt #2: ps aux fallback. Try llama-server first (the common
-    // serving binary), then raw llama.cpp (less common, batch use).
     let args = match parse_process_args("llama-server").await {
         Ok(a) if !a.is_empty() => a,
         _ => parse_process_args("llama.cpp").await
@@ -250,7 +236,6 @@ pub(crate) async fn fetch_llamacpp_config(
         return Err("llama.cpp probe: no /props, no llama-server/llama.cpp process found".into());
     }
 
-    // Heuristic extraction
     let model = extract_arg(&args, &["--model", "-m"])
         .or_else(|| extract_arg(&args, &["-mli"]))
         .unwrap_or_else(|| "unknown".to_string());
@@ -274,8 +259,6 @@ pub(crate) async fn fetch_llamacpp_config(
     })
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────
-
 fn now_ms() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -288,7 +271,6 @@ fn now_ms() -> i64 {
 /// Searches multiple aliases so callers can write `extract_arg(&args, &["--model", "-m"])`.
 fn extract_arg(args: &[String], flags: &[&str]) -> Option<String> {
     for (i, arg) in args.iter().enumerate() {
-        // Handle `--flag=value`
         for &flag in flags {
             if let Some(rest) = arg.strip_prefix(&format!("{flag}=")) {
                 return Some(rest.to_string());
@@ -317,16 +299,13 @@ async fn parse_process_args(name_pattern: &str) -> Result<Vec<String>, String> {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     for line in stdout.lines() {
-        // Skip ps's own header
         if line.trim().starts_with("PID") {
             continue;
         }
-        // Skip our own grep / Wicklee process to avoid self-match
         if line.contains("grep") || line.contains("wicklee") {
             continue;
         }
         if line.contains(name_pattern) {
-            // First token is PID, rest is the command + args
             let mut tokens = line.split_whitespace();
             let _pid = tokens.next();
             let args: Vec<String> = tokens.map(|s| s.to_string()).collect();

@@ -9,8 +9,6 @@
 import React from 'react';
 
 
-// ── Types ────────────────────────────────────────────────────────────────────
-
 interface HealthPip {
   key:     string;
   icon:    React.ReactNode;
@@ -37,8 +35,6 @@ interface FleetHeaderBarProps {
   isSingleNode?: boolean;
 }
 
-// ── Component ────────────────────────────────────────────────────────────────
-
 const FleetHeaderBar: React.FC<FleetHeaderBarProps> = ({
   onlineCount,
   totalCount,
@@ -52,10 +48,8 @@ const FleetHeaderBar: React.FC<FleetHeaderBarProps> = ({
   return (
     <div className="bg-gray-800 border border-gray-700 rounded-2xl px-4 py-2.5 flex items-center gap-4 flex-wrap">
 
-      {/* ── Left: Pulse Stats ─────────────────────────────────────────── */}
       <div className="flex items-center gap-4 flex-wrap">
 
-        {/* Online count */}
         <div className="flex items-center gap-1.5">
           <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
             onlineCount > 0 ? 'bg-green-400 animate-pulse' : 'bg-gray-600'
@@ -70,7 +64,6 @@ const FleetHeaderBar: React.FC<FleetHeaderBarProps> = ({
 
         <span className="text-gray-700">·</span>
 
-        {/* Throughput */}
         <div className="flex items-center gap-1">
           <span className={`font-mono text-sm font-bold ${
             fleetTokS != null && fleetTokS > 0 ? 'text-green-400' : 'text-gray-600'
@@ -82,7 +75,6 @@ const FleetHeaderBar: React.FC<FleetHeaderBarProps> = ({
 
         <span className="text-gray-700">·</span>
 
-        {/* Top WES */}
         <div className="flex items-center gap-1">
           {!isSingleNode && (
             <span className="text-[9px] text-gray-600 uppercase tracking-wider">peak</span>
@@ -102,7 +94,6 @@ const FleetHeaderBar: React.FC<FleetHeaderBarProps> = ({
 
         <span className="text-gray-700">·</span>
 
-        {/* Power */}
         <div className="flex items-center gap-1">
           <span className={`font-mono text-sm font-bold ${
             fleetWatts == null   ? 'text-gray-600'
@@ -115,10 +106,8 @@ const FleetHeaderBar: React.FC<FleetHeaderBarProps> = ({
         </div>
       </div>
 
-      {/* ── Spacer ────────────────────────────────────────────────────── */}
       <div className="flex-1" />
 
-      {/* ── Right: Health Pips ─────────────────────────────────────────── */}
       {healthPips.length > 0 && (
         <div className="flex items-center gap-3">
           {healthPips.map(pip => (

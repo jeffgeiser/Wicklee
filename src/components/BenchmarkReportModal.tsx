@@ -19,14 +19,10 @@ import {
   reportFilename,
 } from '../utils/benchmarkReport';
 
-// ── Props ─────────────────────────────────────────────────────────────────────
-
 interface Props {
   report: BenchmarkReport;
   onClose: () => void;
 }
-
-// ── Copy button ───────────────────────────────────────────────────────────────
 
 const CopyBtn: React.FC<{ text: string; label: string }> = ({ text, label }) => {
   const [copied, setCopied] = useState(false);
@@ -49,8 +45,6 @@ const CopyBtn: React.FC<{ text: string; label: string }> = ({ text, label }) => 
   );
 };
 
-// ── Component ─────────────────────────────────────────────────────────────────
-
 const BenchmarkReportModal: React.FC<Props> = ({ report, onClose }) => {
   const [view, setView] = useState<'md' | 'json'>('md');
 
@@ -65,7 +59,6 @@ const BenchmarkReportModal: React.FC<Props> = ({ report, onClose }) => {
     >
       <div className="w-full max-w-2xl bg-gray-800 border border-gray-700 rounded-2xl shadow-2xl flex flex-col max-h-[90vh]">
 
-        {/* ── Header ───────────────────────────────────────────────────────── */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-700 shrink-0">
           <div>
             <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-400 mb-0.5">
@@ -87,7 +80,6 @@ const BenchmarkReportModal: React.FC<Props> = ({ report, onClose }) => {
           </button>
         </div>
 
-        {/* ── WES summary strip ────────────────────────────────────────────── */}
         <div className="grid grid-cols-3 divide-x divide-gray-800 border-b border-gray-700 shrink-0">
           <div className="px-5 py-3 text-center">
             <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-1">Raw WES</p>
@@ -113,7 +105,6 @@ const BenchmarkReportModal: React.FC<Props> = ({ report, onClose }) => {
           </div>
         </div>
 
-        {/* ── Format tabs ──────────────────────────────────────────────────── */}
         <div className="flex items-center gap-0 px-5 pt-3 shrink-0">
           {([['md', 'Markdown'], ['json', 'JSON']] as const).map(([id, label]) => (
             <button
@@ -130,14 +121,12 @@ const BenchmarkReportModal: React.FC<Props> = ({ report, onClose }) => {
           ))}
         </div>
 
-        {/* ── Report content ───────────────────────────────────────────────── */}
         <div className="flex-1 min-h-0 overflow-y-auto px-5 pb-3">
           <pre className="bg-gray-900 border border-gray-700 rounded-b-xl rounded-tr-xl p-4 text-xs font-mono text-gray-300 whitespace-pre overflow-x-auto leading-relaxed">
             {activeText}
           </pre>
         </div>
 
-        {/* ── Actions ──────────────────────────────────────────────────────── */}
         <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4 border-t border-gray-700 shrink-0">
           <div className="flex flex-wrap gap-2">
             <CopyBtn

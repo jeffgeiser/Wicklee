@@ -23,16 +23,12 @@
 
 import type { ActionId, PatternConfidence } from '../types/observations';
 
-// ── Alert-fatigue constants ───────────────────────────────────────────────────
-
 /**
  * Minimum elapsed time before a pattern_onset may re-fire for the same
  * patternId + nodeId pair. Intentionally longer than OBS_HOLD_MS to create
  * a 5-minute quiet gap after resolution.
  */
-export const ONSET_SUPPRESSION_MS = 15 * 60 * 1000;   // 15 min
-
-// ── InsightRecentEvent ────────────────────────────────────────────────────────
+export const ONSET_SUPPRESSION_MS = 15 * 60 * 1000;
 
 export interface InsightRecentEvent {
   /** UUID — stable identifier for dedup inside InsightsBriefingCard. */
@@ -78,18 +74,14 @@ export interface InsightRecentEvent {
   best_node_hostname?: string | null;
 }
 
-// ── Storage config ────────────────────────────────────────────────────────────
-
 /** localStorage key — version-tagged so a schema change triggers a clean start. */
 const EVENTS_KEY = 'insight-events:v1';
 
 /** How long events are retained. Events older than this are pruned on each read. */
-const TTL_MS = 24 * 60 * 60 * 1000;   // 24h
+const TTL_MS = 24 * 60 * 60 * 1000;
 
 /** Maximum events stored across all nodes. Oldest are pruned first when exceeded. */
 const MAX_EVENTS = 500;
-
-// ── Read / write helpers ──────────────────────────────────────────────────────
 
 /**
  * Read all recent events from localStorage, pruning any older than TTL_MS.
@@ -113,16 +105,13 @@ function readRecentEvents(): InsightRecentEvent[] {
  */
 export function appendRecentEvent(event: InsightRecentEvent): void {
   try {
-    let events = readRecentEvents();          // already TTL-pruned
-    events = [event, ...events];              // newest first
+    let events = readRecentEvents();
+    events = [event, ...events];
     if (events.length > MAX_EVENTS) {
-      events = events.slice(0, MAX_EVENTS);   // drop oldest beyond cap
+      events = events.slice(0, MAX_EVENTS);
     }
     localStorage.setItem(EVENTS_KEY, JSON.stringify(events));
   } catch {
-    // Storage unavailable (private browsing, quota exceeded) — degrade gracefully.
   }
 }
-
-// ── Morning Briefing helpers ──────────────────────────────────────────────────
 

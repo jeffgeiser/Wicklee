@@ -1,11 +1,4 @@
 #![recursion_limit = "256"]
-// Allowed crate-wide, deliberately:
-//   type_complexity     — sqlx row tuples and handler signatures; a named alias
-//                         per site adds indirection without meaning.
-//   too_many_arguments  — three functions take 13/18/20 parameters. That is a
-//                         real smell, tracked as roadmap "Code Health" item 3
-//                         (params structs), not something to paper over with
-//                         per-site allows. Everything else is -D warnings in CI.
 #![allow(clippy::type_complexity, clippy::too_many_arguments)]
 
 use axum::{
@@ -44,7 +37,6 @@ mod service;
 mod diagnostics;
 mod runtime_config;
 
-// Modules split out of this file (previously one ~8.3k-line main.rs).
 mod config;
 mod pairing;
 mod update;
@@ -52,7 +44,7 @@ mod hardware;
 mod samplers;
 mod metrics;
 mod observations;
-#[cfg(not(target_env = "musl"))] // catalog/fit code is DuckDB-backed; dead on musl
+#[cfg(not(target_env = "musl"))]
 mod model_fit;
 mod http_api;
 mod mcp;
@@ -67,9 +59,6 @@ mod readiness;
 mod cli;
 #[cfg(any(all(target_os = "linux", not(target_env = "musl")), target_os = "windows"))]
 use nvml_wrapper::{bitmasks::device::ThrottleReasons, enum_wrappers::device::{Clock, TemperatureSensor}, Nvml};
-// nvml-wrapper 0.10 only wraps nvmlDeviceGetMemoryInfo (v1), which returns
-// NVML_ERROR_NOT_SUPPORTED on Grace Blackwell / unified-memory architectures.
-// We access nvmlDeviceGetMemoryInfo_v2 directly through the sys crate.
 #[cfg(any(all(target_os = "linux", not(target_env = "musl")), target_os = "windows"))]
 use nvml_wrapper_sys::bindings::{nvmlMemory_v2_t, nvmlDevice_t};
 use tokio_stream::wrappers::ReceiverStream;
@@ -88,8 +77,6 @@ use observations::*;
 use model_fit::*;
 use http_api::*;
 use mcp::*;
-
-// ── Live Activity Events ──────────────────────────────────────────────────────
 
 /// A timestamped log entry surfaced in the dashboard Live Activity panel.
 /// Written by background tasks (e.g. self-update) and drained into every
@@ -110,7 +97,7 @@ pub(crate) struct LiveActivityEvent {
 /// broadcast and late-joining browsers) AND persists to DuckDB when available.
 /// Every call site that creates a `LiveActivityEvent` should use this function
 /// instead of manually pushing to `live_events` + `recent_events_log`.
-#[allow(unused_variables)]              // `store` + `node_id` unused on musl
+#[allow(unused_variables)]
 fn push_event(
     live_events:       &Mutex<Vec<LiveActivityEvent>>,
     recent_events_log: &Mutex<std::collections::VecDeque<LiveActivityEvent>>,
@@ -125,10 +112,6 @@ fn push_event(
         log.push_back(event.clone());
         if log.len() > 20 { log.pop_front(); }
     }
-    // The DuckDB insert takes the store mutex, which the hourly aggregation can
-    // hold for seconds — so never run it on the caller's (async) thread. Fire-
-    // and-forget on the blocking pool; the synchronous path is only a fallback
-    // for callers outside a tokio runtime.
     #[cfg(not(target_env = "musl"))]
     if let Some(s) = store {
         let (s, node_id) = (s.clone(), node_id.to_string());
@@ -145,8 +128,6 @@ fn push_event(
         }
     }
 }
-
-// ── Server Bootstrap ──────────────────────────────────────────────────────────
 
 /// Whether the version line is the command's *output* rather than a log line.
 ///
@@ -212,12 +193,6 @@ where
 
 #[tokio::main]
 async fn main() {
-    // The version line is printed on every invocation — daemon startup and
-    // sudo install/uninstall both benefit from an immediate "which build is
-    // this?" confirmation. It goes to **stderr**, because Phase 1 adds
-    // `wicklee ready --json` and `wicklee inspect --json` and a banner on
-    // stdout would be the first line a caller pipes into jq. `--version` is
-    // the exception: there the version is the command's output.
     let version_line = format!("wicklee-agent v{}", env!("CARGO_PKG_VERSION"));
     let version_flag = version_is_command_output(std::env::args());
     if version_flag {
@@ -226,15 +201,6 @@ async fn main() {
         eprintln!("{version_line}");
     }
 
-    // ── Subcommands ───────────────────────────────────────────────────────────
-    // A first argument that does not start with `--` is a subcommand. Every
-    // existing flag, and `wicklee` with no arguments, falls through untouched.
-    //
-    // This sits before the config is read, because a client subcommand has no
-    // business touching it: load_or_create_config() *creates* a config when
-    // none exists, and `wicklee ready` asking a running agent a question
-    // should not write to disk. A typo must not boot a daemon either, so an
-    // unrecognised subcommand exits rather than falling through.
     match cli::parse(&std::env::args().skip(1).collect::<Vec<_>>()) {
         cli::Invocation::Agent => {}
         cli::Invocation::Run(cmd) => {
@@ -248,9 +214,6 @@ async fn main() {
         }
     }
 
-    // ── --no-cloud ────────────────────────────────────────────────────────────
-    // Read before the config, like the subcommands above, so a refusal costs
-    // nothing and writes nothing.
     if let Some((flag, why)) = no_cloud_conflict(std::env::args()) {
         eprintln!("[fatal] --no-cloud cannot be combined with {flag}: {why}.");
         std::process::exit(2);
@@ -268,7 +231,6 @@ async fn main() {
     let initial_status = if config.fleet_url.is_some() { "connected" } else { "unpaired" };
     let pairing_state = Arc::new(Mutex::new(PairingState {
         node_id:             config.node_id.clone(),
-        // Restore session_token so telemetry push resumes immediately after a restart.
         cloud_session_token: config.session_token.clone(),
         status: match config.fleet_url.clone() {
             Some(url) => PairingStatus::Connected { fleet_url: url },
@@ -277,12 +239,9 @@ async fn main() {
     }));
 
     if version_flag {
-        return; // version already printed above
+        return;
     }
 
-    // ── --mcp-stdio: stdio transport for Claude Desktop / Claude Code ──────────
-    // Reads JSON-RPC from stdin, forwards to the running agent's HTTP MCP endpoint,
-    // writes responses to stdout. The agent must already be running as a service.
     if std::env::args().any(|a| a == "--mcp-stdio") {
         run_mcp_stdio().await;
         return;
@@ -298,7 +257,6 @@ async fn main() {
         return;
     }
 
-    // ── --status: query the running agent rather than trying to bind 7700 ──────
     if std::env::args().any(|a| a == "--status") {
         let port: u16 = std::env::var("PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(7700);
         let url = format!("http://127.0.0.1:{port}/api/pair/status");
@@ -326,11 +284,9 @@ async fn main() {
                     println!("{}", row("Node", &s.node_id));
                     println!("{}", row("Pairing", &s.status));
                     println!("{sep}");
-                    // Show runtime ports from process discovery + config override
                     let cfg_ref = &config;
                     let discovered = process_discovery::scan_runtimes();
                     let rp = cfg_ref.runtime_ports.as_ref();
-                    // Ollama
                     let ollama_cfg = rp.and_then(|r| r.ollama);
                     let ollama_port = ollama_cfg.or_else(|| discovered.get("ollama").copied());
                     if let Some(p) = ollama_port {
@@ -339,7 +295,6 @@ async fn main() {
                     } else {
                         println!("{}", row("Ollama", "not running"));
                     }
-                    // vLLM
                     let vllm_cfg = rp.and_then(|r| r.vllm);
                     let vllm_port = vllm_cfg.or_else(|| discovered.get("vllm").copied());
                     if let Some(p) = vllm_port {
@@ -349,10 +304,6 @@ async fn main() {
                         println!("{}", row("vLLM", "not running"));
                     }
 
-                    // Store health — surfaces the "all my routes are missing
-                    // because DuckDB init failed" failure mode that would
-                    // otherwise be invisible. Falls back to no-op if /api/health
-                    // is unreachable (e.g. older agent without the endpoint).
                     let health_url = format!("http://127.0.0.1:{port}/api/health");
                     if let Ok(resp) = reqwest::get(&health_url).await
                         && resp.status().is_success()
@@ -392,12 +343,6 @@ async fn main() {
         .and_then(|p| p.parse().ok())
         .unwrap_or(7700);
 
-    // ── Inbound auth: the Remote access startup rule ──────────────────────────
-    // Evaluated here, after every client-mode flag has returned (so `--status`
-    // and `--mcp-stdio` still work on a misconfigured host) and before any task
-    // is spawned or any port is bound. A non-loopback bind with no credential
-    // refuses to start rather than exposing hardware, loaded models and the
-    // writable /api/pair/claim and /mcp routes to the network.
     let bind_addr_cfg = config.bind_address.clone().unwrap_or_else(|| "127.0.0.1".to_string());
     let auth_policy = match auth::evaluate_startup(
         &bind_addr_cfg,
@@ -451,31 +396,18 @@ async fn main() {
         }
         print_pairing_box(&config.node_id, &code);
 
-        // Pairing is done — config is saved. The running service (systemd/launchd)
-        // will pick up the new fleet_url + session_token on its next telemetry push.
-        // Don't fall through to the server startup path, which would evict the
-        // running service and confuse users with SIGTERM/shutdown messages.
         println!("\n  ✓ Pairing complete. The background service will connect to the fleet automatically.");
         println!("  Run `wicklee --status` to verify.\n");
         return;
     }
 
-    // Run diagnostics first so the output appears before the banner
     let diag_status = match (pair_on_start, no_cloud) {
         (true, _) => "pending".to_string(),
-        // The config still says paired, and that is worth seeing — but on its
-        // own "connected" would be read as "this agent is feeding the fleet".
         (false, true) => format!("{initial_status} · no-cloud"),
         (false, false) => initial_status.to_string(),
     };
     diagnostics::run_startup_diagnostics(&config.node_id, &diag_status, port, &config).await;
 
-    // ── Privilege warning (macOS only) ────────────────────────────────────────
-    // powermetrics requires root to expose the SoC, GPU, and ANE power rails.
-    // Without them the HardwareSignals bundle is blind: soc_power_w and
-    // ane_power_w are always None → Tier 3 inference detection never fires.
-    // Log this prominently so the issue is immediately diagnosable from
-    // /var/log/wicklee.log without needing a full stack trace.
     #[cfg(target_os = "macos")]
     if unsafe { libc::getuid() } != 0 {
         eprintln!("[warn] ╔══════════════════════════════════════════════════════════════╗");
@@ -489,13 +421,8 @@ async fn main() {
         eprintln!("[warn] ╚══════════════════════════════════════════════════════════════╝");
     }
 
-    // ── Optional Ollama transparent proxy ─────────────────────────────────────
-    // When enabled in config, try to bind :11434 and forward to Ollama on
-    // ollama_port (default 11435). If :11434 is unavailable (Ollama still there),
-    // fall back to Phase A /api/ps polling with a clear log message.
     let proxy_cfg = config.ollama_proxy.clone().unwrap_or_default();
 
-    // Channel for proxy → store inference trace writes.
     #[cfg(not(target_env = "musl"))]
     let (trace_tx, trace_rx) = tokio::sync::mpsc::unbounded_channel::<store::TraceRow>();
 
@@ -505,10 +432,6 @@ async fn main() {
                 let ps = Arc::new(ProxyState {
                     ollama_port:      proxy_cfg.ollama_port,
                     bypass_if_down:   proxy_cfg.bypass_if_proxy_down,
-                    // No total `.timeout()` — it would cap the whole response
-                    // and kill long streaming generations. read_timeout resets
-                    // on every chunk (generous enough for a cold model load
-                    // before the first byte); CHUNK_TIMEOUT covers stalls.
                     client:           reqwest::Client::builder()
                                         .connect_timeout(Duration::from_secs(10))
                                         .read_timeout(Duration::from_secs(300))
@@ -558,30 +481,15 @@ async fn main() {
         None
     };
 
-    // ── Runtime discovery — process-first, port-agnostic ─────────────────────
-    // Create one watch channel per known runtime. The discovery loop scans
-    // processes every 30 s and sends Some(port) / None into each channel.
-    // Harvesters receive their channel and react to changes automatically —
-    // no hardcoded ports, no restart required when a runtime changes port.
     let (ollama_port_tx,   ollama_port_rx)   = watch::channel(None::<u16>);
     let (vllm_port_tx,     vllm_port_rx)     = watch::channel(None::<u16>);
-    // llama.cpp and llama-box are different binaries with the same API.
-    // Both discovery entries feed into a single merged watch channel.
     let (llamacpp_port_tx, llamacpp_port_rx) = watch::channel(None::<u16>);
     let (llamacpp_disc_tx, llamacpp_disc_rx) = watch::channel(None::<u16>);
     let (llamabox_disc_tx, llamabox_disc_rx) = watch::channel(None::<u16>);
-    let (_sglang_port_tx, _sglang_port_rx) = watch::channel(None::<u16>); // ready for future harvester
+    let (_sglang_port_tx, _sglang_port_rx) = watch::channel(None::<u16>);
 
-    // Seed channels: config overrides take precedence over process auto-detection.
-    // Config overrides are used when the runtime runs as a different OS user and
-    // the agent cannot read its process cmdline (cross-user /proc restriction).
     let initial = process_discovery::scan_runtimes();
     let rp = config.runtime_ports.as_ref();
-    // Port resolution: TOML config → env var → auto-discovery. One resolver,
-    // shared with diagnostics, returning the source alongside the number —
-    // see process_discovery::resolve_port on why the source has to travel with
-    // it. llama.cpp and llama-box are one harvester, so their two discovery
-    // entries collapse before resolution.
     let resolve = |runtime: &str, configured: Option<u16>, discovered: Option<u16>| {
         process_discovery::resolve_port(
             configured,
@@ -604,12 +512,8 @@ async fn main() {
     let vllm_port     = vllm_res.map(|(p, _)| p);
     let llamacpp_port = llamacpp_res.map(|(p, _)| p);
     let sglang_port   = sglang_res.map(|(p, _)| p);
-    // When the proxy is enabled, the harvester + probe must talk to Ollama
-    // directly on its moved port (e.g. 11435), NOT through the proxy on 11434.
-    // The proxy occupies the default port, so auto-discovery would incorrectly
-    // connect the harvester to the proxy instead of the real Ollama process.
     let effective_ollama_port = if proxy_arc.is_some() {
-        Some(proxy_cfg.ollama_port) // e.g. 11435 — where Ollama actually listens
+        Some(proxy_cfg.ollama_port)
     } else {
         ollama_port
     };
@@ -618,7 +522,6 @@ async fn main() {
     if let Some(p) = llamacpp_port { let _ = llamacpp_port_tx.send(Some(p)); }
     if let Some(p) = sglang_port  { let _ = _sglang_port_tx.send(Some(p)); }
 
-    // Merge llamacpp + llama-box discovery into the single harvester channel.
     {
         let merged_tx = llamacpp_port_tx;
         tokio::spawn(async move {
@@ -634,16 +537,6 @@ async fn main() {
         });
     }
 
-    // Start the background discovery loop (30 s interval).
-    // Runtimes with a TOML config override are excluded from the loop —
-    // the override is authoritative and must never be overwritten by
-    // auto-discovery (Priority of Truth: TOML > cmdline > socket scan).
-    //
-    // `ollama_port_pinned` is that same authority, named once and used twice:
-    // here, to keep discovery out of the channel, and at the harvester, which
-    // otherwise validates the port and falls back to :11434 on its own. Two
-    // separate copies of this condition is how the override came to be
-    // honoured in one place and silently discarded in the other.
     let ollama_port_pinned = pinned(ollama_res) || proxy_arc.is_some();
     let mut discovery_txs: std::collections::HashMap<&str, _> = Default::default();
     if !ollama_port_pinned { discovery_txs.insert("ollama", ollama_port_tx); }
@@ -653,7 +546,6 @@ async fn main() {
     if !pinned(sglang_res)   { discovery_txs.insert("sglang",   _sglang_port_tx);   }
     process_discovery::start_discovery_loop(discovery_txs, 30);
 
-    // Proxy ports and runtime overrides are immutable after startup — compute once.
     let proxy_listen = if proxy_arc.is_some() { Some(11434u16) } else { None };
     let proxy_target = if proxy_arc.is_some() { Some(proxy_cfg.ollama_port) } else { None };
     let runtime_overrides: Option<String> = {
@@ -666,21 +558,13 @@ async fn main() {
 
     let apple_metrics         = start_metrics_harvester();
     let nvidia_metrics        = start_nvidia_harvester();
-    // v0.9.0: shared runtime-config cache populated by Ollama harvester (on
-    // model change) and by dedicated vLLM / llama.cpp pollers below. Read by
-    // GET /api/runtime-config and used to set the MetricsPayload availability
-    // flag.
     let runtime_config_cache = runtime_config::new_cache();
-    // Keep a receiver for /api/tags before the harvester takes ownership.
     let tags_port_rx = ollama_port_rx.clone();
-    // /v1/state reads /api/tags on demand too, so it needs its own receiver.
     let v1_port_rx = OllamaPortRx(ollama_port_rx.clone());
     let probe_policy = ProbeConfig::policy(config.probe.as_ref());
     if probe_policy.enabled {
         eprintln!("[probe] idle probes every {} min (loaded models only)", probe_policy.interval.as_secs() / 60);
     }
-    // Per-model residency state and the transition log. Fed by the harvester's
-    // existing /api/ps poll — no new poller, per the Phase 1 architecture.
     let residency_tracker: residency::SharedTracker =
         Arc::new(Mutex::new(residency::Tracker::new()));
     let (ollama_metrics, probe_active, ollama_caps) = harvester::start_ollama_harvester(
@@ -695,17 +579,11 @@ async fn main() {
     );
     let rapl_metrics          = start_rapl_harvester();
     let linux_thermal_metrics = start_linux_thermal_harvester();
-    // Runtime-config pollers below read the same discovery channels (which
-    // honour `[runtime_ports]` overrides) rather than rescanning processes.
     let vllm_cfg_port_rx     = vllm_port_rx.clone();
     let llamacpp_cfg_port_rx = llamacpp_port_rx.clone();
     let vllm_metrics          = harvester::start_vllm_harvester(vllm_port_rx, Arc::clone(&apple_metrics), Arc::clone(&nvidia_metrics), Arc::clone(&probe_active), probe_policy);
     let llamacpp_metrics      = harvester::start_llamacpp_harvester(llamacpp_port_rx, Arc::clone(&apple_metrics), Arc::clone(&nvidia_metrics), Arc::clone(&probe_active), probe_policy);
 
-    // v0.9.0: Runtime Config Surface — dedicated 5-min pollers for vLLM and
-    // llama.cpp. Both run alongside the existing metrics harvesters and write
-    // into the shared runtime_config_cache. First poll is delayed 30 s so we
-    // don't slow first-paint.
     {
         let cache = Arc::clone(&runtime_config_cache);
         tokio::spawn(async move {
@@ -763,11 +641,8 @@ async fn main() {
         });
     }
 
-    // Shared CPU usage for idle-thermal override (IEEE f32 bits in AtomicU32).
     let cpu_usage_atomic = Arc::new(std::sync::atomic::AtomicU32::new(0_f32.to_bits()));
 
-    // WES v2 — 2 s thermal-penalty sampler (30-sample rolling window).
-    // Must start after the platform harvesters above so it has data to read.
     let wes_metrics = start_wes_sampler(
         Arc::clone(&apple_metrics),
         Arc::clone(&nvidia_metrics),
@@ -777,13 +652,8 @@ async fn main() {
 
     let swap_metrics = start_swap_harvester();
 
-    // Shared event queue for drain-on-send live activity entries (update notifications etc.).
     let live_events: Arc<Mutex<Vec<LiveActivityEvent>>> = Arc::new(Mutex::new(Vec::new()));
 
-    // Ring buffer of the last 20 lifecycle events for late-joining browsers.
-    // Populated alongside live_events but never drained — persists for 5 minutes.
-    // Exposed via GET /api/events/recent so browsers that open after agent startup
-    // can still see the startup event and any recent lifecycle activity.
     let recent_events_log: Arc<Mutex<std::collections::VecDeque<LiveActivityEvent>>> =
         Arc::new(Mutex::new(std::collections::VecDeque::with_capacity(20)));
 
@@ -810,25 +680,12 @@ async fn main() {
         Arc::clone(&runtime_config_cache),
     );
 
-    // Shared observation cache — written by the 10 s evaluator task, read by
-    // cloud_push (embed in telemetry JSON) and handle_observations (GET /api/observations).
-    // All three readers are store-backed and already gated, so musl has none
-    // left: the `Vec<()>` placeholder that used to stand in here was orphaned
-    // when the last of them was gated, and nothing compiled the target to say so.
     #[cfg(not(target_env = "musl"))]
     let observation_cache: ObservationCache = Arc::new(Mutex::new(Vec::new()));
 
-    // Deployment profile — governs observation sensitivity. Loaded from config,
-    // switchable at runtime via PUT /api/deployment-profile; the 10 s evaluator
-    // reads it each tick so a change takes effect within one cycle.
     let deployment_profile: Arc<Mutex<DeploymentProfile>> =
         Arc::new(Mutex::new(DeploymentProfile::from_config(config.deployment_profile.as_deref())));
 
-    // Start cloud telemetry push loop (2 s cadence, gated on session_token).
-    // Not started under --no-cloud: the loop reads the session_token restored
-    // from the shared config, so a second agent on a paired host would
-    // otherwise interleave its own frames with the installed service's under
-    // one node id, and the fleet has no way to tell the two writers apart.
     if no_cloud {
         eprintln!("[no-cloud] telemetry push not started");
     } else {
@@ -843,14 +700,8 @@ async fn main() {
         cloud_push::start_cloud_push(Arc::clone(&pairing_state), broadcast_tx.clone(), Arc::clone(&deployment_profile));
     }
 
-    // The latest broadcast frame, kept once. Two readers: the router, and the
-    // proxy receipt writer, which takes the host's thermal state from it.
-    // Calling track_latest_frame twice would subscribe twice.
     let latest_frame = metrics::track_latest_frame(&broadcast_tx);
 
-    // ── Local metrics store (DuckDB) ──────────────────────────────────────────
-    // Opens ~/.wicklee/metrics.db and subscribes to the broadcast channel.
-    // Not available on musl targets — store module and handler compile out.
     #[cfg(not(target_env = "musl"))]
     let metrics_store: Option<store::Store> = {
         let db_path = wicklee_dir().join("metrics.db");
@@ -861,12 +712,6 @@ async fn main() {
             Ok(s) => {
                 println!("[store] metrics db: {}", db_path.display());
 
-                // Writer task — subscribes to broadcast, writes 1 sample/s to metrics_raw.
-                // The insert runs on the blocking pool: it's normally < 1 ms, but
-                // the store mutex is also held by the hourly aggregation and by
-                // heavy read queries, and waiting on it must not park a tokio
-                // worker. Awaiting each write keeps inserts ordered and bounded
-                // (a backlog shows up as broadcast lag → skipped frames).
                 {
                     let s2  = s.clone();
                     let mut rx = broadcast_tx.subscribe();
@@ -893,8 +738,6 @@ async fn main() {
                     });
                 }
 
-                // Aggregation loop — runs at startup (after 10 s) and every hour thereafter.
-                // Dispatched via spawn_blocking so a slow aggregation never stalls the executor.
                 {
                     let s2 = s.clone();
                     tokio::spawn(async move {
@@ -909,17 +752,12 @@ async fn main() {
                             }
                         }).await;
 
-                        // interval_at: a plain interval() fires its first tick
-                        // immediately, which re-ran the full aggregation (and
-                        // prune + checkpoint) right after the initial run above.
                         let hour = Duration::from_secs(3_600);
                         let mut tick = tokio::time::interval_at(tokio::time::Instant::now() + hour, hour);
                         loop {
                             tick.tick().await;
                             let sc = s2.clone();
                             let _ = tokio::task::spawn_blocking(move || {
-                                // Housekeeping documented on the function itself:
-                                // expired dismissal rows otherwise accumulate forever.
                                 if let Err(e) = sc.prune_expired_dismissals(now_ms() as i64) {
                                     eprintln!("[store] dismissal prune error: {e}");
                                 }
@@ -931,15 +769,6 @@ async fn main() {
                     });
                 }
 
-                // Trace writer — receives traces from the proxy and persists
-                // to DuckDB, and since step 5 writes a receipt from the same
-                // row.
-                //
-                // The enrichment happens here rather than in the proxy for a
-                // startup-order reason: the proxy binds :11434 long before the
-                // residency tracker exists, so it has no view of what else is
-                // loaded. This task has both, and one row still describes one
-                // request.
                 {
                     let store_clone = s.clone();
                     let tracker = Arc::clone(&residency_tracker);
@@ -980,8 +809,6 @@ async fn main() {
                                     eprintln!("[receipts] proxy receipt not stored: {e}");
                                 }
                             }).await;
-                            // A proxied request is activity by definition:
-                            // someone sent it through Wicklee to the runtime.
                             if let Ok(mut t) = tracker.lock() {
                                 t.note_activity(&activity_model, activity_ts);
                             }
@@ -989,10 +816,6 @@ async fn main() {
                     });
                 }
 
-                // Residency transition writer — drains the tracker's queue and
-                // persists it. The tracker is fed by the harvester's existing
-                // /api/ps poll; this only moves rows to disk, and until it
-                // announces itself the tracker queues nothing.
                 {
                     let store_clone = s.clone();
                     let tracker = Arc::clone(&residency_tracker);
@@ -1023,8 +846,6 @@ async fn main() {
                     });
                 }
 
-                // Model baseline updater — watches for model changes and queries
-                // DuckDB for per-model Normal-thermal baseline (median tok/s, watts).
                 {
                     let store_clone = s.clone();
                     let ollama_clone = Arc::clone(&ollama_metrics);
@@ -1071,10 +892,6 @@ async fn main() {
                     });
                 }
 
-                // Observation evaluator — runs every 10 s, writes to shared cache.
-                // Patterns A–R (except E, which is fleet-only) are evaluated against
-                // the DuckDB 10-min buffer. The cache is read by cloud_push to embed
-                // observations in the telemetry JSON for fleet dashboards.
                 {
                     let store_clone = s.clone();
                     let nvidia_clone = Arc::clone(&nvidia_metrics);
@@ -1083,19 +900,14 @@ async fn main() {
                     let node_id_clone = config.node_id.clone();
                     let obs_cache = Arc::clone(&observation_cache);
                     let profile_for_obs = Arc::clone(&deployment_profile);
-                    // Cache the Linux CPU model once — never changes at runtime.
-                    // Used by `bandwidth_ceiling_reached` to look up memory bandwidth.
                     let linux_chip_name_obs = read_linux_chip_name();
                     tokio::spawn(async move {
-                        // Wait for DuckDB to accumulate a few samples before first eval.
                         tokio::time::sleep(Duration::from_secs(15)).await;
                         let mut interval = tokio::time::interval(Duration::from_secs(10));
                         loop {
                             interval.tick().await;
                             let st  = store_clone.clone();
                             let nid = node_id_clone.clone();
-                            // Re-read each tick so a runtime profile change takes
-                            // effect within one 10 s cycle.
                             let tuning = profile_for_obs.lock()
                                 .map(|p| p.tuning())
                                 .unwrap_or_else(|_| DeploymentProfile::DedicatedServer.tuning());
@@ -1112,13 +924,9 @@ async fn main() {
                                 match st.query_observation_window(&nid, 600_000) {
                                     Ok(samples) => {
                                         let mut obs = evaluate_local_observations(&samples, &pcie, &nid, &hostname, tuning);
-                                        // Pattern O — VRAM Overcommit (point-in-time, no history needed)
                                         if let Some(o) = evaluate_vram_overcommit(&ol, &nv, &ap, &nid, &hostname) {
                                             obs.push(o);
                                         }
-                                        // Pattern: Bandwidth Ceiling Reached — physics-explanation
-                                        // pattern that suppresses the false-positive "Low efficiency"
-                                        // narrative when a node is at its memory-bandwidth ceiling.
                                         if let Some(o) = evaluate_bandwidth_ceiling(
                                             &samples, &ol, &nv, &ap,
                                             chip_name_for_obs.as_deref(),
@@ -1151,21 +959,14 @@ async fn main() {
             }
         }
     };
-    // On musl targets the store is simply absent.
     #[cfg(target_env = "musl")]
     let metrics_store: Option<()> = None;
 
-    // The receipt sink for a build with no store: an in-memory buffer that
-    // lasts until this process ends, which PHASE1_SPEC makes the musl
-    // configuration's documented behaviour. The unit type elsewhere, so the
-    // routes that keep receipts take the same extension on every target.
     #[cfg(target_env = "musl")]
     let receipt_memory: receipts::SharedMemoryReceipts = Default::default();
     #[cfg(not(target_env = "musl"))]
     let receipt_memory: () = ();
 
-    // Emit startup event — placed after store init so the event is persisted
-    // to DuckDB on first write.  Still well before the first broadcast tick.
     push_event(
         &live_events,
         &recent_events_log,
@@ -1180,73 +981,45 @@ async fn main() {
         },
     );
 
-    // Restrict CORS to localhost origins only. Prevents malicious webpages on
-    // external domains from reading telemetry data via JavaScript.
-    // When bind_address is 0.0.0.0, LAN users can still access via browser
-    // navigation — CORS only blocks cross-origin JS fetch/XHR.
     let cors = CorsLayer::new()
         .allow_origin([
             "http://localhost:7700".parse::<axum::http::HeaderValue>().unwrap(),
             "http://127.0.0.1:7700".parse::<axum::http::HeaderValue>().unwrap(),
-            "http://localhost:3000".parse::<axum::http::HeaderValue>().unwrap(),  // dev server
+            "http://localhost:3000".parse::<axum::http::HeaderValue>().unwrap(),
         ])
         .allow_methods(Any)
         .allow_headers(Any);
 
-    // Store health flag — true when DuckDB opened cleanly. Surfaced via
-    // /api/health so operators can diagnose "why are my routes missing"
-    // with one curl. False = the entire store-gated block silently
-    // dropped from the router.
     #[cfg(not(target_env = "musl"))]
     let store_healthy = StoreHealth(metrics_store.is_some());
     #[cfg(target_env = "musl")]
     let store_healthy = StoreHealth(false);
 
-    // Build the router.  The /api/history route and its Extension are only
-    // compiled in on non-musl targets where DuckDB is available.
     let app = {
         let r = Router::new()
-            .route("/api/health",         get(handle_health))         // diagnostic — always live
+            .route("/api/health",         get(handle_health))
             .route("/api/tags",           get(move |caps, residency| handle_tags(tags_port_rx.clone(), caps, residency)))
-            // Not store-gated: it reads the residency log, which falls back to
-            // the tracker's in-memory window when there is no DuckDB.
             .route("/api/model-switches", get(handle_model_switches))
-            // ── /v1: the Phase 1 surface. Covered by the same inbound auth
-            // middleware as /api and /mcp, applied as the outermost layer.
             .route("/v1/state", get(handle_v1_state))
             .route("/v1/readiness", get(handle_v1_readiness))
             .route("/v1/inspect",   get(handle_v1_inspect))
             .route("/v1/findings",  get(handle_v1_findings))
-            // Registered unconditionally, and answering 503 without a store
-            // rather than 404: a missing route reads as "this agent does not
-            // do receipts", which is a different and wrong diagnosis.
             .route(
                 "/v1/receipts",
                 get(handle_v1_receipts_get).post(handle_v1_receipts_post),
             )
-            // The only route that sends inference requests. Needs consent in
-            // the body, and is absent from the MCP tool list on purpose.
             .route("/v1/fingerprint", post(handle_v1_fingerprint))
             .route("/v1/verify", post(handle_v1_verify))
             .route("/api/events/recent",  get(handle_events_recent))
-            .route("/api/metrics",        get(handle_metrics))       // SSE fallback (1 Hz)
-            .route("/api/metrics/snapshot", get(handle_metrics_snapshot)) // one-shot JSON of latest frame
-            .route("/ws",                 get(handle_ws))             // WebSocket primary (1 Hz)
-            // /api/pair/status stays live under --no-cloud: it is local,
-            // read-only, and is how a caller tells the two agents apart.
+            .route("/api/metrics",        get(handle_metrics))
+            .route("/api/metrics/snapshot", get(handle_metrics_snapshot))
+            .route("/ws",                 get(handle_ws))
             .route("/api/pair/status",    get(handle_pair_status))
-            // MCP (Model Context Protocol) — JSON-RPC 2.0 for AI agents
             .route("/mcp",                      post(handle_mcp))
             .route("/.well-known/mcp.json",     get(handle_mcp_manifest))
-            // v0.9.0: Runtime Config Surface — backed by in-memory cache,
-            // available regardless of store health.
             .route("/api/runtime-config",       get(handle_runtime_config))
             .route("/api/deployment-profile",   get(handle_get_deployment_profile).put(handle_put_deployment_profile));
 
-        // The three pairing writes either reach the fleet or rewrite the
-        // config file the installed service reads. Under --no-cloud they are
-        // replaced by a handler that says so, rather than dropped: see
-        // handle_pair_disabled on why a 404 here would mislead.
         let r = if no_cloud {
             r.route("/api/pair/generate",   post(handle_pair_disabled))
              .route("/api/pair/claim",      post(handle_pair_disabled))
@@ -1257,9 +1030,6 @@ async fn main() {
              .route("/api/pair/disconnect", post(handle_pair_disconnect))
         };
 
-        // Wire store-backed routes only when DuckDB opened successfully.
-        // Includes: /api/history, /api/insights/dismiss (POST), /api/insights/dismissed (GET),
-        // /api/observations (local Patterns A/B/J/L).
         #[cfg(not(target_env = "musl"))]
         let r = if let Some(ref st) = metrics_store {
             r.route("/api/history",             get(handle_history))
@@ -1303,36 +1073,19 @@ async fn main() {
          .layer(axum::extract::Extension(NodeId(Arc::new(config.node_id.clone()))))
          .layer(axum::extract::Extension(ProxyPorts { listen: proxy_listen, target: proxy_target }))
          .layer(axum::extract::Extension(Arc::clone(&runtime_config_cache)))
-         // The capability record, filled in live by the Ollama harvester from
-         // the responses it sees and by /api/tags. Step 3 publishes it on
-         // GET /v1/state and step 4 gates rules on it.
          .layer(axum::extract::Extension(Arc::clone(&ollama_caps)))
          .layer(axum::extract::Extension(Arc::clone(&residency_tracker)))
-         // Where receipts go on a build with no DuckDB. The unit type on every
-         // other target, so the four routes that keep receipts have one
-         // signature everywhere — see ReceiptMemory in http_api.rs.
          .layer(axum::extract::Extension(receipt_memory))
          .layer(cors)
-         // Outermost layer: every route, including the embedded dashboard and
-         // the static fallback, passes the peer-address and token check before
-         // any handler or extractor runs.
          .layer(axum::middleware::from_fn_with_state(
              Arc::clone(&auth_policy),
              auth::require_auth,
          ))
     };
-    // Suppress unused-variable warning on musl where metrics_store = None:()
     let _ = &metrics_store;
 
-    // ── Port binding with Ghost-Killer ───────────────────────────────────────
-    // On AddrInUse we check whether the incumbent is an old wicklee process.
-    // If so, we evict it (SIGTERM → SIGKILL) and retry once. This makes
-    // `curl | sh` upgrades seamless — no manual "stop the old agent" step.
     let mut eviction_attempted = false;
     let listener = loop {
-        // Default to 127.0.0.1 (localhost only) for security. Agents running as
-        // a fleet node should set bind_address = "0.0.0.0" in config.toml to accept
-        // LAN connections (e.g., for proxy mode or remote dashboard access).
         let bind_addr = config.bind_address.as_deref().unwrap_or("127.0.0.1");
         match tokio::net::TcpListener::bind(format!("{bind_addr}:{port}")).await {
             Ok(l) => break l,
@@ -1342,10 +1095,9 @@ async fn main() {
                     eviction_attempted = true;
                     if try_evict_port(port).await {
                         println!("  ✓ Previous instance evicted. Starting on :{port}…");
-                        continue; // retry bind
+                        continue;
                     }
                 }
-                // Not a wicklee process, eviction failed, or Windows.
                 if pair_on_start {
                     println!();
                     println!("  Agent is running on :{port} — pairing code registered.");
@@ -1360,13 +1112,6 @@ async fn main() {
         }
     };
 
-    // ── Self-update check ─────────────────────────────────────────────────────
-    // Runs once after the server is bound. Spawned so axum::serve is not delayed.
-    // Sovereign Mode agents (unpaired) skip this entirely inside the function.
-    //
-    // Skipped under --no-cloud. This one is not merely outbound: on finding a
-    // newer build it downloads and replaces the binary on disk, which a
-    // throwaway agent must never do to an installed one.
     if no_cloud {
         eprintln!("[no-cloud] self-update check skipped");
     } else {
@@ -1374,17 +1119,11 @@ async fn main() {
         let live_events       = Arc::clone(&live_events);
         let recent_events_log = Arc::clone(&recent_events_log);
         tokio::spawn(async move {
-            // Brief startup delay — lets the server stabilise and write its
-            // first few metrics frames before we do any network I/O.
             tokio::time::sleep(Duration::from_secs(5)).await;
             check_and_apply_update(pairing_state, live_events, recent_events_log).await;
         });
     }
 
-    // ── Graceful shutdown ──────────────────────────────────────────────────────
-    // Catches SIGTERM (launchd/systemd stop) and Ctrl-C (interactive).
-    // Allows in-flight HTTP responses and WebSocket frames to flush,
-    // and lets DuckDB's Drop impl cleanly close the WAL.
     let shutdown = async {
         #[cfg(unix)]
         {
@@ -1403,9 +1142,6 @@ async fn main() {
         }
     };
 
-    // `into_make_service_with_connect_info` is what puts ConnectInfo<SocketAddr>
-    // into each request's extensions; without it the auth middleware has no
-    // peer address to check and fails closed.
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
@@ -1429,9 +1165,6 @@ mod version_output_tests {
 
     #[test]
     fn everything_else_keeps_stdout_clean() {
-        // Phase 1 adds `wicklee ready --json | jq`. A banner on stdout would be
-        // the first line jq reads, so every non-version invocation logs to
-        // stderr instead.
         for args in [
             vec!["wicklee"],
             vec!["wicklee", "--status"],
@@ -1451,7 +1184,6 @@ mod version_output_tests {
 
     #[test]
     fn a_version_substring_is_not_a_version_flag() {
-        // Matched exactly, so these do not divert the banner to stdout.
         for args in [
             vec!["wicklee", "--versions"],
             vec!["wicklee", "--version-check"],
@@ -1468,9 +1200,6 @@ mod version_output_tests {
         for args in [
             vec!["wicklee"],
             vec!["wicklee", "--status"],
-            // Near misses must not disable the fleet by accident: an agent
-            // that silently stops pushing is the failure this flag exists to
-            // make visible, so it may only happen when asked for exactly.
             vec!["wicklee", "--nocloud"],
             vec!["wicklee", "--no-cloud-push"],
             vec!["wicklee", "no-cloud"],
@@ -1485,17 +1214,13 @@ mod version_output_tests {
             let got = no_cloud_conflict(["wicklee", "--no-cloud", flag]);
             assert_eq!(got.map(|(f, _)| f), Some(flag), "{flag} must be refused");
             assert!(got.unwrap().1.len() > 10, "a refusal has to say why");
-            // Order of the two flags cannot change the answer.
             assert_eq!(
                 no_cloud_conflict(["wicklee", flag, "--no-cloud"]).map(|(f, _)| f),
                 Some(flag)
             );
-            // And the flag on its own is still perfectly valid.
             assert!(no_cloud_conflict(["wicklee", flag]).is_none());
         }
         assert!(no_cloud_conflict(["wicklee", "--no-cloud"]).is_none());
-        // --status and --mcp-stdio make no fleet request of their own, so
-        // there is nothing for --no-cloud to contradict.
         assert!(no_cloud_conflict(["wicklee", "--no-cloud", "--status"]).is_none());
         assert!(no_cloud_conflict(["wicklee", "--no-cloud", "--mcp-stdio"]).is_none());
     }

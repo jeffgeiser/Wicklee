@@ -25,8 +25,6 @@ import { lookupPerplexity, QUALITY_BAND_LABEL, QUALITY_BAND_TONE } from '../../u
 import { pushAndGetSmoothed } from '../../utils/sharedSmoothing';
 import { quantFamily, resolveModelSizeHints } from '../../utils/quantSize';
 
-// ── Score → colour helpers ──────────────────────────────────────────────────
-
 const FIT_DOT: Record<'good' | 'fair' | 'poor', string> = {
   good: 'bg-green-500',
   fair: 'bg-amber-500',
@@ -62,12 +60,6 @@ const RECOMMENDATION_TONE: Record<string, string> = {
   lossless:   'text-cyan-300',
   none:       'text-gray-500',
 };
-
-// Quant family bucketing comes from src/utils/quantSize.ts — the shared
-// implementation also folds FP8/INT8 into Q8 and handles UD-/GGUF suffixes,
-// matching ModelFitAnalysis exactly.
-
-// ── Component ───────────────────────────────────────────────────────────────
 
 interface Props {
   /** Default node — always shown when no picker selection is active. */
@@ -117,7 +109,6 @@ const ModelFitSummaryStrip: React.FC<Props> = ({
   getNodeSettings,
   onNavigate,
 }) => {
-  // Eligible-for-picker nodes: those with a loaded model.
   const candidateNodes = (nodes ?? []).filter(hasLoadedModel);
   const showPicker = candidateNodes.length > 1;
 
@@ -126,9 +117,6 @@ const ModelFitSummaryStrip: React.FC<Props> = ({
     ? (candidateNodes.find(n => n.node_id === selectedNodeId) ?? defaultNode)
     : defaultNode;
 
-  // Smoothing reads from the module-level shared store
-  // (src/utils/sharedSmoothing) so values match Fleet Status row + MFA
-  // exactly, regardless of tab-mount order.
   function smoothedCombinedTps(n: SentinelMetrics): number | null {
     const o = n.ollama_tokens_per_second ?? null;
     const v = n.vllm_tokens_per_sec      ?? null;
@@ -140,8 +128,6 @@ const ModelFitSummaryStrip: React.FC<Props> = ({
   if (!fit) return null;
 
   const observedTps = smoothedCombinedTps(node);
-  // Source-matched quant resolution (Ollama field / vLLM cmdline dtype /
-  // name parse) — same chain the fit calculator uses.
   const quantTag = resolveModelSizeHints(node).quantHint;
   const currentFamily = quantFamily(quantTag);
   const rec = currentFamily !== 'Unknown'
@@ -159,17 +145,12 @@ const ModelFitSummaryStrip: React.FC<Props> = ({
   const hostLabel = nodeLabelFor(node, getNodeSettings);
   const chipLabel = node.chip_name ?? node.gpu_name ?? null;
 
-  // Tile-click handler — wired to the Insights deep-link callback when
-  // provided.  When `onNavigate` is undefined the tiles render as
-  // non-interactive divs (no onClick, no hover-cursor) so the user
-  // never sees a button shape that does nothing.
   const handleTileClick = onNavigate
     ? (e: React.MouseEvent) => { e.preventDefault(); onNavigate(); }
     : undefined;
 
   return (
     <div className="space-y-2">
-      {/* Node attribution — always visible so the strip is unambiguous. */}
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <div className="flex items-center gap-1.5 text-[10px] text-gray-500">
           <Server className="w-3 h-3 text-gray-600" />
@@ -184,7 +165,6 @@ const ModelFitSummaryStrip: React.FC<Props> = ({
         </div>
       </div>
 
-      {/* Node picker chip row — only when fleet has multiple model-loaded nodes. */}
       {showPicker && (
         <div className="flex flex-wrap gap-1">
           {candidateNodes.map(n => {
@@ -210,7 +190,6 @@ const ModelFitSummaryStrip: React.FC<Props> = ({
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-      {/* ── Tile 1 — Model Fit ───────────────────────────────────────────── */}
       <button type="button" disabled={!onNavigate}
         
         onClick={handleTileClick}
@@ -233,7 +212,6 @@ const ModelFitSummaryStrip: React.FC<Props> = ({
           </span>
         </div>
         <p className="text-[11px] text-gray-400 truncate" title={modelName}>{modelName}</p>
-        {/* Memory bar */}
         <div className="mt-2 h-1 bg-gray-700 rounded-full overflow-hidden flex">
           <div
             className="h-full bg-indigo-500/80"
@@ -249,7 +227,6 @@ const ModelFitSummaryStrip: React.FC<Props> = ({
         </p>
       </button>
 
-      {/* ── Tile 2 — Quant Sweet Spot ─────────────────────────────────────── */}
       <button type="button" disabled={!onNavigate}
         
         onClick={handleTileClick}
@@ -294,10 +271,6 @@ const ModelFitSummaryStrip: React.FC<Props> = ({
               <p className="text-[10px] text-gray-600 mt-1.5 font-mono">{rec.currentQuality}</p>
             )}
 
-            {/* Perplexity Tax footer — empirical quality cost of the
-                CURRENT quant on this model family. Shown alongside the
-                speed/headroom delta so users see all three dimensions
-                (speed, memory, quality) at a glance. */}
             {(() => {
               const cost = lookupPerplexity(modelName, node.ollama_quantization);
               if (!cost) return null;
@@ -325,7 +298,6 @@ const ModelFitSummaryStrip: React.FC<Props> = ({
         )}
       </button>
 
-      {/* ── Tile 3 — Context Runway ───────────────────────────────────────── */}
       <button type="button" disabled={!onNavigate}
         
         onClick={handleTileClick}

@@ -6,10 +6,7 @@ import { CLOUD_URL } from '../utils/cloudUrl';
 import { CopyButton } from '../components/shared/CopyButton';
 import { IS_DEMO } from '../utils/buildTarget';
 
-// For display in the Quick Reference — always the public URL.
 const DISPLAY_URL = 'https://wicklee.dev';
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function fmtDate(ms: number): string {
   return new Date(ms).toLocaleDateString('en-US', {
@@ -25,10 +22,6 @@ function fmtRelative(ms: number | null): string {
   if (diff < 86_400_000)   return `${Math.floor(diff / 3_600_000)}h ago`;
   return `${Math.floor(diff / 86_400_000)}d ago`;
 }
-
-// ── Subcomponents ─────────────────────────────────────────────────────────────
-
-// ── One-time key reveal modal ─────────────────────────────────────────────────
 
 const KeyRevealModal: React.FC<{
   result: CreateApiKeyResponse;
@@ -85,8 +78,6 @@ const KeyRevealModal: React.FC<{
     </div>
   );
 };
-
-// ── Create Key Modal ──────────────────────────────────────────────────────────
 
 const CreateKeyModal: React.FC<{
   onSubmit: (name: string, scope: 'personal' | 'org') => Promise<void>;
@@ -175,10 +166,6 @@ const CreateKeyModal: React.FC<{
   );
 };
 
-// ── Main component ────────────────────────────────────────────────────────────
-
-// Demo builds have no ClerkProvider — a build-time-constant branch keeps the
-// hook order stable while supplying stub auth (the fetch shim serves the data).
 const useAuthMaybe = () =>
   // eslint-disable-next-line react-hooks/rules-of-hooks
   IS_DEMO ? { getToken: async () => 'demo', isSignedIn: true } : useAuth();
@@ -195,13 +182,10 @@ const APIKeysView: React.FC = () => {
   const [createError, setCreateError] = useState<string | null>(null);
   const [newKey, setNewKey]           = useState<CreateApiKeyResponse | null>(null);
 
-  // Two-click delete confirm
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [deleting, setDeleting]           = useState<string | null>(null);
 
   const [copiedSnippet, setCopiedSnippet] = useState(false);
-
-  // ── Auth helper ────────────────────────────────────────────────────────────
 
   const authHeaders = useCallback(async (): Promise<HeadersInit | null> => {
     if (!isSignedIn) return null;
@@ -209,8 +193,6 @@ const APIKeysView: React.FC = () => {
     if (!token) return null;
     return { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
   }, [getToken, isSignedIn]);
-
-  // ── Fetch keys ─────────────────────────────────────────────────────────────
 
   const loadKeys = useCallback(async () => {
     setLoading(true);
@@ -232,8 +214,6 @@ const APIKeysView: React.FC = () => {
   }, [authHeaders]);
 
   useEffect(() => { loadKeys(); }, [loadKeys]);
-
-  // ── Create key ─────────────────────────────────────────────────────────────
 
   const handleCreate = async (name: string, scope: 'personal' | 'org') => {
     setCreating(true);
@@ -260,8 +240,6 @@ const APIKeysView: React.FC = () => {
     setCreating(false);
   };
 
-  // ── Delete key ─────────────────────────────────────────────────────────────
-
   const handleDelete = async (keyId: string) => {
     if (confirmDelete !== keyId) { setConfirmDelete(keyId); return; }
     setDeleting(keyId);
@@ -271,13 +249,10 @@ const APIKeysView: React.FC = () => {
       await fetch(`${CLOUD_URL}/api/v1/keys/${keyId}`, { method: 'DELETE', headers });
       setKeys(prev => prev.filter(k => k.key_id !== keyId));
     } catch {
-      // silent — key stays in list on network error
     }
     setDeleting(null);
     setConfirmDelete(null);
   };
-
-  // ── curl snippet ───────────────────────────────────────────────────────────
 
   const curlSnippet = `curl ${DISPLAY_URL}/api/v1/fleet \\\n  -H "X-API-Key: wk_live_YOUR_KEY_HERE"`;
 
@@ -286,8 +261,6 @@ const APIKeysView: React.FC = () => {
     setCopiedSnippet(true);
     setTimeout(() => setCopiedSnippet(false), 2000);
   };
-
-  // ── Render ────────────────────────────────────────────────────────────────
 
   return (
     <>
@@ -305,7 +278,6 @@ const APIKeysView: React.FC = () => {
 
       <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in duration-500">
 
-        {/* Header */}
         <div className="flex items-center justify-between">
           <div className="space-y-1">
             <h1 className="text-2xl font-bold text-white">API Keys</h1>
@@ -322,7 +294,6 @@ const APIKeysView: React.FC = () => {
           </button>
         </div>
 
-        {/* Keys table */}
         <div className="bg-gray-800 border border-gray-700 rounded-2xl overflow-hidden">
           <table className="w-full text-left">
             <thead>
@@ -382,10 +353,6 @@ const APIKeysView: React.FC = () => {
                   </td>
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-2 font-mono text-xs text-gray-500">
-                      {/* The key itself is stored only as a hash and shown once, at
-                          creation — there is nothing to copy here. (This used to copy
-                          k.key_id, the record's internal UUID, which looks like a key
-                          but doesn't authenticate.) */}
                       <span title="Shown once when created. Lost it? Revoke it and create a new key.">wk_live_••••••••</span>
                     </div>
                   </td>
@@ -420,7 +387,6 @@ const APIKeysView: React.FC = () => {
           </table>
         </div>
 
-        {/* Quick Reference */}
         <div className="bg-gray-800/50 border border-gray-700 rounded-2xl p-6 space-y-6">
           <div className="flex items-center gap-3">
             <div className="p-2 bg-gray-700 rounded-lg">
@@ -430,7 +396,6 @@ const APIKeysView: React.FC = () => {
           </div>
 
           <div className="grid md:grid-cols-2 gap-6">
-            {/* Auth */}
             <div className="space-y-3">
               <h4 className="text-xs text-gray-500 uppercase tracking-widest font-bold">Authentication</h4>
               <div className="space-y-2">
@@ -451,7 +416,6 @@ const APIKeysView: React.FC = () => {
               </div>
             </div>
 
-            {/* Endpoints */}
             <div className="space-y-3">
               <h4 className="text-xs text-gray-500 uppercase tracking-widest font-bold">Data Endpoints</h4>
               <div className="space-y-1.5">
@@ -476,7 +440,6 @@ const APIKeysView: React.FC = () => {
             </div>
           </div>
 
-          {/* curl snippet */}
           <div>
             <h4 className="text-xs text-gray-500 uppercase tracking-widest font-bold mb-2">Example</h4>
             <div className="bg-gray-900 border border-gray-700 rounded-xl p-4 flex items-start justify-between gap-4">
@@ -497,7 +460,6 @@ const APIKeysView: React.FC = () => {
           </div>
         </div>
 
-        {/* Security Warning */}
         <div className="bg-amber-500/10 border border-amber-500/20 rounded-2xl p-6 flex items-start gap-4">
           <div className="p-2 bg-amber-500/10 rounded-lg">
             <Key className="w-5 h-5 text-amber-500" />

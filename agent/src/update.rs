@@ -24,12 +24,6 @@ pub(crate) fn update_asset_name(platform: &str) -> Option<&'static str> {
         // Retired names, kept deliberately — and NOT a rescue path for old
         // binaries, which is what an earlier draft of this comment claimed.
         // This function is only ever called with `agent_platform()`'s output
-        // (see the call below), so a binary that contains these arms never
-        // reports a `-nvidia` name and never reaches them; a binary that does
-        // report one is an older release using its own baked-in map, not this
-        // one. They are here so the name a release published stays resolvable
-        // in this table rather than becoming an unexplained `None`, and so the
-        // integrity test's platform list keeps documenting what shipped.
         "linux-x86_64-nvidia"  => Some("wicklee-agent-linux-x86_64"),
         "linux-aarch64-nvidia" => Some("wicklee-agent-linux-aarch64"),
         "windows-x86_64"      => Some("wicklee-agent-windows-x86_64.exe"),
@@ -68,12 +62,8 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     sha2::Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
 }
 
-// ── Self-Update ───────────────────────────────────────────────────────────────
-
 /// Returns a static platform string that matches the GitHub release asset names,
 /// e.g. "darwin-aarch64" → "wicklee-agent-darwin-aarch64".
-// The fallback "unknown" literal is unreachable on every supported platform —
-// suppress the warning rather than clutter with complex cfg(not(any(…))) guards.
 #[allow(unreachable_code)]
 pub(crate) fn agent_platform() -> &'static str {
     #[cfg(all(target_os = "macos",   target_arch = "aarch64"))]              { return "darwin-aarch64";      }
@@ -124,7 +114,6 @@ pub(crate) async fn check_and_apply_update(
     live_events:       Arc<Mutex<Vec<LiveActivityEvent>>>,
     recent_events_log: Arc<Mutex<std::collections::VecDeque<LiveActivityEvent>>>,
 ) {
-    // ── Sovereign Mode gate ────────────────────────────────────────────────────
     {
         let state = pairing_state.lock().unwrap();
         if state.cloud_session_token.is_none() {
@@ -153,7 +142,6 @@ pub(crate) async fn check_and_apply_update(
         Err(e) => { eprintln!("[update] client build failed: {e}"); return; }
     };
 
-    // ── Version check ──────────────────────────────────────────────────────────
     let url = format!("https://wicklee.dev/api/agent/version?platform={platform}");
     let resp = match client.get(&url).send().await {
         Ok(r) if r.status().is_success() => r,
@@ -182,9 +170,6 @@ pub(crate) async fn check_and_apply_update(
     };
     eprintln!("[update] update available: v{current} → v{new_version}  downloading...");
 
-    // ── Expected checksum (fail closed) ────────────────────────────────────────
-    // The release's SHA256SUMS must list this asset; a release without one is
-    // not installed. Protects against a truncated/corrupted/substituted download.
     let expected = match client.get(&sums_url).send().await {
         Ok(r) if r.status().is_success() => match r.text().await {
             Ok(t) => expected_sha256(&t, asset),
@@ -197,7 +182,6 @@ pub(crate) async fn check_and_apply_update(
         return;
     };
 
-    // ── Download binary ────────────────────────────────────────────────────────
     let download_resp = match client.get(&binary_url).send().await {
         Ok(r) if r.status().is_success() => r,
         Ok(r)  => { eprintln!("[update] download returned {}", r.status()); return; }
@@ -215,7 +199,6 @@ pub(crate) async fn check_and_apply_update(
         return;
     }
 
-    // Write to a sibling temp file so rename stays on the same filesystem.
     let current_exe = match std::env::current_exe() {
         Ok(p)  => p,
         Err(e) => { eprintln!("[update] could not resolve current exe: {e}"); return; }
@@ -231,7 +214,6 @@ pub(crate) async fn check_and_apply_update(
         return;
     }
 
-    // chmod +x on Unix (Windows exe bits are not a thing).
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -253,21 +235,16 @@ pub(crate) async fn check_and_apply_update(
         }
     }
 
-    // ── Atomic binary replacement via self-replace ─────────────────────────────
     if let Err(e) = self_replace::self_replace(&tmp_path) {
         eprintln!("[update] binary replacement failed: {e}");
         let _ = std::fs::remove_file(&tmp_path);
         return;
     }
-    // temp file is now the old binary — clean it up on best-effort basis.
     let _ = std::fs::remove_file(&tmp_path);
 
     let msg = format!("Wicklee agent updated v{current} → v{new_version}");
     eprintln!("[update] {msg}  restarting...");
 
-    // ── Emit Live Activity event ───────────────────────────────────────────────
-    // Push before restarting so the broadcaster picks it up in the next tick.
-    // Also push to recent_events_log so late-joining browsers see the update event.
     {
         let event = LiveActivityEvent {
             message:      msg.clone(),
@@ -275,19 +252,14 @@ pub(crate) async fn check_and_apply_update(
             level:        "info",
             event_type:   Some("update"),
         };
-        // Manual push here (not push_event) — the process restarts immediately
-        // after, so there is no store handle to persist to.  The event reaches
-        // connected browsers via the next broadcast tick before exit.
         live_events.lock().unwrap().push(event.clone());
         let mut log = recent_events_log.lock().unwrap();
         log.push_back(event);
         if log.len() > 20 { log.pop_front(); }
     }
 
-    // Give the broadcaster one full tick to drain the event to all WebSocket clients.
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    // ── Restart ────────────────────────────────────────────────────────────────
     let args: Vec<String> = std::env::args().skip(1).collect();
     match std::process::Command::new(&current_exe).args(&args).spawn() {
         Ok(_)  => std::process::exit(0),
@@ -315,7 +287,6 @@ mod update_integrity_tests {
         let sums = format!("{h}  wicklee-agent-linux-x86_64\n{}  wicklee-agent-linux-aarch64\n", "b".repeat(64));
         assert_eq!(expected_sha256(&sums, "wicklee-agent-linux-x86_64"), Some(h.clone()));
         assert_eq!(expected_sha256(&format!("{h} *win.exe"), "win.exe"), Some(h.clone()));
-        // Exact name match only; malformed digests are ignored.
         assert_eq!(expected_sha256(&sums, "wicklee-agent-linux-x86_64-nvidia"), None);
         assert_eq!(expected_sha256("xyz  wicklee-agent-linux-x86_64", "wicklee-agent-linux-x86_64"), None);
         assert_eq!(expected_sha256("", "a"), None);

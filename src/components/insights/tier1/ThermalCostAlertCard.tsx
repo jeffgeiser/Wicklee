@@ -23,19 +23,14 @@ import { Flame } from 'lucide-react';
 import type { SentinelMetrics } from '../../../types';
 import InsightCard from '../InsightCard';
 
-// ── Severity logic ─────────────────────────────────────────────────────────────
-
 type TCSeverity = 'info' | 'warning' | 'critical';
 
 function getSeverity(tcPct: number, rateOfChangePct: number): TCSeverity {
-  // Rate-of-change escalation: a ≥15pp rise in the recent window bumps severity up one level.
   const escalated = rateOfChangePct >= 15;
   if (tcPct >= 40 || (escalated && tcPct >= 25)) return 'critical';
   if (tcPct >= 25 || (escalated && tcPct >= 10)) return 'warning';
   return 'info';
 }
-
-// ── Props ─────────────────────────────────────────────────────────────────────
 
 interface Props {
   node: SentinelMetrics;
@@ -45,8 +40,6 @@ interface Props {
   rateOfChangePct?: number;
   showNodeHeader?: boolean;
 }
-
-// ── Component ─────────────────────────────────────────────────────────────────
 
 const ThermalCostAlertCard: React.FC<Props> = ({
   node,
@@ -96,7 +89,6 @@ const ThermalCostAlertCard: React.FC<Props> = ({
     >
       <div className="px-5 py-4 space-y-3">
 
-        {/* ── TC% badge + rate-of-change spike indicator ───────────────────── */}
         <div className="flex items-center gap-3 flex-wrap">
           <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-widest ${badgeCls}`}>
             TC% {tcPct}%
@@ -113,15 +105,12 @@ const ThermalCostAlertCard: React.FC<Props> = ({
           </p>
         </div>
 
-        {/* ── Description ──────────────────────────────────────────────────── */}
         <p className="text-sm text-gray-400 leading-relaxed">{description}</p>
 
-        {/* ── Hostname (fleet mode only) ───────────────────────────────────── */}
         {showNodeHeader && node.hostname && node.hostname !== node.node_id && (
           <p className="text-xs text-gray-500 font-mono">{node.hostname}</p>
         )}
 
-        {/* ── Recommendations ──────────────────────────────────────────────── */}
         <div className="pt-1 border-t border-gray-700">
           <p className="text-[10px] text-gray-500 uppercase tracking-widest font-semibold mb-1.5">
             Recommended

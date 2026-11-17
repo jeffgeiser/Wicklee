@@ -92,8 +92,6 @@ export const STATIC_PAGE_META: Record<string, PageMeta> = {
                  'tok/s probes, memory pressure, and the formulas behind them.',
     path:        '/metrics-reference',
   },
-  // Alias for old bookmarks — canonicalizes to /metrics-reference (the bare
-  // /metrics path is the Prometheus scrape endpoint on wicklee.dev).
   '/metrics': {
     title:       'Metrics Reference — Wicklee',
     description: 'Every metric Wicklee reports, defined: WES, thermal penalties, Model Fit, ' +

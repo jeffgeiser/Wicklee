@@ -15,7 +15,6 @@ export class DemoEventSource {
   private timer: ReturnType<typeof setInterval> | null = null;
 
   constructor(_url?: string) {
-    // First frame + open on the next tick so handlers are attached.
     setTimeout(() => {
       this.onopen?.();
       this.tick();
@@ -26,7 +25,7 @@ export class DemoEventSource {
   private tick() {
     try {
       this.onmessage?.({ data: JSON.stringify(demoFrame(Date.now())) });
-    } catch { /* never break the loop on a frame bug */ }
+    } catch { }
   }
 
   close() {

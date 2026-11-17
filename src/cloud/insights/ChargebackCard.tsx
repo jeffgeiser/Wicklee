@@ -94,7 +94,7 @@ const ChargebackCard: React.FC<Props> = ({ getToken, subscriptionTier, onNavigat
       a.download = `wicklee-chargeback-${g}-${days}d.csv`;
       a.click();
       URL.revokeObjectURL(url);
-    } catch { /* best-effort */ }
+    } catch { }
   };
 
   if (!isTeamOrAbove) {
@@ -151,7 +151,6 @@ const ChargebackCard: React.FC<Props> = ({ getToken, subscriptionTier, onNavigat
 
       {error && <p className="text-xs text-rose-400">{error}</p>}
 
-      {/* Totals strip */}
       {report && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           {[
@@ -168,7 +167,6 @@ const ChargebackCard: React.FC<Props> = ({ getToken, subscriptionTier, onNavigat
         </div>
       )}
 
-      {/* Grouping tabs */}
       <div className="flex items-center gap-1.5">
         {GROUPINGS.map(g => (
           <button
@@ -185,7 +183,6 @@ const ChargebackCard: React.FC<Props> = ({ getToken, subscriptionTier, onNavigat
         ))}
       </div>
 
-      {/* Rows */}
       {loading && !report ? (
         <p className="text-xs text-gray-600">Loading…</p>
       ) : rows.length === 0 ? (

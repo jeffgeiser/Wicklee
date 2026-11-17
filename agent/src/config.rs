@@ -3,8 +3,6 @@
 
 use super::*;
 
-// ── Fleet Pairing Types ───────────────────────────────────────────────────────
-
 /// Optional transparent proxy configuration.
 /// When enabled, the agent binds :11434 and forwards to Ollama on ollama_port.
 /// Provides zero-lag inference detection and exact tok/s from done packets.
@@ -181,7 +179,6 @@ pub(crate) fn config_path() -> PathBuf {
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
-        // Fallback for any other platform
         Path::new(".wicklee").join("config.toml")
     }
 }
@@ -190,10 +187,8 @@ pub(crate) fn config_path() -> PathBuf {
 pub(crate) fn legacy_config_path() -> Option<PathBuf> {
     #[cfg(unix)]
     {
-        // Try $HOME first; then derive from /etc/passwd for the effective uid.
         let home = std::env::var("HOME").ok().or_else(|| {
             let uid = unsafe { libc::getuid() };
-            // Real user's home — look up uid=500+ first; if root (0) skip migration.
             if uid == 0 { return None; }
             let pw = unsafe { libc::getpwuid(uid) };
             if pw.is_null() { return None; }
@@ -251,7 +246,6 @@ fn data_dir_from(override_dir: Option<&str>) -> PathBuf {
 ///
 /// Returns `None` when the platform ID is unavailable (some containers, live ISOs, etc.).
 pub(crate) fn hardware_machine_id() -> Option<String> {
-    // ── Linux ────────────────────────────────────────────────────────────────
     #[cfg(target_os = "linux")]
     {
         for path in &["/etc/machine-id", "/var/lib/dbus/machine-id"] {
@@ -264,7 +258,6 @@ pub(crate) fn hardware_machine_id() -> Option<String> {
         }
     }
 
-    // ── macOS ────────────────────────────────────────────────────────────────
     #[cfg(target_os = "macos")]
     {
         if let Ok(out) = std::process::Command::new("ioreg")
@@ -272,16 +265,13 @@ pub(crate) fn hardware_machine_id() -> Option<String> {
             .output()
         {
             let s = String::from_utf8_lossy(&out.stdout);
-            for line in s.lines() {
-                if line.contains("IOPlatformUUID") {
-                    // Line: "IOPlatformUUID" = "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"
-                    if let Some(end) = line.rfind('"') {
-                        let before = &line[..end];
-                        if let Some(start) = before.rfind('"') {
-                            let uuid = before[start + 1..].to_string();
-                            if uuid.len() >= 8 {
-                                return Some(uuid);
-                            }
+            for line in s.lines().filter(|l| l.contains("IOPlatformUUID")) {
+                if let Some(end) = line.rfind('"') {
+                    let before = &line[..end];
+                    if let Some(start) = before.rfind('"') {
+                        let uuid = before[start + 1..].to_string();
+                        if uuid.len() >= 8 {
+                            return Some(uuid);
                         }
                     }
                 }
@@ -289,7 +279,6 @@ pub(crate) fn hardware_machine_id() -> Option<String> {
         }
     }
 
-    // ── Windows ──────────────────────────────────────────────────────────────
     #[cfg(target_os = "windows")]
     {
         if let Ok(out) = std::process::Command::new("reg")
@@ -316,10 +305,10 @@ pub(crate) fn hardware_machine_id() -> Option<String> {
 /// (unlike `std::hash::DefaultHasher`). Same input always produces the same
 /// output, across processes and platforms.
 pub(crate) fn fnv1a_64(s: &str) -> u64 {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325; // FNV offset basis
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for &b in s.as_bytes() {
         hash ^= b as u64;
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3); // FNV prime
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
     hash
 }
@@ -348,7 +337,6 @@ pub(crate) fn generate_node_id() -> String {
     if let Some(hw_id) = hardware_machine_id() {
         return format!("WK-{:016X}", fnv1a_64(&hw_id));
     }
-    // Fallback: a fresh random 64-bit value (CSPRNG via uuid v4).
     let r = uuid::Uuid::new_v4();
     let bytes = r.as_bytes();
     let suffix = u64::from_be_bytes(bytes[0..8].try_into().unwrap());
@@ -358,16 +346,12 @@ pub(crate) fn generate_node_id() -> String {
 pub(crate) fn load_or_create_config() -> WickleeConfig {
     let path = config_path();
 
-    // ── Load from system-global path ─────────────────────────────────────────
     if path.exists()
         && let Ok(content) = std::fs::read_to_string(&path)
             && let Ok(cfg) = toml::from_str::<WickleeConfig>(&content) {
                 return cfg;
             }
 
-    // ── One-time migration from legacy ~/.wicklee/config.toml (pre-v0.4.37) ──
-    // If the system-global path doesn't exist yet but the user's home config
-    // does, copy it over so the node_id and fleet pairing are preserved.
     if let Some(legacy) = legacy_config_path()
         && let Ok(content) = std::fs::read_to_string(&legacy)
             && let Ok(cfg) = toml::from_str::<WickleeConfig>(&content) {
@@ -376,7 +360,6 @@ pub(crate) fn load_or_create_config() -> WickleeConfig {
                 return cfg;
             }
 
-    // ── First-run: generate a new identity ───────────────────────────────────
     let cfg = WickleeConfig { node_id: generate_node_id(), fleet_url: None, session_token: None, ollama_proxy: None, runtime_ports: None, bind_address: None, deployment_profile: None, probe: None, auth_token: None, allow_unauthenticated: None };
     save_config(&cfg);
     cfg
@@ -388,16 +371,10 @@ pub(crate) fn save_config(cfg: &WickleeConfig) {
         let _ = std::fs::create_dir_all(parent);
     }
     let Ok(content) = toml::to_string(cfg) else { return };
-    // Atomic write: write a sibling temp file, fsync, then rename over the
-    // target. A plain fs::write can truncate config.toml if the agent crashes
-    // mid-write, permanently losing the session_token / node identity. Rename
-    // is atomic on the same filesystem, so a reader always sees either the old
-    // or the new complete file.
     let tmp = path.with_extension("toml.tmp");
     {
         use std::io::Write;
         let Ok(mut f) = std::fs::File::create(&tmp) else { return };
-        // 0600 before the rename so the published file is never world-readable.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -445,8 +422,6 @@ mod data_dir_tests {
     fn absent_or_blank_falls_back_to_the_config_dir() {
         let default = config_path().parent().unwrap().to_path_buf();
         assert_eq!(data_dir_from(None), default);
-        // An exported-but-empty var is a shell accident, not a request to
-        // write the DB to the process's working directory.
         assert_eq!(data_dir_from(Some("")), default);
         assert_eq!(data_dir_from(Some("   ")), default);
     }
@@ -489,21 +464,17 @@ mod node_id_tests {
 
     #[test]
     fn fnv1a_is_deterministic_and_wide() {
-        // Same input → same hash (stable node id across restarts/reinstalls).
         let a = fnv1a_64("550e8400-e29b-41d4-a716-446655440000");
         let b = fnv1a_64("550e8400-e29b-41d4-a716-446655440000");
         assert_eq!(a, b);
-        // Distinct machine-ids → distinct hashes (no 16-bit folding collisions).
         assert_ne!(fnv1a_64("machine-a"), fnv1a_64("machine-b"));
     }
 
     #[test]
     fn node_id_suffix_is_64_bit_not_16_bit() {
-        // Two machine-ids that collided under the old 16-bit fold must now
-        // produce different 16-hex-digit ids.
         let id1 = format!("WK-{:016X}", fnv1a_64("/etc/machine-id:aaaa"));
         let id2 = format!("WK-{:016X}", fnv1a_64("/etc/machine-id:bbbb"));
         assert_ne!(id1, id2);
-        assert_eq!(id1.len(), 19); // "WK-" + 16 hex
+        assert_eq!(id1.len(), 19);
     }
 }

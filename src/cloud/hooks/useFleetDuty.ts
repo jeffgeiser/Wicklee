@@ -25,7 +25,7 @@ export interface FleetDutyData {
   nodes:         NodeDuty[];
 }
 
-const REFRESH_MS = 5 * 60 * 1_000; // 5 minutes
+const REFRESH_MS = 5 * 60 * 1_000;
 const CLOUD_BASE = 'https://wicklee.dev';
 
 export function useFleetDuty(
@@ -49,7 +49,7 @@ export function useFleetDuty(
         if (!cancelRef.current && res.ok) {
           setData(await res.json());
         }
-      } catch { /* network error — keep stale data */ }
+      } catch { }
     }
 
     load();

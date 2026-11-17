@@ -45,7 +45,6 @@ const InsightsLiteCard: React.FC<InsightsLiteCardProps> = ({
   return (
     <div className="bg-gray-800 border border-gray-700 rounded-2xl p-4 flex flex-col gap-3">
 
-      {/* Header */}
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
           <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 truncate">
@@ -57,10 +56,8 @@ const InsightsLiteCard: React.FC<InsightsLiteCardProps> = ({
         </span>
       </div>
 
-      {/* Lite content — caller controls what's shown */}
       <div>{children}</div>
 
-      {/* Upgrade CTA */}
       <button
         onClick={onUpgradeClick}
         className="text-xs text-indigo-500 hover:text-indigo-400 transition-colors text-left"

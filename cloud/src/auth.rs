@@ -2,8 +2,6 @@
 
 use crate::*;
 
-// ── Clerk JWT helpers ─────────────────────────────────────────────────────────
-
 /// Fetch JWKS from Clerk. Synchronous — call from spawn_blocking.
 pub(crate) fn fetch_jwks(url: &str) -> Vec<JwkKey> {
     match HTTP_AGENT.get(url).call() {
@@ -89,21 +87,12 @@ pub(crate) fn validate_clerk_jwt(token: &str, keys: &[JwkKey]) -> Option<(String
 
 /// Map a Clerk `sub` to an internal user ID, creating or linking the record as needed.
 pub(crate) async fn resolve_clerk_user(clerk_sub: &str, pool: &sqlx::PgPool) -> Option<String> {
-    // Already linked?
     if let Ok(row) = sqlx::query_scalar::<_, String>(
         "SELECT id FROM users WHERE clerk_id = $1"
     ).bind(clerk_sub).fetch_one(pool).await {
         return Some(row);
     }
 
-    // No "link the sole unmapped user" fallback. That DIY→Clerk migration
-    // shortcut attached the next NEW Clerk identity to whichever account had
-    // `clerk_id IS NULL` — and the public legacy signup route created exactly
-    // such accounts, so anyone could register a password account and capture
-    // the next stranger's Clerk sign-in (nodes, keys, billing). Migrating a
-    // legacy account now means setting `users.clerk_id` by hand.
-
-    // New Clerk user — create a minimal record.
     let new_id = Uuid::new_v4().to_string();
     let ts     = now_ms() as i64;
     let r = sqlx::query(
@@ -113,8 +102,6 @@ pub(crate) async fn resolve_clerk_user(clerk_sub: &str, pool: &sqlx::PgPool) -> 
     .execute(pool).await;
     if r.is_ok() { Some(new_id) } else { None }
 }
-
-// ── Auth helpers (async) ──────────────────────────────────────────────────────
 
 /// Validate a Bearer token and return the internal user_id.
 /// Tries the legacy sessions table first, then Clerk JWT.
@@ -157,9 +144,6 @@ impl OrgRole {
         match role.map(|r| r.strip_prefix("org:").unwrap_or(r)) {
             Some("admin")  => OrgRole::Admin,
             Some("viewer") => OrgRole::Viewer,
-            // "member", "basic_member", custom roles, or a missing claim on
-            // an org session → Member (least-privilege for Admin, but not
-            // read-only — Clerk always sends the role for org sessions).
             _ => OrgRole::Member,
         }
     }
@@ -193,9 +177,6 @@ pub(crate) async fn require_user_org_role(
     pool: &sqlx::PgPool,
     clerk_keys: &[JwkKey],
 ) -> Option<(String, Option<String>, OrgRole)> {
-    // Legacy DIY sessions — no org concept, full control of own resources.
-    // Only honored where password auth is enabled (no Clerk), and only for
-    // LEGACY_SESSION_TTL_MS after login; they used to be valid forever.
     if legacy_auth_enabled()
         && let Ok(id) = sqlx::query_scalar::<_, String>(
             "SELECT u.id FROM sessions s JOIN users u ON u.id = s.user_id
@@ -205,7 +186,6 @@ pub(crate) async fn require_user_org_role(
         return Some((id, None, OrgRole::Admin));
     }
 
-    // Clerk JWT — trust the signed org_id + role claims, never a header.
     let (sub, org_id, org_role) = validate_clerk_jwt(token, clerk_keys)?;
     let user_id = resolve_clerk_user(&sub, pool).await?;
     let role = OrgRole::from_claim(org_role.as_deref(), org_id.is_some());
@@ -319,15 +299,13 @@ pub(crate) fn legacy_auth_disabled() -> axum::response::Response {
 /// always enterprise (see is_self_hosted).
 pub(crate) async fn resolve_tier(user_id: &str, org_id: &Option<String>, pool: &sqlx::PgPool) -> String {
     if is_self_hosted() { return "enterprise".to_string(); }
-    if let Some(oid) = org_id {
-        // Org-level tier takes precedence
-        if let Ok(tier) = sqlx::query_scalar::<_, String>(
+    if let Some(oid) = org_id
+        && let Ok(tier) = sqlx::query_scalar::<_, String>(
             "SELECT subscription_tier FROM organizations WHERE org_id = $1"
-        ).bind(oid).fetch_one(pool).await {
-            return tier;
-        }
+        ).bind(oid).fetch_one(pool).await
+    {
+        return tier;
     }
-    // Fall back to user-level tier
     sqlx::query_scalar::<_, String>(
         "SELECT subscription_tier FROM users WHERE id = $1"
     ).bind(user_id).fetch_one(pool).await
@@ -347,8 +325,6 @@ pub(crate) async fn require_user_info(
     ).bind(&user_id).fetch_one(pool).await.ok()?;
     Some((user_id, row.0, row.1, org_id, role))
 }
-
-// ── Auth handlers ─────────────────────────────────────────────────────────────
 
 /// GET /api/auth/stream-token
 pub(crate) async fn handle_stream_token(
@@ -430,8 +406,6 @@ pub(crate) async fn handle_signup(
         return (StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": "Full name required" }))).into_response();
     }
-    // Signup emails are never verified, so the DEV_ACCOUNT_EMAIL address
-    // (which bypasses node limits) can't be claimed through this route.
     if is_dev_account(&email) {
         return (StatusCode::FORBIDDEN,
             Json(serde_json::json!({ "error": "This address can't be registered here" }))).into_response();
@@ -446,7 +420,6 @@ pub(crate) async fn handle_signup(
             Json(serde_json::json!({ "error": "Internal error" }))).into_response(),
     };
 
-    // Check for duplicate email.
     let exists: bool = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS(SELECT 1 FROM users WHERE email = $1)"
     ).bind(&email).fetch_one(&state.pool).await.unwrap_or(false);
@@ -575,8 +548,6 @@ mod scope_tag_tests {
 
     #[test]
     fn rejects_commas_wildcards_and_empties() {
-        // Commas would collide with the comma-separated nodes.tags storage;
-        // % could game the SQL LIKE match; empty/oversized are nonsense.
         assert!(!valid_scope_tag(""));
         assert!(!valid_scope_tag("a,b"));
         assert!(!valid_scope_tag("100%"));
@@ -591,15 +562,12 @@ mod rbac_tests {
 
     #[test]
     fn solo_users_are_admin_over_their_own_resources() {
-        // No org in the session → full control; tenancy scoping confines them.
         assert_eq!(OrgRole::from_claim(None, false), OrgRole::Admin);
-        // Even a stray role claim without an org doesn't demote a solo user.
         assert_eq!(OrgRole::from_claim(Some("org:viewer"), false), OrgRole::Admin);
     }
 
     #[test]
     fn clerk_role_claims_map_with_and_without_prefix() {
-        // v1 tokens carry "org:admin"; v2 nested claims carry bare "admin".
         assert_eq!(OrgRole::from_claim(Some("org:admin"), true), OrgRole::Admin);
         assert_eq!(OrgRole::from_claim(Some("admin"), true), OrgRole::Admin);
         assert_eq!(OrgRole::from_claim(Some("org:member"), true), OrgRole::Member);
@@ -610,11 +578,8 @@ mod rbac_tests {
 
     #[test]
     fn unknown_org_roles_default_to_member_never_admin() {
-        // A custom Clerk role must not be locked out of day-to-day work,
-        // and must never be silently escalated to Admin.
         assert_eq!(OrgRole::from_claim(Some("org:ops_oncall"), true), OrgRole::Member);
         assert_eq!(OrgRole::from_claim(Some("basic_member"), true), OrgRole::Member);
-        // Missing claim on an org session → Member (least privilege short of read-only).
         assert_eq!(OrgRole::from_claim(None, true), OrgRole::Member);
     }
 
@@ -635,13 +600,11 @@ mod tenancy_tests {
 
     #[test]
     fn tenant_scope_prefers_org_and_emits_only_safe_columns() {
-        // org_id present → scope by the org column, bind the org value.
         let org = Some("org_abc".to_string());
         let (col, val) = tenant_scope("user_1", &org);
         assert_eq!(col, "org_id");
         assert_eq!(val, "org_abc");
 
-        // No org → personal scope, excluding rows created inside an org.
         let none: Option<String> = None;
         let (col, val) = tenant_scope("user_1", &none);
         assert_eq!(col, "org_id IS NULL AND user_id");
@@ -650,12 +613,9 @@ mod tenancy_tests {
 
     #[test]
     fn tenant_scope_column_is_a_fixed_literal_not_caller_data() {
-        // The column name feeds a format!() into SQL, so it must never reflect
-        // caller-supplied text. Even an injection-shaped org value only ever
-        // changes the BIND value, never the column literal.
         let evil = Some("org_x'; DROP TABLE nodes;--".to_string());
         let (col, val) = tenant_scope("user_1", &evil);
-        assert_eq!(col, "org_id"); // literal, regardless of value
-        assert_eq!(val, "org_x'; DROP TABLE nodes;--"); // safely bound as $1
+        assert_eq!(col, "org_id");
+        assert_eq!(val, "org_x'; DROP TABLE nodes;--");
     }
 }
