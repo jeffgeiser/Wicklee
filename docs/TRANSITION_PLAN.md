@@ -99,10 +99,12 @@ Only after step 3 is live, so no public page links to the backend.
 
 1. **Claude Code:** confirm what a paired agent does when the backend is unreachable. `cloud_push.rs` must fail quietly, without log spam or retry storms. Fix it first if it does not.
 2. **Maintainer:** export anything worth keeping from Postgres.
-3. **Maintainer:** stop both Railway services and the database.
-4. **Claude Code:** delete the root `Dockerfile`, `nginx.conf`, `entrypoint.sh` and `railway.toml`. Narrow the Cloudflare Pages build to `src/site/` so dashboard routes are no longer shipped to the static site.
-5. **Claude Code:** sweep the two repository files that go false the moment the backend stops, neither of which any earlier step names. `README.md` was marked handled in PR #105, but that PR removed only the pricing table and the Fleet View section — Cloud MCP Tools, the Enterprise Bridge and fleet mode are still described as things you can use. `SECURITY.md` lists "the fleet backend at `wicklee.dev`" in scope for vulnerability reports, which is a promise to a reporter about a service that will not exist.
-6. **Maintainer:** check wicklee.dev end to end, then close the Railway project.
+3. **Claude Code, before any service stops:** narrow the Cloudflare Pages build to `src/site/` so dashboard routes are no longer shipped to the static site. This has to come first, not after. Measured 2026-11-17: `wicklee.dev` is Cloudflare *proxying to Railway*, not Pages serving — `x-railway-edge: jfk1` on every response, and an unlisted path returns 200 from nginx's `try_files` rather than the 404 Pages would give. So stopping Railway today takes the whole site down, not just `/api`. Worse, the Pages copy answers `/api/billing/status` with `text/html` and a 200 — the SPA shell — where Railway answers `application/json`. Any dashboard code still shipped to Pages would therefore receive a web page where it expects JSON and fail confusingly instead of cleanly. Removing it first means nothing on the static site calls the backend at all.
+4. **Maintainer:** point `wicklee.dev` at the `wicklee` Pages project instead of Railway (Pages → Custom domains, which rewrites the DNS record), then confirm every page loads, direct hits included. `wicklee.pages.dev` already serves the site, so the deployment exists; only the apex is still pointed at Railway.
+5. **Maintainer:** stop both Railway services and the database.
+6. **Claude Code:** delete the root `Dockerfile`, `nginx.conf`, `entrypoint.sh` and `railway.toml`.
+7. **Claude Code:** sweep the two repository files that go false the moment the backend stops, neither of which any earlier step names. `README.md` was marked handled in PR #105, but that PR removed only the pricing table and the Fleet View section — Cloud MCP Tools, the Enterprise Bridge and fleet mode are still described as things you can use. `SECURITY.md` lists "the fleet backend at `wicklee.dev`" in scope for vulnerability reports, which is a promise to a reporter about a service that will not exist.
+8. **Maintainer:** check wicklee.dev end to end, then close the Railway project.
 
 - **Done when:** wicklee.dev loads every page with Railway stopped, the built site contains no dashboard code, and no tracked file tells a reader to use or report against the hosted backend.
 
