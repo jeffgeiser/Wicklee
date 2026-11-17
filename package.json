@@ -11,12 +11,13 @@
     "postbuild": "node scripts/generate-static-pages.mjs",
     "build:agent": "tsc && vite build --mode agent",
     "build:demo": "tsc && vite build --mode demo",
-    "lint": "eslint .",
+    "lint": "eslint . --max-warnings 32",
     "test": "vitest run",
     "test:watch": "vitest",
     "preview": "vite preview --host 0.0.0.0 --port ${PORT:-3000}",
     "check:perplexity-sync": "node scripts/sync-perplexity.mjs --check",
     "check:scoring-sync": "node scripts/sync-scoring.mjs --check",
+    "check:invariants": "node scripts/check-invariants.mjs",
     "og:image": "node scripts/gen-og-image.mjs"
   },
   "dependencies": {
