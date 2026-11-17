@@ -13,7 +13,15 @@
 //                                    rule class tsc cannot catch and the reason
 //                                    this file exists
 //
-// Warnings fail CI (`--max-warnings 0`), so every rule here is one we mean.
+// Warnings do not fail CI on their own; the ceiling does. `npm run lint`
+// passes `--max-warnings 32`, which is the count at the time of writing, so
+// the warn-level set cannot grow without someone lowering the number or
+// raising it on purpose. Lower it as the triage in roadmap "Code Health"
+// clears items; a rule reaches zero and then becomes an error.
+//
+// This header previously claimed `--max-warnings 0` while CI ran a plain
+// `npx eslint .` and 32 warnings passed. The number above is checked by the
+// command, not by this comment.
 
 import js from '@eslint/js';
 import tseslint from 'typescript-eslint';

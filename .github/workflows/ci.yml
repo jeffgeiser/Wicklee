@@ -39,14 +39,23 @@ jobs:
       - name: Scoring module in sync (agent + cloud mirrors match shared/scoring.rs)
         run: npm run check:scoring-sync
 
+      # Invariants CLAUDE.md states in prose, as checks: the WES colour ladder
+      # has exactly one implementation, its frozen boundaries are intact, and
+      # every field the agent sends exists in the cloud struct and the frontend
+      # type. An inline copy of the ladder had already drifted to grey below 1
+      # while only the written instruction guarded it.
+      - name: Invariants (WES scale, MetricsPayload three-way sync)
+        run: npm run check:invariants
+
       - name: Typecheck
         run: npx tsc --noEmit
 
-      # Errors fail the job; warnings are visible in the log but don't block.
-      # The warn-level set (exhaustive-deps, unused locals, …) is triaged in
-      # roadmap "Code Health" — promote rules to error there as they clear.
+      # Errors fail the job. Warnings do not block individually, but the count
+      # is capped: `npm run lint` passes `--max-warnings 32`, the count at the
+      # time of writing, so the warn-level set cannot grow unnoticed. Lower the
+      # ceiling as roadmap "Code Health" clears items.
       - name: Lint
-        run: npx eslint .
+        run: npm run lint
 
       - name: Unit tests
         run: npx vitest run
@@ -57,6 +66,34 @@ jobs:
       # ~10s. Also the only place the code-split output is checked.
       - name: Build (cloud target + prerendered pages)
         run: npm run build
+
+  agent-windows:
+    name: Agent · clippy (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: agent
+
+      # Clippy only sees the cfg branches of the target it compiles for, so the
+      # `#[cfg(target_os = "windows")]` code in config.rs, hardware.rs and
+      # service.rs had never been linted by anything — a triple-nested if sat
+      # in the MachineGuid branch unreported. The Linux job cannot cover it and
+      # neither can a macOS run; this job is the only thing that reads it.
+      #
+      # Clippy, not tests: the Windows unit tests need a Windows-specific
+      # harness that does not exist yet, and the release workflow already
+      # builds this target.
+      - name: Clippy (-D warnings)
+        run: cargo clippy --all-targets -- -D warnings
+        working-directory: agent
 
   agent:
     name: Agent · cargo test
