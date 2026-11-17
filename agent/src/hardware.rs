@@ -321,10 +321,10 @@ pub(crate) fn start_rapl_harvester() -> Arc<Mutex<Option<f32>>> {
         let shared_clone = Arc::clone(&shared);
         tokio::spawn(async move {
             let mut domains = discover_rapl_domains();
-            if domains.is_empty() {
-                if let Some((path, _)) = RAPL_PATHS.iter().find(|(p, _)| read_rapl_uj(p).is_some()) {
-                    domains.push((*path).to_string());
-                }
+            if domains.is_empty()
+                && let Some((path, _)) = RAPL_PATHS.iter().find(|(p, _)| read_rapl_uj(p).is_some())
+            {
+                domains.push((*path).to_string());
             }
             if domains.is_empty() { return; }
 
