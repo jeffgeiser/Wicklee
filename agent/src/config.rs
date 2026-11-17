@@ -286,13 +286,11 @@ pub(crate) fn hardware_machine_id() -> Option<String> {
             .output()
         {
             let s = String::from_utf8_lossy(&out.stdout);
-            for line in s.lines() {
-                if line.contains("MachineGuid") {
-                    if let Some(guid) = line.split_whitespace().last() {
-                        if guid.len() >= 8 {
-                            return Some(guid.to_string());
-                        }
-                    }
+            for line in s.lines().filter(|l| l.contains("MachineGuid")) {
+                if let Some(guid) = line.split_whitespace().last()
+                    && guid.len() >= 8
+                {
+                    return Some(guid.to_string());
                 }
             }
         }

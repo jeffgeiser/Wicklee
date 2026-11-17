@@ -1084,7 +1084,13 @@ async fn main() {
     };
     let _ = &metrics_store;
 
+    // Evicting a previous instance is Unix-only (try_evict_port uses signals),
+    // so on Windows this binding has no reader and the loop body always breaks
+    // or returns. It stays a loop because the Unix retry needs somewhere to
+    // continue to.
+    #[cfg(not(target_os = "windows"))]
     let mut eviction_attempted = false;
+    #[cfg_attr(target_os = "windows", allow(clippy::never_loop))]
     let listener = loop {
         let bind_addr = config.bind_address.as_deref().unwrap_or("127.0.0.1");
         match tokio::net::TcpListener::bind(format!("{bind_addr}:{port}")).await {
