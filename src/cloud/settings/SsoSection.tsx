@@ -36,8 +36,6 @@ const SSO_GUIDE = 'https://github.com/jeffgeiser/Wicklee/blob/main/docs/SSO.md';
 const SsoSection: React.FC<Props> = ({ subscriptionTier, onNavigateToPricing }) => {
   const isEnterprise = isBusinessTier(subscriptionTier);
 
-  // /health reports self_hosted only on self-hosted deployments; it is
-  // unauthenticated and returns no platform stats.
   const [selfHosted, setSelfHosted] = useState<boolean | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -48,7 +46,6 @@ const SsoSection: React.FC<Props> = ({ subscriptionTier, onNavigateToPricing }) 
         const j = await r.json() as { self_hosted?: boolean };
         if (!cancelled) setSelfHosted(!!j.self_hosted);
       } catch {
-        /* leave null — the panel simply omits the deployment-specific line */
       }
     })();
     return () => { cancelled = true; };

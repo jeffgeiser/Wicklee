@@ -20,7 +20,7 @@ import EventFeed from './EventFeed';
 import MetricTooltip from './MetricTooltip';
 import RuntimeConfigModal from './RuntimeConfigModal';
 
-import { IS_LOCAL_HOST as isLocalHost, IS_AGENT as isLocalMode } from '../utils/buildTarget'; // isLocalMode: Cockpit vs Mission Control, a build-time flag
+import { IS_LOCAL_HOST as isLocalHost, IS_AGENT as isLocalMode } from '../utils/buildTarget';
 
 /**
  * GPU utilisation thresholds for the four-state TOK/S display:
@@ -57,14 +57,9 @@ function estimateTps(
   gpuUtil:         number | null,
   inferenceActive: boolean | null | undefined,
 ): number | null {
-  if (peak == null) return rawTps;                             // no history yet — use raw as-is
+  if (peak == null) return rawTps;
   const frac = (gpuUtil ?? 0) / 100;
-  // Prefer /api/ps signal; fall back to GPU% heuristic when not yet available
   const underLoad = inferenceActive != null ? inferenceActive : (gpuUtil ?? 0) >= 40;
-  // rawTps is null only when the probe was skipped (GPU ≥ 40% threshold).
-  // In that case, estimate current throughput as peak × gpu_fraction.
-  // When rawTps IS available, use it directly — adding peak × frac on top would
-  // double-count (the probe already measured performance at the current GPU load).
   if (rawTps == null) return underLoad && frac > 0 ? peak * frac : null;
   return rawTps;
 }
@@ -91,14 +86,8 @@ interface OverviewProps {
 }
 
 
-// Minimum tok/s required before a cost sample enters any rolling buffer.
-// During Ollama startup the probe may read ~0.001 tok/s while GPU power is
-// already at full draw — producing $/1M spikes in the thousands that take
-// minutes to flush from the rolling window. 0.1 tok/s blocks ramp-up noise
-// while still allowing genuinely slow/quantized models.
 const MIN_COST_TPS = 0.1;
 
-// ── Insight Engine tile — uniform across all 8 fleet-header cells ────────────
 interface InsightTileProps {
   label: React.ReactNode;
   value: string;
@@ -128,25 +117,15 @@ const InsightTile: React.FC<InsightTileProps> = ({ label, value, valueCls, value
   </div>
 );
 
-// ── Fleet Status grid ────────────────────────────────────────────────────────
-// Full column set (md+): NODE · MEMORY · VRAM · MODEL · WES · TOK/W · TOK/S · W/1K · WATTS · TTFT · GPU% · THERMAL · SPACER
-// Responsive priority — always visible: NODE, MODEL, WES, TOK/S
-//   sm+  adds: THERMAL
-//   md+  adds: MEMORY, VRAM, TOK/W, W/1K, WATTS, TTFT, GPU%
-// SPACER (1fr) absorbs excess space on wide screens.
 const FLEET_GRID_CLS = [
   'grid gap-x-3 items-center',
-  // mobile: NODE · MODEL · WES · TOK/S · SPACER
   '[grid-template-columns:140px_200px_80px_80px_1fr]',
-  // sm: + THERMAL
   'sm:[grid-template-columns:140px_200px_80px_80px_100px_1fr]',
-  // md: full set — TTFT added between WATTS and GPU%
   'md:[grid-template-columns:140px_120px_100px_200px_80px_65px_80px_80px_80px_60px_80px_100px_1fr]',
 ].join(' ');
 
 const FS_HDR = 'text-[9px] font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-600 leading-none whitespace-nowrap';
 
-// ── Column header row ─────────────────────────────────────────────────────────
 const FleetStatusHeader: React.FC = () => (
   <div className={`${FLEET_GRID_CLS} px-4 py-2 border-b border-gray-100 dark:border-gray-700/60`}>
     <p className={`${FS_HDR} sticky left-4 bg-white dark:bg-gray-800`}>NODE</p>
@@ -257,8 +236,6 @@ const FleetStatusHeader: React.FC = () => (
   </div>
 );
 
-// ── Restricted-node UI components ────────────────────────────────────────────
-
 const RestrictedNodeBanner: React.FC<{ hostname: string; onUpgrade: () => void }> = ({ hostname, onUpgrade }) => (
   <div className="flex items-center gap-3 px-4 py-3 bg-amber-500/5 border border-amber-500/20 rounded-xl">
     <Lock className="w-4 h-4 text-amber-400 shrink-0" />
@@ -293,7 +270,6 @@ const LockedMetricTile: React.FC<{ label: string }> = ({ label }) => (
   </div>
 );
 
-// ── Single-row node entry — all detail visible at a glance ────────────────────
 interface NodeRowProps {
   nodeId: string;
   hostname: string;
@@ -310,56 +286,36 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
   const [expanded, setExpanded] = useState(false);
   const isOnline = m !== null;
 
-  // Rolling-average smoothing for fleet rows. Fleet SSE arrives at 2s cadence
-  // (vs 100ms for local WS), so we use FLEET_ROW_ROLLING_WINDOW (4 samples = 8s)
-  // instead of the default 8-sample window (which would be 16s at 2s cadence).
   const { pushOne, resetAll } = useNodeRollingMetrics(isLocalHost ? NODE_ROLLING_WINDOW : FLEET_ROW_ROLLING_WINDOW);
   const wasOnlineRef = useRef(true);
   if (!isOnline && wasOnlineRef.current) resetAll();
   wasOnlineRef.current = isOnline;
   const tsMs = m?.timestamp_ms ?? 0;
 
-  // 3-state reachability dot
   const dotState: 'online' | 'offline' | 'pending' =
     lastSeenMs != null
       ? (Date.now() - lastSeenMs <= NODE_REACHABLE_MS ? 'online' : 'offline')
-      : m != null ? 'online'   // localhost: sentinel present, no lastSeenMs
+      : m != null ? 'online'
       : 'pending';
   const dotTooltip =
     dotState === 'online'  ? 'Online · last seen just now' :
     dotState === 'offline' ? `Unreachable · last seen ${fmtAgo(lastSeenMs!)}` :
     'Pending · waiting for first report';
 
-  // Combine Ollama and vLLM tok/s — both runtimes can run simultaneously.
   const rawOllamaTps = m?.ollama_tokens_per_second ?? null;
   const rawVllmTps   = m?.vllm_tokens_per_sec ?? null;
   const rawTps       = rawOllamaTps != null && rawVllmTps != null ? rawOllamaTps + rawVllmTps
                      : (rawOllamaTps ?? rawVllmTps);
-  // GPU utilisation used for throughput estimation (covers both NVIDIA and Apple Silicon)
   const gpuPctForEst = m?.nvidia_gpu_utilization_percent ?? m?.gpu_utilization_percent ?? null;
-  // Smoothed probe reading, then apply throughput estimation. When the probe
-  // is depressed (background inference) or null (lockup), estimateTps fills
-  // the gap using the session peak × GPU utilisation.
-  // Write into the shared smoothing store so MFA + Strip see the same
-  // value, then prefer that smoothed value if a fresh sample exists.
-  // Falls back to the row-local pushOne for the rare case where this row
-  // mounts before any shared-store consumer.
   const smoothedTpsShared = pushAndGetSmoothed(nodeId, 'tps', rawTps, tsMs);
   const smoothedTps       = smoothedTpsShared ?? pushOne('tps', rawTps, tsMs);
   const inferenceActive = m?.ollama_inference_active ?? null;
-  // For estimation: override inferenceActive when inference_state signals an active runtime.
-  // During 'idle-spd', ollama_inference_active may be false (no /api/ps trigger seen) even
-  // though Ollama is loaded and the probe recently ran. Force underLoad=true so estimateTps
-  // can fall back to peak×gpu_frac when the probe was skipped (GPU ≥ 40%).
   const inferenceActiveForEst = (m?.inference_state === 'live' || m?.inference_state === 'idle-spd')
     ? true
     : inferenceActive;
   const tps          = estimateTps(smoothedTps, peakTps ?? null, gpuPctForEst, inferenceActiveForEst);
   const isActive     = isOnline && tps != null && tps > 0;
 
-  // Four-state TOK/S display — Silicon Truth hierarchy.
-  // v0.4.37+ agents: use authoritative inference_state from agent (dumb mirror).
-  // Pre-v0.4.37 agents: field absent → fall back to locally computed logic.
   const isProbing   = m?.ollama_is_probing === true;
   const hasState    = m?.inference_state != null;
   const isInferring = hasState
@@ -368,40 +324,30 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
         inferenceActive === true ||
         (m?.vllm_running === true && (m?.vllm_requests_running ?? 0) > 0)
       );
-  // ~ prefix only when tok/s is a pure GPU%-based estimate (no real measurement available)
   const isEstimated = smoothedTps == null && tps != null;
   const isBusy      = hasState
     ? m!.inference_state === 'busy'
     : isOnline && !isProbing && inferenceActive === false && (gpuPctForEst ?? 0) >= GPU_BUSY_THRESHOLD;
-  // isIdleSpeed: do NOT require tps != null when hasState — probe may have been skipped
-  // (GPU ≥ 40%) leaving tps null even though inference_state is 'idle-spd'. Badge should
-  // still show; value renders as '—' or an estimate if peak + GPU data are available.
   const isIdleSpeed = hasState
     ? m!.inference_state === 'idle-spd'
     : isOnline && !isInferring && !isBusy && smoothedTps != null;
 
-  // Thermal — not smoothed (state machine, not a continuous signal)
   const nvThermal  = m && m.thermal_state == null ? derivedNvidiaThermal(m.nvidia_gpu_temp_c ?? null) : null;
   const thermalStr = m?.thermal_state ?? nvThermal?.label ?? null;
   const thermalCls = m?.thermal_state != null ? thermalColour(m.thermal_state) : (nvThermal?.colour ?? 'text-gray-400');
   const thermalWarn = thermalStr != null && !['normal', 'nominal'].includes(thermalStr.toLowerCase());
 
-  // Power — hasPower is an availability flag (raw); totalPowerW is smoothed for display
   const hasPower    = m ? hasPowerData(m) : false;
   const rawTotalW   = m ? getNodePowerW(m) : null;
-  // Same shared-store pattern for watts.
   const sharedWatts = pushAndGetSmoothed(nodeId, 'watts', hasPower ? rawTotalW : null, tsMs);
   const totalPowerW = sharedWatts ?? pushOne('watts', hasPower ? rawTotalW : null, tsMs) ?? 0;
 
-  // WES — only when actively inferencing
   const wes    = isActive ? computeWES(tps, hasPower ? totalPowerW : null, m?.thermal_state ?? null, pue) : null;
   const rawWes = isActive ? computeRawWES(tps, hasPower ? totalPowerW : null, pue) : null;
   const tcPct  = thermalCostPct(rawWes, wes);
 
-  // Memory / VRAM
   const hasNvidia = m?.nvidia_vram_total_mb != null && m.nvidia_vram_total_mb >= INFERENCE_VRAM_THRESHOLD_MB;
   const memLabel  = hasNvidia ? 'VRAM' : 'Memory';
-  // memory_pressure_percent is Apple Silicon only; fall back to used/total for Linux nodes.
   const memPctRaw = hasNvidia
     ? ((m!.nvidia_vram_used_mb ?? 0) / m!.nvidia_vram_total_mb!) * 100
     : m?.memory_pressure_percent ??
@@ -416,7 +362,6 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
     : memPct >= 70 ? 'bg-amber-400'
     : 'bg-green-400';
 
-  // Runtime detection — both can run simultaneously; prefer first available for model label
   const hasOllama = isOnline && m?.ollama_running === true;
   const hasVllm   = isOnline && m?.vllm_running   === true;
   const modelStr  = !isOnline ? '—'
@@ -424,27 +369,16 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
     : hasVllm   ? (m!.vllm_model_name    ?? 'vLLM')
     : 'No runtime';
 
-  // Model Fit Score — computed at render time from live SSE payload, no new data required.
-  // Only computed when Ollama is running and metrics are present.
   const fitResult = (hasOllama && m) ? computeModelFitScore(m) : null;
 
-  // VRAM — NVIDIA only; Apple Silicon unified memory is architecturally distinct.
-  // memory_pressure_percent is strictly Apple Silicon (IOKit/powermetrics) — reliable platform detector.
   const isAppleSilicon = m?.memory_pressure_percent != null;
   const vramPctRaw = hasNvidia
     ? ((m!.nvidia_vram_used_mb ?? 0) / m!.nvidia_vram_total_mb!) * 100
     : null;
   const vramPct     = vramPctRaw != null ? Math.round(vramPctRaw * 10) / 10 : null;
-  // GB values for X.X/Y display — consistent with Apple Silicon used/limit format.
   const vramUsedGb  = m?.nvidia_vram_used_mb  != null ? (m.nvidia_vram_used_mb  / 1024).toFixed(1) : null;
   const vramTotalGb = m?.nvidia_vram_total_mb != null ? Math.round(m.nvidia_vram_total_mb / 1024)  : null;
 
-  // Apple Silicon GPU budget — iogpu.wired_limit_mb (exact, from agent sysctl)
-  // falls back to 75% of total RAM for older agents that don't emit the field.
-  // available_memory_mb (free + inactive pages) is how much the OS can still wire
-  // for a model load; capped at wired_limit_mb to avoid overstating headroom.
-  // Treat gpu_wired_limit_mb === 0 the same as null — agent sends 0 when the
-  // sysctl probe fails on some macOS versions; fall back to the 75% estimate.
   const wiredLimitMb = (m?.gpu_wired_limit_mb != null && m.gpu_wired_limit_mb > 0)
     ? m.gpu_wired_limit_mb
     : (isAppleSilicon && m != null ? Math.round(m.total_memory_mb * 0.75) : null);
@@ -456,8 +390,6 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
     : null;
   const gpuAvailGb  = gpuAvailMb  != null ? (gpuAvailMb  / 1024).toFixed(1) : null;
   const gpuLimitGb  = wiredLimitMb != null ? Math.round(wiredLimitMb / 1024) : null;
-  // gpuUsedGb: wired memory actually consumed — matches the tile aggregator's
-  // (budget − avail) formula so the row value and the fleet tile are always in sync.
   const gpuUsedGb   = (wiredLimitMb != null && gpuAvailMb != null)
     ? ((wiredLimitMb - gpuAvailMb) / 1024).toFixed(1)
     : null;
@@ -472,7 +404,6 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
     : gpuUsedPct >= 65 ? 'bg-amber-400'
     : 'bg-green-400';
 
-  // Tooltip explains why — differs by platform/install method
   const vramTooltip = hasNvidia
     ? `NVIDIA dedicated VRAM utilisation — ${vramPct}%`
     : isAppleSilicon
@@ -487,15 +418,9 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
     : vramPct >= 70 ? 'bg-amber-400'
     : 'bg-green-400';
 
-  // W/1K — watts per 1,000 tokens: (watts ÷ tps) × 1000. Lower = more efficient.
-  // Matches the Insight Engine "W/1K TKN" tile formula so row values are directly
-  // comparable to the fleet aggregate shown in the header.
   const nodeWattsPerKTok = (isActive && hasPower && totalPowerW > 0)
     ? (totalPowerW / tps!) * 1000
     : null;
-  // GPU% — Apple Silicon via IOKit/AGX, NVIDIA via NVML
-  // GPU% — smoothed through the same rolling buffer as watts/tps to dampen
-  // probe residency spikes (IOKit GPU% can spike to 45-60% during the 20-token probe).
   const gpuRaw = isOnline
     ? (m!.nvidia_gpu_utilization_percent ?? m!.gpu_utilization_percent ?? null)
     : null;
@@ -504,7 +429,6 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
 
   const V = `text-xs font-telin ${!isOnline ? 'text-gray-400 dark:text-gray-600' : ''}`;
 
-  // Condensed tooltip on NODE cell — surfaces columns hidden at narrow viewports
   const nodeTooltip = [
     modelStr !== '—' && modelStr !== 'No runtime' ? modelStr : null,
     hasPower && isOnline ? `${totalPowerW.toFixed(1)}W` : null,
@@ -517,7 +441,6 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
       onClick={() => setExpanded(e => !e)}
       className={`group ${FLEET_GRID_CLS} px-4 py-3 min-h-[44px] hover:bg-gray-50/50 dark:hover:bg-gray-700/30 transition-colors cursor-pointer${dotState === 'offline' ? ' opacity-50' : ''}`}
     >
-      {/* 1. NODE — status dot + ID + hostname (sticky) */}
       <div className="flex items-center gap-2 overflow-hidden sticky left-4 bg-white dark:bg-gray-800 group-hover:bg-gray-50/50 dark:group-hover:bg-gray-700/30" title={nodeTooltip || undefined}>
         <span className="relative flex h-2 w-2 shrink-0" title={dotTooltip}>
           {dotState === 'online' ? (
@@ -552,10 +475,6 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
         </div>
       </div>
 
-      {/* 2. MEMORY / VRAM
-          Memory column = live utilization only (memory_used, memory_pressure_%).
-          Memory Pressure Forecasting (rate-of-change → ETA to critical) is a Phase 4A Insights tab feature.
-          Do not add predictive/forecast logic to this column. */}
       <div
         className="hidden md:block min-w-0 overflow-hidden"
         title={hasNvidia
@@ -574,13 +493,11 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
         )}
       </div>
 
-      {/* 2b. VRAM — NVIDIA: percentage bar; Apple Silicon: "Unified" badge; CPU-only: — */}
       <div
         className="hidden md:block min-w-0 overflow-hidden"
         title={vramTooltip}
       >
         {vramPct != null ? (
-          // NVIDIA: used/total GB + mini bar — same format as Apple Silicon for consistency.
           <div className="flex items-center gap-1.5">
             <span className={`text-xs font-telin tabular-nums ${vramColorCls}`}>
               {vramUsedGb != null && vramTotalGb != null
@@ -592,9 +509,6 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
             </div>
           </div>
         ) : isAppleSilicon && gpuUsedGb != null && gpuLimitGb != null ? (
-          // Apple Silicon: used / wired-limit GB — matches tile aggregator (budget − avail).
-          // Headroom (gpuAvailGb) is surfaced in the tooltip, not the cell, to avoid
-          // the previous confusion where the row showed "available" and the tile showed "used".
           <div className="flex items-center gap-1.5">
             <span className={`text-xs font-telin tabular-nums ${unifiedColorCls}`}>
               {gpuUsedGb}<span className="text-gray-500 text-[10px]">/{gpuLimitGb}</span>
@@ -604,18 +518,15 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
             </div>
           </div>
         ) : (
-          // CPU-only or no data
           <span className="text-xs font-telin text-gray-500 dark:text-gray-600">—</span>
         )}
       </div>
 
-      {/* 3. MODEL — model name + fit score dot + vLLM cache usage when available */}
       <div className="min-w-0 overflow-hidden flex flex-col gap-0.5">
         <div className="flex items-center gap-1.5 min-w-0">
           <p className={`${V} truncate ${!isOnline || (!hasOllama && !hasVllm) ? 'text-gray-500' : 'text-gray-700 dark:text-gray-300'}`}>
             {modelStr}
           </p>
-          {/* Fit score dot — colored indicator with full reason in tooltip */}
           {fitResult && (
             <span
               className={`shrink-0 inline-block w-1.5 h-1.5 rounded-full ${
@@ -634,7 +545,6 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
         )}
       </div>
 
-      {/* 4. WES */}
       {restricted ? (
         <LockedMetricTile label="WES" />
       ) : (
@@ -660,7 +570,6 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
         </div>
       )}
 
-      {/* 4b. TOK/W — raw tok/s ÷ watts, same as WES when Normal thermal */}
       <div className="hidden md:block overflow-hidden">
         <span
           className={`${V} font-semibold ${rawWes != null ? wesColorClass(rawWes) : 'text-gray-500 dark:text-gray-600'}`}
@@ -672,8 +581,6 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
         </span>
       </div>
 
-      {/* 5. TOK/S */}
-      {/* 5. TOK/S — three-state: LIVE (green ~), IDLE-SPD (gray baseline), BUSY (amber last-probe) */}
       {restricted ? (
         <LockedMetricTile label="TOK/S" />
       ) : (
@@ -711,7 +618,6 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
         </div>
       )}
 
-      {/* 6. W/1K — watts per 1,000 tokens. Lower is better. Null when watts or tok/s unavailable. */}
       <div className="hidden md:block min-w-0 overflow-hidden" title="Watts per 1,000 tokens — power cost per unit of throughput. Lower is more efficient.">
         {nodeWattsPerKTok != null ? (
           <span className={`${V} text-gray-700 dark:text-gray-300`}>
@@ -722,7 +628,6 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
         )}
       </div>
 
-      {/* 7. WATTS */}
       <div className="hidden md:block min-w-0 overflow-hidden">
         <span
           className={`${V} ${hasPower && isOnline ? 'text-gray-700 dark:text-gray-300' : 'text-gray-500 dark:text-gray-600'}`}
@@ -732,7 +637,6 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
         </span>
       </div>
 
-      {/* 7b. TTFT — best available (vLLM histogram > proxy rolling > Ollama probe) */}
       <div className="hidden md:block min-w-0 overflow-hidden" title="Time to first token — latency from request to first generated token.">
         {(() => {
           const ttft = m?.vllm_avg_ttft_ms ?? m?.ollama_proxy_avg_ttft_ms ?? m?.ollama_ttft_ms ?? null;
@@ -742,7 +646,6 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
         })()}
       </div>
 
-      {/* 8. GPU% — Apple Silicon (IOKit/AGX) or NVIDIA (NVML); no progress bar */}
       <div className="hidden md:block min-w-0 overflow-hidden" title="GPU core utilisation. Source: NVML (NVIDIA) or IOKit AGX (Apple Silicon).">
         {gpuPctDisplay != null ? (
           <span className={`${V} text-gray-700 dark:text-gray-300`}>
@@ -753,7 +656,6 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
         )}
       </div>
 
-      {/* 9. THERMAL — pill badge */}
       <div className="hidden sm:block min-w-0 overflow-hidden">
         {isOnline && thermalStr ? (
           <span
@@ -767,20 +669,17 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
         )}
       </div>
 
-      {/* SPACER — chevron indicator */}
       <div className="flex justify-end">
         <ChevronDown className={`w-3 h-3 text-gray-600 transition-transform ${expanded ? 'rotate-180' : ''}`} />
       </div>
     </div>
 
-    {/* ── Expanded detail panel — only shows metrics applicable to this node ── */}
     {expanded && isOnline && m && (() => {
       const isVllm  = m.vllm_running === true;
       const isOllama = m.ollama_running === true;
       const hasProxy = m.ollama_proxy_active === true;
       const ttftSource = m.vllm_avg_ttft_ms != null ? 'vllm' : m.ollama_proxy_avg_ttft_ms != null ? 'proxy' : m.ollama_ttft_ms != null ? 'probe' : null;
 
-      // Runtime label — both can run simultaneously on the same node
       const runtimeLabel = isOllama && isVllm ? 'Ollama + vLLM'
         : isOllama ? 'Ollama'
         : isVllm   ? 'vLLM'
@@ -790,15 +689,11 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
       return (
         <div className="px-6 py-3 bg-gray-900/40 border-b border-gray-700/60">
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-x-6 gap-y-2 text-xs">
-            {/* Runtime + agent version — always first */}
             <DetailCell label="Runtime" value={runtimeLabel}
               tooltip="Inference runtime detected on this node. Wicklee supports Ollama, vLLM, and llama.cpp — a node can run more than one simultaneously." />
             <DetailCell label="Agent" value={m.agent_version ?? null}
               tooltip="Wicklee agent version running on this node. If behind fleet majority, the Agent Version Mismatch observation will fire." />
 
-            {/* v0.9.0: Runtime Config pill — single-model case. Shows only when
-                the active model has a cached config on the agent. Multi-model
-                nodes get per-row Config links in the Active Models panel. */}
             {m.runtime_config_available === true
               && (!m.active_models || m.active_models.length <= 1)
               && (m.ollama_active_model || m.vllm_model_name)
@@ -814,7 +709,6 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
               </div>
             )}
 
-            {/* Always show TTFT + thermal source */}
             <DetailCell label="TTFT" value={m.vllm_avg_ttft_ms ?? m.ollama_proxy_avg_ttft_ms ?? m.ollama_ttft_ms} unit="ms" source={ttftSource}
               tooltip="Time To First Token — latency from request arrival to first generated token. Source: vLLM histogram (production), proxy rolling avg (production), or Ollama probe (synthetic 20-token baseline every ~30s). Lower is more responsive." />
             <DetailCell label="Thermal Source" value={m.thermal_source}
@@ -822,13 +716,11 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
             <DetailCell label="Swap Write" value={m.swap_write_mb_s} unit="MB/s"
               tooltip="Swap write rate — data being written to disk swap. > 2 MB/s sustained means model layers are spilling from RAM to disk, degrading inference throughput. 0 is ideal." />
 
-            {/* Ollama-specific */}
             {isOllama && <DetailCell label="Load Duration" value={m.ollama_load_duration_ms} unit="ms"
               tooltip="Time Ollama spent loading the model into memory on the last probe request. High values (> 1000ms) indicate cold starts or model swaps. Once loaded, subsequent requests show near-zero." />}
             {isOllama && <DetailCell label="Prefill Speed" value={m.ollama_prompt_eval_tps} unit="tok/s"
               tooltip="Prompt processing speed — how fast Ollama evaluates the input prompt before generating output. Measured from the 20-token probe's prompt_eval_duration. Higher is better; depends on prompt length and model size." />}
 
-            {/* vLLM-specific */}
             {isVllm && <DetailCell label="E2E Latency" value={m.vllm_avg_e2e_latency_ms} unit="ms"
               tooltip="Average end-to-end request latency from vLLM's Prometheus histogram. Includes queue wait + prefill + generation. Real production data from actual requests, not synthetic." />}
             {isVllm && <DetailCell label="Queue Time" value={m.vllm_avg_queue_time_ms} unit="ms"
@@ -840,7 +732,6 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
             {isVllm && <DetailCell label="KV Cache" value={m.vllm_cache_usage_perc} unit="%"
               tooltip="vLLM KV cache utilization — the percentage of GPU memory reserved for attention key-value pairs that is currently in use. > 90% means the scheduler can't admit new sequences. Pattern M fires at this threshold." />}
 
-            {/* Proxy-specific */}
             {hasProxy && <DetailCell label="E2E Latency" value={m.ollama_proxy_avg_latency_ms} unit="ms"
               tooltip="Average end-to-end latency from Wicklee proxy done packets. Measures total_duration from actual user requests flowing through the proxy. Real production data." />}
             {hasProxy && <DetailCell label="Proxy Requests" value={m.ollama_proxy_request_count} unit="total"
@@ -850,12 +741,10 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
                 tooltip={`Proxy listens on :${m.proxy_listen_port} (Ollama default) and forwards to :${m.proxy_target_port} (real Ollama). Clients connect to :${m.proxy_listen_port} with no config changes.`} />
             )}
 
-            {/* Clock throttle — only on platforms that report it */}
             {m.clock_throttle_pct != null && <DetailCell label="Clock Throttle" value={m.clock_throttle_pct} unit="%"
               tooltip="Percentage of clock speed reduction from maximum. 0% = running at full speed. > 15% during active inference with Normal thermal state suggests a power cap or driver limit, not heat (Pattern K)." />}
           </div>
 
-          {/* Multi-model breakdown (shown when 2+ models loaded) */}
           {m.active_models && m.active_models.length > 1 && (() => {
             const totalVramBudget = m.nvidia_vram_total_mb ?? m.gpu_wired_limit_mb ?? 0;
             const usedVram = m.active_models!.reduce((s, am) => s + (am.vram_mb ?? 0), 0);
@@ -884,7 +773,6 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
                   </div>
                 ))}
               </div>
-              {/* VRAM Budget Bar */}
               {totalVramBudget > 0 && (
                 <div className="mt-3">
                   <div className="flex items-center justify-between text-[10px] text-gray-500 mb-1">
@@ -958,7 +846,6 @@ const DetailCell: React.FC<{
   );
 };
 
-// ── WES breakdown tooltip (browser title attr) ───────────────────────────────
 function wesBreakdownTitle(
   tps: number | null,
   watts: number | null,
@@ -990,9 +877,6 @@ function wesBreakdownTitle(
   return lines.join('\n');
 }
 
-// HexHive imported from src/components/shared/HexHive.tsx
-
-// ── Fleet Intelligence card wrapper ───────────────────────────────────────────
 const FleetCard: React.FC<{
   label: React.ReactNode;
   children: React.ReactNode;
@@ -1006,7 +890,6 @@ const FleetCard: React.FC<{
   </div>
 );
 
-// ── Empty state for hosted with no paired nodes ───────────────────────────────
 const EmptyFleetState: React.FC<{ onAddNode?: () => void }> = ({ onAddNode }) => (
   <div className="flex flex-col items-center justify-center py-24 text-center space-y-10 animate-in fade-in duration-500">
     <div className="space-y-3 max-w-sm">
@@ -1052,9 +935,6 @@ const EmptyFleetState: React.FC<{ onAddNode?: () => void }> = ({ onAddNode }) =>
   </div>
 );
 
-// ── Live Diagnostic Rail — agent build only, replaces Fleet Status ──
-// Renders 4 live rows (CPU · GPU · Mem Pressure · Board Power) fed by the 1 Hz
-// SSE/WebSocket stream. Replaces the fleet table when isLocalMode is true.
 interface RailRowProps {
   label:     string;
   value:     string;
@@ -1104,7 +984,6 @@ const DiagnosticRail: React.FC<{
   transport: 'ws' | 'sse' | null;
   peakTps?: number;
 }> = ({ sentinel: s, transport, peakTps }) => {
-  // Rolling-average buffers — must be declared before any early returns (Rules of Hooks)
   const cpuBuf   = useRollingBuffer();
   const gpuBuf   = useRollingBuffer();
   const memBuf   = useRollingBuffer();
@@ -1136,23 +1015,17 @@ const DiagnosticRail: React.FC<{
   const powerW   = powerBuf.push(powerRaw, tsMs) ?? powerRaw;
   const hasPow   = hasPowerData(s);
 
-  // TOK/S — same three-state logic as FleetStatusRow
   const rawOllamaTps    = s.ollama_tokens_per_second ?? null;
   const rawVllmTps      = s.vllm_tokens_per_sec ?? null;
   const rawTps          = rawOllamaTps != null && rawVllmTps != null ? rawOllamaTps + rawVllmTps
                         : (rawOllamaTps ?? rawVllmTps);
   const inferenceActive = s.ollama_inference_active ?? null;
   const smoothedTps     = tpsBuf.push(rawTps, tsMs) ?? rawTps;
-  // For estimation: when inference_state signals 'live' or 'idle-spd', treat as under load
-  // so estimateTps can provide a peak×gpu_frac estimate when the probe was skipped (GPU ≥ 40%).
-  // ollama_inference_active can be false/null during IDLE-SPD because it tracks /api/ps
-  // expires_at changes, not the runtime-loaded state — so we override it here.
   const inferenceActiveForEst = (s.inference_state === 'live' || s.inference_state === 'idle-spd')
     ? true
     : inferenceActive;
   const tps             = estimateTps(smoothedTps, peakTps ?? null, gpuPct, inferenceActiveForEst);
 
-  // Same Silicon Truth hierarchy as FleetStatusRow — dumb mirror when inference_state present.
   const isProbing    = s.ollama_is_probing === true;
   const hasState     = s.inference_state != null;
   const isInferring  = hasState
@@ -1165,9 +1038,6 @@ const DiagnosticRail: React.FC<{
   const isBusy       = hasState
     ? s.inference_state === 'busy'
     : !isProbing && !isInferring && inferenceActive === false && (gpuPct ?? 0) >= GPU_BUSY_THRESHOLD;
-  // isIdleSpeed: do NOT require tps != null — the agent may have skipped the probe (GPU ≥ 40%)
-  // so tps can be null even when inference_state is 'idle-spd'. The badge should still show;
-  // the value will display as '—' or an estimate if peak + GPU data is available.
   const isIdleSpeed  = hasState
     ? s.inference_state === 'idle-spd'
     : !isInferring && !isBusy && smoothedTps != null;
@@ -1180,19 +1050,15 @@ const DiagnosticRail: React.FC<{
 
   const cpu = utilCls(cpuPct);
 
-  // ── Collect all metrics into a flat array, then split evenly across 2 columns ──
   const items: React.ReactNode[] = [];
 
-  // CPU
   items.push(<RailRow key="cpu" label="CPU Usage" value={`${cpuPct.toFixed(1)}%`} pct={cpuPct} textCls={cpu.text} barCls={cpu.bar} />);
 
-  // GPU
   if (gpuPct != null) {
     const g = utilCls(gpuPct);
     items.push(<RailRow key="gpu" label="GPU Utilization" value={`${gpuPct.toFixed(1)}%`} pct={gpuPct} textCls={g.text} barCls={g.bar} />);
   }
 
-  // Tok/s
   if (hasTps) {
     if (isInferring) {
       items.push(<RailRow key="tps" label="Tok/s" value={tps != null ? (isEstimated ? `~${tps.toFixed(1)}` : tps.toFixed(1)) : '—'} textCls="text-green-400" barCls="bg-green-400" badge="live" badgeCls="text-green-500" />);
@@ -1205,18 +1071,15 @@ const DiagnosticRail: React.FC<{
     }
   }
 
-  // Memory Pressure
   if (memPct != null) {
     const m = utilCls(memPct);
     items.push(<RailRow key="mem" label="Memory Pressure" value={`${memPct.toFixed(1)}%`} pct={memPct} textCls={m.text} barCls={m.bar} />);
   }
 
-  // Board Power
   if (hasPow) {
     items.push(<RailRow key="pow" label="Board Power" value={`${powerW.toFixed(1)} W`} textCls="text-amber-400" barCls="bg-amber-400" />);
   }
 
-  // TTFT
   {
     const ttft = s.vllm_avg_ttft_ms ?? s.ollama_proxy_avg_ttft_ms ?? s.ollama_ttft_ms ?? null;
     if (ttft != null) {
@@ -1226,7 +1089,6 @@ const DiagnosticRail: React.FC<{
     }
   }
 
-  // Thermal
   if (s.thermal_state != null) {
     const state = s.thermal_state;
     const cls = state === 'Critical' ? 'text-red-400' : state === 'Serious' ? 'text-red-400' : state === 'Fair' ? 'text-amber-400' : 'text-green-400';
@@ -1234,7 +1096,6 @@ const DiagnosticRail: React.FC<{
     items.push(<RailRow key="therm" label="Thermal" value={state} textCls={cls} barCls="bg-transparent" badge={penalty} badgeCls={state === 'Normal' ? 'text-gray-600' : cls} />);
   }
 
-  // E2E Latency
   {
     const lat = s.vllm_avg_e2e_latency_ms ?? s.ollama_proxy_avg_latency_ms ?? null;
     if (lat != null) {
@@ -1243,7 +1104,6 @@ const DiagnosticRail: React.FC<{
     }
   }
 
-  // Swap Write
   if (s.swap_write_mb_s != null) {
     const raw = swapBuf.push(s.swap_write_mb_s, tsMs) ?? s.swap_write_mb_s;
     const pct = Math.min((raw / 500) * 100, 100);
@@ -1251,39 +1111,32 @@ const DiagnosticRail: React.FC<{
     items.push(<RailRow key="swap" label="Swap Write" value={`${raw.toFixed(1)} MB/s`} pct={pct > 0 ? pct : undefined} textCls={cls.text} barCls={cls.bar} />);
   }
 
-  // Load Duration (Ollama)
   if (s.ollama_load_duration_ms != null) {
     items.push(<RailRow key="load" label="Load Duration" value={s.ollama_load_duration_ms < 1000 ? `${Math.round(s.ollama_load_duration_ms)}ms` : `${(s.ollama_load_duration_ms / 1000).toFixed(1)}s`} textCls={s.ollama_load_duration_ms < 500 ? 'text-emerald-400' : s.ollama_load_duration_ms < 2000 ? 'text-yellow-400' : 'text-red-400'} barCls="bg-transparent" tooltip="Time Ollama spent loading the model into memory." />);
   }
 
-  // Prefill Speed (Ollama)
   if (s.ollama_prompt_eval_tps != null) {
     items.push(<RailRow key="prefill" label="Prefill Speed" value={`${s.ollama_prompt_eval_tps.toFixed(1)} tok/s`} textCls="text-blue-400" barCls="bg-transparent" tooltip="Prompt processing speed." />);
   }
 
-  // Clock Throttle
   if (s.clock_throttle_pct != null) {
     const pct = Math.min(s.clock_throttle_pct, 100);
     const cls = pct > 50 ? { text: 'text-red-400', bar: 'bg-red-400' } : pct > 20 ? { text: 'text-amber-400', bar: 'bg-amber-400' } : { text: 'text-gray-400', bar: 'bg-gray-500' };
     items.push(<RailRow key="clk" label="Clk Throttle" value={`${pct.toFixed(0)}%`} pct={pct} textCls={cls.text} barCls={cls.bar} />);
   }
 
-  // vLLM Queue Depth
   if (s.vllm_running && s.vllm_requests_waiting != null && s.vllm_requests_waiting > 0) {
     items.push(<RailRow key="queue" label="Queue Depth" value={`${s.vllm_requests_waiting}`} textCls={s.vllm_requests_waiting > 10 ? 'text-red-400' : s.vllm_requests_waiting > 3 ? 'text-amber-400' : 'text-green-400'} barCls="bg-transparent" badge="waiting" badgeCls="text-gray-600" />);
   }
 
-  // vLLM KV Cache
   if (s.vllm_running && s.vllm_cache_usage_perc != null) {
     items.push(<RailRow key="kv" label="KV Cache" value={`${s.vllm_cache_usage_perc.toFixed(1)}%`} pct={s.vllm_cache_usage_perc} textCls={s.vllm_cache_usage_perc > 90 ? 'text-red-400' : s.vllm_cache_usage_perc > 70 ? 'text-amber-400' : 'text-green-400'} barCls={s.vllm_cache_usage_perc > 90 ? 'bg-red-400' : s.vllm_cache_usage_perc > 70 ? 'bg-amber-400' : 'bg-green-400'} />);
   }
 
-  // vLLM Running
   if (s.vllm_running && s.vllm_requests_running != null && s.vllm_requests_running > 0) {
     items.push(<RailRow key="running" label="Running" value={`${s.vllm_requests_running} req`} textCls="text-green-400" barCls="bg-transparent" />);
   }
 
-  // Split items evenly across two columns
   const mid = Math.ceil(items.length / 2);
   const col1 = items.slice(0, mid);
   const col2 = items.slice(mid);
@@ -1296,7 +1149,6 @@ const DiagnosticRail: React.FC<{
   );
 };
 
-// ── Main component ─────────────────────────────────────────────────────────────
 const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairingInfo, onOpenPairing, onAddNode, onUpgrade, getNodeSettings, fleetKwhRate = ELECTRICITY_RATE_USD_PER_KWH, onNavigateToObservability, onNavigateToInsights }) => {
   const {
     allNodeMetrics: cloudMetrics,
@@ -1307,12 +1159,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
     transport: cloudTransport,
   } = useFleetStream();
 
-  // Local-only state (used when isLocalHost for WS/SSE to the local agent)
   const [sentinel, setSentinel] = useState<SentinelMetrics | null>(null);
-  // v0.9.0: Runtime Config modal — null when closed, otherwise the model name to inspect.
   const [runtimeConfigModel, setRuntimeConfigModel] = useState<string | null>(null);
-  // Shared local-agent stream (WS primary, SSE fallback) — see useLocalMetricsStream.
-  // handleMetrics is declared below; it is only called from stream callbacks.
   const { connected: localConnected, transport: localTransport } =
     useLocalMetricsStream(data => handleMetrics(data));
 
@@ -1320,13 +1168,12 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
   interface HistoryPoint { time: string; gpu: number | null; cpu: number; mem: number | null; power: number | null; tps: number | null; }
   const [history, setHistory]           = useState<HistoryPoint[]>([]);
   const [selectedMetric, setSelectedMetric] = useState<MetricKey>('gpu');
-  const MAX_HISTORY = 3600; // 1 hour at 1 Hz — cloud unlocks longer history ranges
+  const MAX_HISTORY = 3600;
 
   const [metricOpen, setMetricOpen] = useState(false);
   const metricDropdownRef = useRef<HTMLDivElement>(null);
   const [showActiveOnly, setShowActiveOnly] = useState(false);
 
-  // ── Cost by Model (localhost, Pro+ feature) ──────────────────────────────
   interface CostByModelEntry { model: string | null; hours_active: number | null; avg_watts: number | null; cost_usd: number | null; tok_s_avg: number | null; sample_count: number }
   const [costByModel, setCostByModel] = useState<CostByModelEntry[]>([]);
   const [costByModelTotal, setCostByModelTotal] = useState(0);
@@ -1340,49 +1187,32 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
         const data = await res.json();
         setCostByModel(data.models ?? []);
         setCostByModelTotal(data.total_cost_usd ?? 0);
-      } catch { /* agent may not support this endpoint yet */ }
+      } catch { }
     };
     fetchCost();
-    const id = setInterval(fetchCost, 60_000); // refresh every 60s
+    const id = setInterval(fetchCost, 60_000);
     return () => clearInterval(id);
   }, []);
 
-  // Local peak tok/s tracker — mirrors FleetStreamContext's peakTpsRef but for the
-  // local WS node, which never passes through the fleet SSE loop.
-  // Without this, peakTpsMap[sentinel.node_id] is always undefined on localhost,
-  // causing estimateTps to short-circuit and return the raw probe value (no GPU boost).
   const localPeakTpsRef   = useRef<number | null>(null);
   const localPeakModelRef = useRef<string | null>(null);
 
-  // Fleet-level rolling-average buffers (5-sample window, display-layer only).
-  // Placed here (before the early returns below) so hooks are always called
-  // unconditionally per the Rules of Hooks.
-  // Volatile metrics (tok/s-derived): longer window (12) damps 30-s probe noise
-  // while still updating visibly across ~2 probe cycles (~60 s).
-  // Steadier metrics (raw watts, power cost): default node window (8) is fine.
-  const fleetTpsBuf     = useRollingBuffer(FLEET_ROLLING_WINDOW); // Tile 1: fleet throughput
-  const wattPer1kBuf    = useRollingBuffer(4);                    // Tile 6: W / 1k tokens — short window; converges quickly when fleet composition changes
-  const fleetWesBuf     = useRollingBuffer(FLEET_ROLLING_WINDOW); // Tile 5 + Fleet Intelligence WES card
-  const fleetTokWBuf    = useRollingBuffer(FLEET_ROLLING_WINDOW); // Tile 8: tok/W (raw, no penalty)
-  const costPer1kNewBuf = useRollingBuffer(FLEET_ROLLING_WINDOW); // Fleet Intelligence cost card
+  const fleetTpsBuf     = useRollingBuffer(FLEET_ROLLING_WINDOW);
+  const wattPer1kBuf    = useRollingBuffer(4);
+  const fleetWesBuf     = useRollingBuffer(FLEET_ROLLING_WINDOW);
+  const fleetTokWBuf    = useRollingBuffer(FLEET_ROLLING_WINDOW);
+  const costPer1kNewBuf = useRollingBuffer(FLEET_ROLLING_WINDOW);
 
-  // Per-node cost rolling average — keyed by nodeId, managed via Map ref so
-  // hook count doesn't grow with fleet size (hooks must be called unconditionally).
   const nodeCostBufsRef = useRef<Map<string, { buf: number[]; lastTs: number }>>(new Map());
 
-  // Unified connected / transport for rendering (local uses own state, cloud uses context)
   const connected = isLocalHost ? localConnected : cloudConnected;
   const transport = isLocalHost ? localTransport : cloudTransport;
 
-  // Local event watcher — generates FleetEvents from single-node metric deltas
-  // and live_activities embedded in the MetricsPayload. Only active on localhost.
   const localEvents = useLocalEvents(
     isLocalHost ? sentinel : null,
     isLocalHost ? localConnected : false,
   );
 
-  // Active event list: local mode uses localEvents; cloud mode uses fleetEvents from context.
-  // Merge on localhost in case a future cloud pairing also pushes events here.
   const activeEvents = isLocalHost
     ? [...localEvents, ...fleetEvents].slice(0, 50)
     : fleetEvents;
@@ -1395,7 +1225,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
         time:  lbl,
         gpu:   data.nvidia_gpu_utilization_percent ?? data.gpu_utilization_percent ?? null,
         cpu:   data.cpu_usage_percent,
-        // memory_pressure_percent is Apple Silicon only; fall back to used/total for Linux.
         mem:   data.memory_pressure_percent ??
                (data.total_memory_mb > 0 ? (data.used_memory_mb / data.total_memory_mb) * 100 : null),
         power: getNodePowerW(data),
@@ -1410,11 +1239,10 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
     setSentinel(data);
     pushHistoryPoint(data);
 
-    // Update local peak tok/s so DiagnosticRail estimateTps can apply the GPU boost.
     const rawTps   = data.ollama_tokens_per_second ?? data.vllm_tokens_per_sec ?? null;
     const curModel = data.ollama_active_model ?? data.vllm_model_name ?? null;
     if (localPeakModelRef.current !== curModel) {
-      localPeakTpsRef.current = null; // reset peak on model swap
+      localPeakTpsRef.current = null;
     }
     localPeakModelRef.current = curModel;
     if (rawTps != null && rawTps > 0 && rawTps > (localPeakTpsRef.current ?? 0)) {
@@ -1423,11 +1251,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
   }, [pushHistoryPoint]);
 
 
-  // Feed cloud metrics into the history buffer for the System Performance chart.
-  // Fleet-wide aggregation: average CPU/GPU/mem across all reporting nodes, sum power.
-  // GPU check uses both field names so Apple Silicon (gpu_utilization_percent) and
-  // NVIDIA (nvidia_gpu_utilization_percent) nodes both contribute — nodes with neither
-  // field are excluded from the GPU average but do not drop the series.
   const prevCloudMetricsRef = useRef<Record<string, SentinelMetrics>>({});
   useEffect(() => {
     if (isLocalHost) return;
@@ -1444,29 +1267,24 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
     const d = new Date(latestTs);
     const lbl = `${d.getMinutes().toString().padStart(2, '0')}:${d.getSeconds().toString().padStart(2, '0')}`;
 
-    // GPU — check both Apple Silicon and NVIDIA field names; exclude nodes where both are null
     const gpuVals = all
       .map(m => m.nvidia_gpu_utilization_percent ?? m.gpu_utilization_percent ?? null)
       .filter((v): v is number => v != null);
     const gpu = gpuVals.length > 0 ? gpuVals.reduce((a, b) => a + b, 0) / gpuVals.length : null;
 
-    // CPU — average across all nodes
     const cpu = all.reduce((a, m) => a + m.cpu_usage_percent, 0) / all.length;
 
-    // Memory — average across nodes that report pressure or used/total
     const memVals = all
       .map(m => m.memory_pressure_percent ??
         (m.total_memory_mb > 0 ? (m.used_memory_mb / m.total_memory_mb) * 100 : null))
       .filter((v): v is number => v != null);
     const mem = memVals.length > 0 ? memVals.reduce((a, b) => a + b, 0) / memVals.length : null;
 
-    // Power — total draw across all nodes that report any power metric.
     const powerVals = all
       .map(m => getNodePowerW(m))
       .filter((v): v is number => v != null);
     const power = powerVals.length > 0 ? powerVals.reduce((a, b) => a + b, 0) : null;
 
-    // Tok/s — sum across all nodes that report throughput (fleet aggregate).
     const tpsVals = all
       .map(m => m.ollama_tokens_per_second ?? m.vllm_tokens_per_sec ?? m.llamacpp_tokens_per_sec ?? null)
       .filter((v): v is number => v != null);
@@ -1479,7 +1297,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
     });
   }, [cloudMetrics]);
 
-  // Close metric dropdown on outside click
   useEffect(() => {
     if (!metricOpen) return;
     const handler = (e: MouseEvent) => {
@@ -1489,34 +1306,20 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
     return () => document.removeEventListener('mousedown', handler);
   }, [metricOpen]);
 
-  // allNodeMetrics / lastSeenMsMap: unified references for local vs cloud
   const allNodeMetrics = isLocalHost
     ? (sentinel ? { [sentinel.node_id ?? 'local']: sentinel } : {})
     : cloudMetrics;
   const lastSeenMsMap = cloudLastSeen;
 
-  // Single source of truth for all registered-node counts.
-  // Must be called before any early returns (Rules of Hooks).
   const counts = useFleetCounts(nodes);
 
 
-  // Prune the shared smoothing-store buffers when the fleet roster shrinks.
-  // Reads from `allNodeMetrics` (declared just above) so this hook lives
-  // ABOVE the early-return for nodesLoading — keeping the hook count
-  // stable across loading and loaded renders. Without this placement React
-  // throws "rendered more hooks than during the previous render" on the
-  // load → loaded transition (Error #310 in production).
   const liveNodeIdsKey = Object.keys(allNodeMetrics).sort().join(',');
   useEffect(() => {
     pruneBuffers(Object.keys(allNodeMetrics));
-  // Re-runs when the SET of node ids changes (key concatenation), not on
-  // every render where the same set arrives in a new array reference.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveNodeIdsKey]);
 
-  // While the initial fleet fetch is in-flight (nodesLoading), show a blank
-  // loading screen rather than EmptyFleetState — avoids the "Add your first node"
-  // flash on every page refresh for users who already have nodes paired.
   if (!isLocalHost && nodesLoading) {
     return (
       <div className="flex items-center justify-center py-32 animate-in fade-in duration-300">
@@ -1532,26 +1335,18 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
     return <EmptyFleetState onAddNode={onAddNode} />;
   }
 
-  // ── Fleet-wide metric computations (all 8 Insight Engine tiles) ─────────────
   const liveMetrics: SentinelMetrics[] = Object.values(allNodeMetrics);
-  // Set of restricted node IDs — used to exclude them from fleet aggregates.
   const restrictedIds = new Set(nodes.filter(n => n.restricted).map(n => n.id));
-  // effectiveMetrics: handles localhost sentinel mode + hosted fleet mode uniformly.
-  // Restricted nodes are excluded from all fleet aggregate calculations.
   const effectiveMetrics: SentinelMetrics[] = isLocalHost
     ? (sentinel ? [sentinel] : [])
     : liveMetrics.filter(m => !restrictedIds.has(m.node_id));
 
-  // Tile 1 — THROUGHPUT: ∑ estimated tok/s across inference-active nodes (Ollama + vLLM).
-  // Both runtimes are not mutually exclusive — a node can run both simultaneously.
-  // tpsNodes includes nodes with a live raw reading OR a peak+GPU estimate (covers lockup case).
   const hasAnyOllama = effectiveMetrics.some(m => m.ollama_running);
   const hasAnyVllm   = effectiveMetrics.some(m => m.vllm_running);
   const tpsNodes     = effectiveMetrics.filter(m => {
     const hasRaw = (m.ollama_running && m.ollama_tokens_per_second != null) ||
                    (m.vllm_running   && m.vllm_tokens_per_sec      != null);
     if (hasRaw) return true;
-    // Include nodes where peak + GPU utilisation gives a meaningful estimate.
     const peak = peakTpsMap[m.node_id] ?? null;
     const gpu  = m.nvidia_gpu_utilization_percent ?? m.gpu_utilization_percent ?? null;
     return peak != null && (gpu ?? 0) > 0;
@@ -1560,7 +1355,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
     ? tpsNodes.reduce((acc, m) => {
         const rawCombined    = (m.ollama_tokens_per_second ?? 0) + (m.vllm_tokens_per_sec ?? 0) || null;
         const gpu            = m.nvidia_gpu_utilization_percent ?? m.gpu_utilization_percent ?? null;
-        // Same inference_state-aware underLoad as DiagnosticRail / FleetStatusRow
         const infActiveForEst = (m.inference_state === 'live' || m.inference_state === 'idle-spd')
           ? true
           : (m.ollama_inference_active ?? null);
@@ -1568,8 +1362,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
       }, 0)
     : null;
 
-  // Whether any node is actively serving real user inference.
-  // v0.4.37+: use authoritative inference_state field; fallback to computed logic.
   const anyInferring = tpsNodes.some(m =>
     m.inference_state != null
       ? m.inference_state === 'live'
@@ -1577,13 +1369,10 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
         (m.vllm_running === true && (m.vllm_requests_running ?? 0) > 0)
   );
 
-  // Three-state throughput label for the single-node cockpit THROUGHPUT tile.
-  // Mirrors the DiagnosticRail / FleetStatusRow logic — reuses sentinel so no new data needed.
   const localGpuPct = sentinel
     ? (sentinel.nvidia_gpu_utilization_percent ?? sentinel.gpu_utilization_percent ?? null)
     : null;
   const localInferenceActive = sentinel?.ollama_inference_active ?? null;
-  // Silicon Truth: dumb mirror when inference_state present; fallback for pre-v0.4.37 agents.
   const localIsProbing    = sentinel?.ollama_is_probing === true;
   const localHasState     = sentinel?.inference_state != null;
   const localIsInferring  = localHasState
@@ -1596,7 +1385,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
     ? sentinel!.inference_state === 'busy'
     : sentinel != null && !localIsProbing && !localIsInferring &&
       localInferenceActive === false && (localGpuPct ?? 0) >= GPU_BUSY_THRESHOLD;
-  // IDLE-SPD covers both probe-running (localIsProbing=true) and genuine idle with a baseline.
   const localIsIdleSpeed  = localHasState
     ? sentinel!.inference_state === 'idle-spd'
     : sentinel != null && !localIsInferring && !localIsBusy && (tpsNodes.length > 0);
@@ -1604,9 +1392,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
     ? sentinel!.inference_state === 'idle'
     : sentinel != null && !localIsInferring && !localIsBusy && !localIsIdleSpeed;
 
-  // Tile 2 — FLEET HEALTH: % nodes in Normal/Fair thermal state
-  // Total registered nodes (includes offline) for the denominator in cloud mode.
-  // Excludes restricted nodes so the count matches effectiveMetrics' filter.
   const totalRegisteredNodes = isLocalHost
     ? (sentinel ? 1 : 0)
     : nodes.filter(n => !n.restricted).length;
@@ -1616,22 +1401,14 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
     : fleetHealthPct >= 75                             ? 'text-amber-600 dark:text-amber-500'
     :                                                    'text-red-600 dark:text-red-500';
 
-  // Tile 3 — TOTAL FLEET VRAM: utilization % + used / capacity
-  // Includes NVIDIA discrete VRAM + Apple Silicon GPU budget (iogpu.wired_limit_mb).
-  // CPU-only Linux/Windows nodes are excluded (no GPU memory to report).
   const totalVramMb         = calculateTotalVramMb(effectiveMetrics);
   const totalVramCapacityMb = calculateTotalVramCapacityMb(effectiveMetrics);
   const vramUtilPct         = totalVramCapacityMb > 0
     ? Math.round((totalVramMb / totalVramCapacityMb) * 100) : null;
   const vramUsedGB     = (totalVramMb / 1024).toFixed(1);
   const vramCapacityGB = (totalVramCapacityMb / 1024).toFixed(1);
-  // Subtitle hint — shared helper keeps Insight Engine + Node Registry in sync.
   const vramSubHint = fleetVramSubtitle(effectiveMetrics);
 
-  // Apple Silicon wired-budget for NODE VRAM tile (isLocalMode only).
-  // Mirrors FleetStatusRow: wired_limit_mb (exact from sysctl) or 75% of total RAM fallback.
-  // available_memory_mb (free + inactive pages) is capped at wired_limit to avoid overstating.
-  // gpu_wired_limit_mb === 0 means the sysctl probe failed — treat as null and use the estimate.
   const localIsAppleSilicon = sentinel?.memory_pressure_percent != null;
   const localWiredLimitMb = (sentinel?.gpu_wired_limit_mb != null && sentinel.gpu_wired_limit_mb > 0)
     ? sentinel.gpu_wired_limit_mb
@@ -1646,12 +1423,10 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
     ? (localWiredLimitMb / 1024).toFixed(1)
     : null;
 
-  // ── Fleet Memory Pressure — system RAM utilisation across all online nodes ──
   const fleetMemPressure = (() => {
     let totalUsedMb = 0;
     let totalCapMb  = 0;
     for (const m of effectiveMetrics) {
-      // Prefer NVIDIA VRAM for GPU nodes, system RAM otherwise
       if (m.nvidia_vram_total_mb != null && m.nvidia_vram_total_mb > 0 && m.nvidia_vram_used_mb != null) {
         totalUsedMb += m.nvidia_vram_used_mb;
         totalCapMb  += m.nvidia_vram_total_mb;
@@ -1663,14 +1438,10 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
     return totalCapMb > 0 ? Math.round((totalUsedMb / totalCapMb) * 100) : null;
   })();
 
-  // NODE MEMORY display value — for Apple Silicon localhost prefer the OS memory_pressure_percent
-  // (kernel's true pressure metric) over the derived (total−avail)/total ratio.
-  // Both are valid but memory_pressure_percent matches the DiagnosticRail and is more actionable.
   const displayMemPressure = (isLocalMode && sentinel?.memory_pressure_percent != null)
     ? Math.round(sentinel.memory_pressure_percent)
     : fleetMemPressure;
 
-  // Tiles 5-7 — WES leaderboard + fleet average
   interface WESEntry { nodeId: string; hostname: string; activeModel: string | null; wes: number | null; rawWes: number | null; tcPct: number; tps: number | null; watts: number | null; thermalState: string | null; thermalSource: string | null; nullReason: string; costPer1mRaw: number | null; kwhRate: number; }
   const wesEntries: WESEntry[] = effectiveMetrics.map(m => {
     const _ollamaTps = m.ollama_tokens_per_second ?? null;
@@ -1688,17 +1459,10 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
     const rawWes   = computeRawWES(tps, watts, pue);
     const tcPct    = thermalCostPct(rawWes, wes);
     const nullReason = tps == null || tps <= 0 ? 'no inference' : !hasWatts ? 'no power data' : '';
-    // Raw $/1M tokens: ($/hr facility cost) / (M tokens/hr throughput)
-    //   $/hr         = watts × pue × kwhRate / 1000   (W → kW → $/hr)
-    //   M tokens/hr  = tps × 3600 / 1,000,000 = tps × 0.0036
-    //   $/1M         = (watts × pue × kwhRate / 1000) / (tps × 0.0036)
-    //                = (watts × pue × kwhRate) / (tps × 3.6)
     const costPer1mRaw = (tps != null && tps > 0 && watts != null)
       ? ((watts * pue * kwhRate) / (tps * 3.6))
       : null;
-    // Use location label (user-configured name) consistent with Fleet Status table.
     const displayName   = ns?.locationLabel || m.hostname || m.node_id;
-    // Truncate model name for compact display: keep the part after the last slash.
     const rawModel      = m.ollama_active_model ?? m.vllm_model_name ?? null;
     const activeModel   = rawModel ? (rawModel.split('/').pop() ?? rawModel) : null;
     return { nodeId: m.node_id, hostname: displayName, activeModel, wes, rawWes, tcPct, tps, watts, thermalState: m.thermal_state, thermalSource: m.thermal_source ?? null, nullReason, costPer1mRaw, kwhRate };
@@ -1716,17 +1480,10 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
   const fleetAvgTokW   = rankedTokW.length > 0
     ? rankedTokW.reduce((acc, e) => acc + e.rawWes!, 0) / rankedTokW.length : null;
 
-  // Honest empty-state reason for the power-derived tiles (WES, tok/W).
-  // A node can be actively inferring with no power telemetry (e.g. Apple
-  // Silicon agent running without root — powermetrics unavailable); saying
-  // "no active inference" next to a Live state tile reads as a contradiction.
   const wesNullSub = wesEntries.some(e => e.nullReason === 'no power data')
     ? 'no power data — run the agent as a service'
     : wesEntries.length > 0 ? 'no active inference' : 'connect runtime';
 
-  // ── Per-node cost rolling average ───────────────────────────────────────────
-  // Smooth each node's raw $/1M over NODE_ROLLING_WINDOW samples using the
-  // Map-based ref so no hook count grows with fleet size.
   const costEntries = wesEntries.map(e => {
     const m   = effectiveMetrics.find(x => x.node_id === e.nodeId);
     const ts  = m?.timestamp_ms ?? 0;
@@ -1749,7 +1506,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
     return { ...e, costPer1m };
   });
 
-  // ── Thermal diversity ───────────────────────────────────────────────────────
   const thermalCounts: Record<string, number> = {};
   effectiveMetrics.forEach(m => {
     const state = m.thermal_state ?? derivedNvidiaThermal(m.nvidia_gpu_temp_c ?? null)?.label ?? null;
@@ -1757,13 +1513,11 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
   });
   const allNormal      = effectiveMetrics.length > 0 && Object.keys(thermalCounts).every(s => ['normal', 'nominal'].includes(s.toLowerCase()));
 
-  // ── Best Route Now ──────────────────────────────────────────────────────────
   const activeEntries    = wesEntries.filter(e => e.tps != null && e.tps > 0);
   const sortedByTps      = [...activeEntries].sort((a, b) => (b.tps ?? 0) - (a.tps ?? 0));
   const sortedByWes      = [...activeEntries].filter(e => e.wes != null).sort((a, b) => (b.wes ?? 0) - (a.wes ?? 0));
   const bestLatNode      = sortedByTps[0] ?? null;
   const bestEffNode      = sortedByWes[0] ?? null;
-  // Cost signal — cheapest $/1M among active nodes with power data
   const activeCostEntries = costEntries.filter(e => e.tps != null && e.tps > 0 && e.costPer1m != null);
   const sortedByCost      = [...activeCostEntries].sort((a, b) => (a.costPer1m ?? Infinity) - (b.costPer1m ?? Infinity));
   const bestCostNode      = sortedByCost[0] ?? null;
@@ -1773,10 +1527,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
   const wesDelta          = !sameNode && bestEffNode?.wes != null && (bestLatNode?.wes ?? 0) > 0
     ? bestEffNode.wes / bestLatNode!.wes! : null;
 
-  // Tile 6 — WATTAGE / 1K TKN: total power ÷ fleet throughput × 1000
-  // wattPowerNodes exposed so the tile subtitle can show the contributing node count.
-  // Offline/unreachable nodes are excluded: a node's last stored metrics may have power
-  // data but zero live tok/s, inflating the numerator without contributing to the denominator.
   const _nowForReachability = Date.now();
   const reachableIdSet = new Set<string>(
     isLocalHost
@@ -1801,8 +1551,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
     return (totalPowerW / fleetTps) * 1000;
   })();
 
-  // Fleet Intelligence — Cost Efficiency + Tokens Per Watt
-  // Only over inference-active nodes (tpsNodes) so PUE + rate apply to actual workload.
   const fleetHourlyCostUsd = (() => {
     const powerNodes = tpsNodes.filter(m => hasPowerData(m));
     if (powerNodes.length === 0) return null;
@@ -1814,16 +1562,10 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
       return acc + watts * pue * rate / 1000;
     }, 0);
   })();
-  // Gate on MIN_COST_TPS: near-zero tok/s during Ollama ramp-up produces
-  // enormous $/1M values that contaminate the rolling buffer for minutes.
   const costPer1kTokensNew = (fleetTps != null && fleetTps >= MIN_COST_TPS)
     ? calculateCostPer1kTokens(fleetTps, fleetHourlyCostUsd)
     : null;
 
-  // ── Rolling-average display values ──────────────────────────────────────────
-  // Use the highest timestamp_ms across all reporting nodes as the dedup key so
-  // that each SSE frame is pushed exactly once even across React strict-mode
-  // double-renders.
   const fleetTs = effectiveMetrics.length > 0
     ? Math.max(...effectiveMetrics.map(m => m.timestamp_ms))
     : 0;
@@ -1832,7 +1574,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
   const displayFleetAvgWES  = fleetWesBuf.push(fleetAvgWES,           fleetTs);
   const displayFleetAvgTokW = fleetTokWBuf.push(fleetAvgTokW,         fleetTs);
   const displayCostPer1kNew = costPer1kNewBuf.push(costPer1kTokensNew, fleetTs);
-  // ── SSE connection indicator (3-state) ──────────────────────────────────────
   const sseNow = Date.now();
 
   const unreachableNodeIds = isLocalHost
@@ -1871,7 +1612,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
     ? `SSE connected · ${localNodeId} live`
     : `SSE connected · ${reachableNodeIds.join(' ')} all live`;
 
-  // Build Fleet Status row data — include peakTps so each row can estimate throughput.
   const nodeRows: NodeRowProps[] = isLocalHost
     ? (sentinel ? [(() => {
         const ns = getNodeSettings?.(sentinel.node_id);
@@ -1896,7 +1636,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
         };
       });
 
-  // "Show Active Only" filter — hides nodes not currently inferring
   const visibleRows = showActiveOnly
     ? nodeRows.filter(r => {
         const m = r.metrics;
@@ -1907,18 +1646,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
 
   return (
     <div className="space-y-6">
-      {/* ── 10-tile Insight Engine: 2 rows × 5 cols ──────────────────────────── */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
 
-        {/* ── Row 1: Performance & Health ─────────────────────────────────── */}
-
-        {/* 1. THROUGHPUT / CAPACITY — four-state value color matches label:
-              LIVE     → green  (active user inference session)      → tile: "Throughput"
-              BUSY     → amber  (GPU loaded by non-Ollama workload)  → tile: "Throughput"
-              IDLE-SPD → slate  (hardware baseline from probe)       → tile: "Capacity"
-              IDLE     → gray   (quiet — no runtime or no data)      → tile: "Capacity"
-              Tile label switches to "Capacity" in idle/idle-spd to clarify this is a
-              probe-measured baseline (what the node CAN do), not current throughput. */}
         <InsightTile
           label={isLocalMode
             ? (localIsInferring || localIsBusy ? 'Throughput' : 'Capacity')
@@ -1960,9 +1689,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
           iconCls="text-indigo-400"
         />
 
-        {/* 2. FLEET HEALTH (cloud) / NODE COST/DAY (localhost) */}
         {isLocalMode ? (() => {
-          // Node Cost/Day: watts × 24h × kWhRate / 1000
           const nodeWatts = sentinel?.apple_soc_power_w ?? sentinel?.nvidia_power_draw_w ?? sentinel?.cpu_power_w ?? null;
           const ns = getNodeSettings?.(sentinel?.node_id ?? '');
           const kwhRate = ns?.kwhRate ?? fleetKwhRate;
@@ -1986,13 +1713,11 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
               if (fleetHealthPct == null) return 'no nodes';
               const reachable = effectiveMetrics.filter(m => m.thermal_state != null).length;
               const unreachable = totalRegisteredNodes - reachable;
-              // Build the thermal breakdown from nodes with data
               const thermalPart = allNormal
                 ? 'All Normal thermal'
                 : Object.entries(thermalCounts)
                     .map(([s, n]) => `${n} ${s.charAt(0).toUpperCase() + s.slice(1)}`)
                     .join(' · ');
-              // Append unreachable count if any
               return unreachable > 0
                 ? `${thermalPart} · ${unreachable} unreachable`
                 : thermalPart;
@@ -2002,7 +1727,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
           />
         )}
 
-        {/* 3. TOTAL FLEET / NODE VRAM */}
         <InsightTile
           label={isLocalMode ? 'Node VRAM' : 'Total Fleet VRAM'}
           value={
@@ -2037,7 +1761,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
           iconCls="text-blue-400"
         />
 
-        {/* 4. TTFT — Time To First Token (both modes) */}
         {(() => {
           const ttftValues = effectiveMetrics
             .map(m => m.vllm_avg_ttft_ms ?? m.ollama_proxy_avg_ttft_ms ?? m.ollama_ttft_ms ?? null)
@@ -2076,7 +1799,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
           );
         })()}
 
-        {/* 5. RUNTIME (local only — cloud uses TTFT tile instead) */}
         {isLocalMode && (
           <InsightTile
             label="Runtime"
@@ -2100,7 +1822,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
           />
         )}
 
-        {/* 5b. INFERENCE STATE (local only) */}
         {isLocalMode && (
           <InsightTile
             label="Inference State"
@@ -2134,9 +1855,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
           />
         )}
 
-        {/* ── Cloud-only tiles: Fleet GPU% + Fleet Cost/Day ── */}
         {!isLocalMode && (() => {
-          // Fleet GPU% — average across nodes that report GPU utilization
           const gpuValues = effectiveMetrics
             .map(m => m.nvidia_gpu_utilization_percent ?? m.gpu_utilization_percent ?? null)
             .filter((v): v is number => v != null);
@@ -2148,7 +1867,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
             : avgGpu >= 50 ? 'text-yellow-400'
             : 'text-emerald-400';
 
-          // Fleet Cost/Day — sum of (watts × 24h × kWhRate / 1000) across all nodes
           let fleetDailyCost: number | null = null;
           let totalFleetWatts = 0;
           let costNodeCount = 0;
@@ -2185,9 +1903,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
           );
         })()}
 
-        {/* ── Row 2: Efficiency & ROI ──────────────────────────────────────── */}
-
-        {/* 5. AVG WES / NODE WES */}
         <InsightTile
           label={
             <MetricTooltip
@@ -2216,10 +1931,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
           iconCls="text-amber-400"
         />
 
-        {/* 6. WATTAGE / 1K TKN — Power draw normalised to 1,000 tokens/s of capacity.
-            Formula: (totalPowerW / fleetTps) × 1000 → W per (k·tok/s).
-            Equivalent to J/k·tok (same ratio, power framing preferred by convention).
-            Cost/1M derives from this via × kWhRate ÷ 3,600,000 (J→kWh conversion). */}
         <InsightTile
           label={
             <MetricTooltip
@@ -2247,7 +1958,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
           iconCls="text-emerald-400"
         />
 
-        {/* 7. FLEET MEMORY PRESSURE — system/VRAM utilisation across online nodes */}
         <InsightTile
           label={
             <MetricTooltip
@@ -2279,7 +1989,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
             : 'text-indigo-400'}
         />
 
-        {/* 8. TOK/W — raw tokens per watt (no thermal penalty) */}
         <InsightTile
           label={
             <MetricTooltip
@@ -2310,11 +2019,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
             : 'text-gray-500'}
         />
 
-        {/* Removed: Avg Latency (redundant with TTFT tile) and Swap Write (visible in Live Hardware rail + Pattern J) */}
-
       </div>
 
-      {/* ── Cost by Model (Pro+, localhost only) ──────────────────────────────── */}
       {isLocalMode && costByModel.length > 0 && (
         <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-sm dark:shadow-none overflow-hidden">
           <button
@@ -2359,9 +2065,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
         </div>
       )}
 
-      {/* ── Fleet Status (cloud) / Diagnostic Rail (agent) ───────────────────── */}
       <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-sm dark:shadow-none overflow-hidden">
-        {/* Section header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-gray-700">
           <div className="flex items-center gap-2">
             <Activity className="w-4 h-4 text-gray-400" />
@@ -2413,7 +2117,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
 
         {isLocalMode ? (
           <div>
-          {/* ── Diagnostic Rail: live hardware metrics at 1 Hz ────────────── */}
           <DiagnosticRail
             sentinel={sentinel}
             transport={transport}
@@ -2421,7 +2124,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
               ? (peakTpsMap[sentinel.node_id] ?? localPeakTpsRef.current ?? undefined)
               : undefined}
           />
-          {/* ── Multi-Model Panel (shown when 2+ models loaded) ──────────── */}
           {sentinel?.active_models && sentinel.active_models.length > 1 && (() => {
             const s = sentinel!;
             const totalVramBudget = s.nvidia_vram_total_mb ?? s.gpu_wired_limit_mb ?? 0;
@@ -2481,10 +2183,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
           })()}
           </div>
         ) : (
-          // ── Fleet Status table ───────────────────────────────────────────────
           nodeRows.length > 0 ? (
             <div className="overflow-x-auto">
-              {/* Active Only toggle */}
               <div className="flex items-center justify-end px-4 py-1.5 border-b border-gray-100 dark:border-gray-700/60">
                 <button
                   onClick={() => setShowActiveOnly(v => !v)}
@@ -2498,7 +2198,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
                   Active Only
                 </button>
               </div>
-              {/* Restricted node banners — shown above the table for nodes 4+ */}
               {nodeRows.filter(r => r.restricted).length > 0 && (
                 <div className="px-4 py-3 space-y-2 border-b border-gray-100 dark:border-gray-700/60">
                   {nodeRows.filter(r => r.restricted).map(r => (
@@ -2526,9 +2225,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
       </div>
 
 
-      {/* ── Charts + event feed ──────────────────────────────────────────────── */}
       {(() => {
-        // Per-metric display config
         const METRICS: Record<string, { label: string; color: string; gradId: string; unit: string; isPercent: boolean }> = {
           gpu:   { label: 'GPU Utilization', color: '#6366f1', gradId: 'gradGpu',   unit: '%', isPercent: true  },
           cpu:   { label: 'CPU Usage',       color: '#10b981', gradId: 'gradCpu',   unit: '%', isPercent: true  },
@@ -2537,14 +2234,12 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
           tps:   { label: 'Tok/s',           color: '#818cf8', gradId: 'gradTps',   unit: ' tok/s', isPercent: false },
         };
 
-        // Detect which metrics have real data (after a few points)
         const settled = history.length >= 3;
         const hasGpu   = history.some(p => p.gpu   != null);
         const hasMem   = history.some(p => p.mem   != null);
         const hasPower = history.some(p => p.power != null);
         const hasTps   = history.some(p => p.tps   != null);
 
-        // Auto-fallback: if GPU selected but no GPU data, show CPU instead
         const effectiveKey = selectedMetric === 'gpu' && settled && !hasGpu ? 'cpu' : selectedMetric;
         const cfg = METRICS[effectiveKey];
         const isLive = history.length > 0;
@@ -2563,7 +2258,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
                     )}
                   </h3>
                 </div>
-                {/* Custom metric selector */}
                 <div ref={metricDropdownRef} className="relative">
                   <button
                     onClick={() => setMetricOpen(o => !o)}
@@ -2663,9 +2357,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
         );
       })()}
 
-      {/* ── Fleet Intelligence (cloud) / Fleet Preview CTA (agent) ──────────── */}
       {isLocalMode ? (
-        // ── Cockpit Intelligence — Fleet Preview CTA + Silicon Fit Audit
         <div className="space-y-4">
           {pairingInfo?.status !== 'connected' && (
             <div className="bg-gray-800/60 border border-gray-700 rounded-2xl p-5 flex flex-col sm:flex-row items-center justify-between gap-4">
@@ -2689,13 +2381,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
             </div>
           )}
           {sentinel && (
-            // First-fold model-fit verdict — three condensed tiles that
-            // deep-link to Insights → Performance for the full analysis.
-            // We deliberately do NOT render the full ModelFitAnalysis here
-            // anymore: it duplicated the same component on Insights and
-            // the deep-link to Insights gives users the right neighbours
-            // (Inference Profiler, SLA Monitor, Model Discovery) for
-            // active investigation.
             <ModelFitSummaryStrip
               node={sentinel}
               getNodeSettings={getNodeSettings}
@@ -2707,12 +2392,8 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
           )}
         </div>
       ) : (
-      // ── Fleet Intelligence — Mission Control (cloud only)
-      //    Layout: KPI Hero Row → Analysis Mid-Grid → Audit Footer
       <div className="space-y-4">
-        {/* ═══ KPI Hero Row — 3-column top-level KPIs ═══════════════════════ */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          {/* 1. Cost Efficiency */}
           {(() => {
             const displayCostPer1M = displayCostPer1kNew != null ? displayCostPer1kNew * 1000 : null;
             const costStr = displayCostPer1M == null
@@ -2747,7 +2428,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
             );
           })()}
 
-          {/* 2. Fleet Avg WES */}
           <FleetCard
             label={
               <MetricTooltip
@@ -2785,7 +2465,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
             </p>
           </FleetCard>
 
-          {/* 3. Thermal Diversity */}
           <FleetCard label="Thermal Diversity">
             {effectiveMetrics.length === 0 ? (
               <p className="text-sm font-telin text-gray-600">—</p>
@@ -2813,10 +2492,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
           </FleetCard>
         </div>
 
-        {/* ═══ Model Fit Summary Strip — first-fold verdict ══════════════════
-              Picks the highest-throughput active node to summarise.  The full
-              fleet table renders later as Row 3 with id="model-fit-analysis"
-              so the summary tiles can scroll-to it. */}
         {(() => {
           const fitCandidate = effectiveMetrics
             .filter(n =>
@@ -2843,7 +2518,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
             : null;
         })()}
 
-        {/* ═══ Row 2 — Best Route Now + Node Cost / 1M Tokens ═════════════════ */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <FleetCard label="Best Route Now">
             {activeEntries.length === 0 ? (
@@ -2958,14 +2632,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
           )}
         </div>
 
-        {/* Row 3 — Model Fit Analysis was here; removed in favour of the
-            summary strip + deep-link into Insights → Performance, where
-            the full ModelFitAnalysis lives alongside its natural
-            neighbours (Inference Profiler, SLA Monitor, Model Discovery).
-            See ROADMAP entry "Model Fit canonical home: Insights →
-            Performance" for the rationale. */}
-
-        {/* ═══ Row 4 — Idle Fleet Cost (conditional) ══════════════════════════ */}
         {(() => {
           const idleNodes = effectiveMetrics.filter(n => {
             const tps   = n.ollama_tokens_per_second ?? n.vllm_tokens_per_sec ?? null;
@@ -2999,13 +2665,11 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
           );
         })()}
       </div>
-      )} {/* end isLocalMode ternary — Fleet Intelligence / Fleet Preview CTA */}
+      )} {}
 
-      {/* ── Fleet Connect status bar — localhost only, always at bottom ──────── */}
       {isLocalHost && (
         <div className="flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl border border-gray-700 bg-gray-800/50 text-[11px] flex-wrap">
 
-          {/* Left: identity + state label */}
           {(!pairingInfo || pairingInfo.status === 'unpaired') && (
             <div className="flex items-center gap-2 text-gray-500">
               <Fingerprint className="w-3.5 h-3.5 text-gray-600 shrink-0" />
@@ -3053,7 +2717,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
             </div>
           )}
 
-          {/* Right: action */}
           {(!pairingInfo || pairingInfo.status === 'unpaired') && (
             <button
               onClick={onOpenPairing}
@@ -3094,7 +2757,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
         </div>
       )}
 
-      {/* v0.9.0: Runtime Config modal — opened from "Config" pills */}
       {runtimeConfigModel && (
         <RuntimeConfigModal
           modelName={runtimeConfigModel}

@@ -52,7 +52,7 @@ const CapacityPlannerCard: React.FC<Props> = ({ getToken, subscriptionTier, onNa
   const isTeamOrAbove = isTeamTier(subscriptionTier);
 
   const [targetDraft, setTargetDraft] = useState('');
-  const [target, setTarget] = useState<number | null>(null);   // null = server default (2× current)
+  const [target, setTarget] = useState<number | null>(null);
   const [classFilter, setClassFilter] = useState<'all' | 'apple' | 'nvidia'>('all');
   const [data, setData] = useState<CapacityResponse | null>(null);
   const [error, setError] = useState<string | null>(null);

@@ -23,16 +23,14 @@ function json(body: unknown, status = 200, headers: Record<string, string> = {})
 const RANGE_HOURS: Record<string, number> = { '1h': 1, '24h': 24, '7d': 168, '30d': 720, '90d': 2160, '1y': 8760 };
 
 function historyStep(hours: number): number {
-  if (hours <= 1) return 1;        // 1-min buckets
+  if (hours <= 1) return 1;
   if (hours <= 24) return 5;
   if (hours <= 168) return 30;
   if (hours <= 2160) return 120;
-  return 1440;                     // 1y → daily buckets
+  return 1440;
 }
 
 const now = () => Date.now();
-
-// ── Fixture builders ──────────────────────────────────────────────────────────
 
 function fleetSnapshot() {
   return demoFrame(now());
@@ -217,8 +215,6 @@ function modelSwitches() {
   };
 }
 
-// Idle-waste report (Insights → Performance). Phantom load = a model held in
-// memory while the node isn't inferring. Mirrors GET /api/v1/fleet/idle-waste.
 function idleWaste() {
   const [studio, , rigB, , mini, edge] = DEMO_NODES;
   return {
@@ -245,9 +241,6 @@ function idleWaste() {
   };
 }
 
-// Capacity planner. Same arithmetic as cloud reports.rs: units of each
-// hardware profile needed to close the gap to target, at the fleet's
-// measured tok/W per class, costed at 24 h duty.
 function capacity(targetParam: string | null) {
   const kwh = 0.16, sustained = 412.6, watts = 1385;
   const eff = { apple: 1.9, nvidia: 0.32 } as const;
@@ -282,7 +275,6 @@ function capacity(targetParam: string | null) {
   };
 }
 
-// Migration advisor: move a model to a node that runs it more efficiently.
 function migrationAdvisor() {
   const [studio, rigA, , dgx, mini] = DEMO_NODES;
   return {
@@ -297,14 +289,11 @@ function migrationAdvisor() {
   };
 }
 
-// Fleet model discovery (Models tab). Each candidate is scored against every
-// node's memory budget, like GET /api/fleet/model-candidates.
 function modelCandidates(search: string | null, nodeId: string | null) {
   const budgetGb: Record<string, number> = {
     'studio-m4max': 96, 'rig-4090-a': 22, 'rig-4090-b': 22, 'dgx-h100': 76, 'mini-m2': 10, 'edge-4060': 14,
   };
   const catalog: Array<[string, number, string, number, number]> = [
-    // model_id, file size GB at best quant, quant, downloads, likes
     ['bartowski/Llama-3.2-3B-Instruct-GGUF', 2.0, 'Q4_K_M', 293_000, 410],
     ['bartowski/Meta-Llama-3.1-8B-Instruct-GGUF', 4.9, 'Q4_K_M', 1_240_000, 1_380],
     ['Qwen/Qwen2.5-14B-Instruct-GGUF', 9.0, 'Q4_K_M', 486_000, 690],
@@ -333,12 +322,9 @@ function modelCandidates(search: string | null, nodeId: string | null) {
   return { is_live_search: !!q, online_nodes: nodes.length, hf_reachable: true, models };
 }
 
-// ── Router ────────────────────────────────────────────────────────────────────
-
 /** Exported for tests; installDemoFetch is the only runtime caller. */
 export function route(pathname: string, search: URLSearchParams, method: string): Response | null {
   if (method !== 'GET') {
-    // Acknowledge/resolve/dismiss and every settings write → friendly read-only.
     return json(READ_ONLY, 403);
   }
 
@@ -389,7 +375,6 @@ export function route(pathname: string, search: URLSearchParams, method: string)
   if (pathname === '/api/billing/config')  return json(READ_ONLY, 403);
   if (pathname === '/api/agent/version')   return json({ version: '0.11.0' });
 
-  // Anything else under /api → graceful "not in the demo".
   return json({ error: 'Not part of the demo' }, 404);
 }
 
@@ -399,7 +384,6 @@ export function installDemoFetch(): void {
   window.fetch = ((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     try {
       const raw = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-      // Normalize: strip CLOUD_URL prefix or resolve relative against origin.
       const url = raw.startsWith(CLOUD_URL)
         ? new URL(raw)
         : new URL(raw, window.location.origin);
@@ -408,7 +392,7 @@ export function installDemoFetch(): void {
         const res = route(url.pathname, url.searchParams, method);
         if (res) return Promise.resolve(res);
       }
-    } catch { /* fall through to the real fetch */ }
+    } catch { }
     return realFetch(input as RequestInfo, init);
   }) as typeof window.fetch;
 }

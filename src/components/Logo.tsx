@@ -28,8 +28,6 @@ const STATE_CONFIG: Record<ConnectionState, {
 const Logo: React.FC<LogoProps> = ({ className = "", connectionState = 'disconnected', theme }) => {
   const cfg = STATE_CONFIG[connectionState];
   const active = connectionState !== 'disconnected';
-  // Wordmark text colour: black in light mode, white in dark/default.
-  // Orb dot and pulse rings are intentionally unaffected by theme.
   const textCls = theme === 'light' ? 'text-black' : 'text-white';
 
   return (
@@ -38,7 +36,6 @@ const Logo: React.FC<LogoProps> = ({ className = "", connectionState = 'disconne
       <span className={`relative inline-block ${textCls}`}>
         ı
         <div className="absolute top-[15%] left-1/2 -translate-x-1/2 flex items-center justify-center">
-          {/* Core dot */}
           <div
             className={`w-[0.32em] h-[0.32em] ${cfg.color} rounded-full z-10 transition-all duration-500 ${active ? 'scale-110' : ''}`}
             style={{
@@ -48,7 +45,6 @@ const Logo: React.FC<LogoProps> = ({ className = "", connectionState = 'disconne
             }}
           />
 
-          {/* Pulse rings — present for all states except disconnected */}
           {cfg.pulse && (
             <>
               <div
@@ -62,7 +58,6 @@ const Logo: React.FC<LogoProps> = ({ className = "", connectionState = 'disconne
             </>
           )}
 
-          {/* Outer glow */}
           <div
             className={`absolute w-[0.8em] h-[0.8em] ${cfg.glowColor} rounded-full blur-md transition-all duration-500 ${active ? 'opacity-100 scale-150' : 'opacity-30'}`}
           />

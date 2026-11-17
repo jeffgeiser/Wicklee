@@ -25,18 +25,15 @@ pub(crate) struct RuntimeCaps {
     /// Informational only. Never gates a rule.
     pub(crate) version: Option<String>,
 
-    // ── /api/ps ──────────────────────────────────────────────────────────────
     pub(crate) ps_size_vram:      bool,
     pub(crate) ps_context_length: bool,
     pub(crate) ps_expires_at:     bool,
     pub(crate) ps_digest:         bool,
 
-    // ── /api/generate ────────────────────────────────────────────────────────
     pub(crate) gen_load_duration:            bool,
     pub(crate) gen_prompt_eval_count:        bool,
     pub(crate) gen_prompt_eval_cached_count: bool,
 
-    // ── /api/tags ────────────────────────────────────────────────────────────
     pub(crate) tags_available: bool,
     /// `details.context_length` on `/api/tags`. Split out from
     /// `tags_available` on the step 0 recommendation: when present it gives a
@@ -226,8 +223,6 @@ mod tests {
 
     #[test]
     fn an_empty_ps_cannot_clear_what_an_earlier_poll_proved() {
-        // The asymmetry that makes the record safe: an idle host with nothing
-        // loaded says nothing about the runtime's fields.
         let mut c = caps_from_ps(&ps_without(&[]));
         assert!(c.ps_context_length);
         c.observe_ps(&serde_json::from_str(r#"{"models":[]}"#).unwrap());
@@ -238,7 +233,6 @@ mod tests {
 
     #[test]
     fn one_model_carrying_a_field_is_enough() {
-        // Mixed fleet of loaded models: the capability belongs to the runtime.
         let ps: PsResponse = serde_json::from_value(serde_json::json!({
             "models": [
                 { "name": "a" },
@@ -272,7 +266,6 @@ mod tests {
     fn tags_capability_is_about_the_endpoint_answering() {
         let mut c = RuntimeCaps::default();
         assert!(!c.tags_available);
-        // Zero installed models, but the endpoint answered.
         c.observe_tags(&serde_json::from_str(r#"{"models":[]}"#).unwrap());
         assert!(c.tags_available);
         assert!(!c.tags_details_context_length);
@@ -289,10 +282,8 @@ mod tests {
         let mut c = RuntimeCaps::default();
         c.observe_version(Some("0.40.16"));
         assert_eq!(c.version.as_deref(), Some("0.40.16"));
-        // A version string must not imply any field is present.
         assert_eq!(c.missing().len(), 9, "version must prove no capability");
 
-        // Blank or absent versions are not recorded over a known one.
         c.observe_version(Some("  "));
         c.observe_version(None);
         assert_eq!(c.version.as_deref(), Some("0.40.16"));
@@ -319,8 +310,6 @@ mod tests {
 
     #[test]
     fn the_maintainers_host_proves_every_capability() {
-        // Step 0 recorded that every documented field Phase 1 needs is present
-        // on Ollama 0.40.16. This pins that result as a regression check.
         let mut c = RuntimeCaps::default();
         c.observe_version(Some("0.40.16"));
         c.observe_ps(&ps_without(&[]));

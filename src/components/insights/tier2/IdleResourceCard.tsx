@@ -20,13 +20,9 @@ import type { SentinelMetrics } from '../../../types';
 import InsightCard from '../InsightCard';
 import { getNodePowerW } from '../../../utils/power';
 
-// ── Constants ─────────────────────────────────────────────────────────────────
-
 const ONE_HOUR_MS         = 60 * 60 * 1_000;
 /** Nodes with 24h duty below this threshold trigger the card (cloud path). */
-const IDLE_DUTY_THRESHOLD = 5; // percent
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
+const IDLE_DUTY_THRESHOLD = 5;
 
 function formatDuration(ms: number): string {
   const hours   = Math.floor(ms / ONE_HOUR_MS);
@@ -50,8 +46,6 @@ function computeCost(node: SentinelMetrics, kwhRate: number, pue: number): CostD
   };
 }
 
-// ── Props ─────────────────────────────────────────────────────────────────────
-
 interface Props {
   node:            SentinelMetrics;
   /**
@@ -70,8 +64,6 @@ interface Props {
   showNodeHeader?: boolean;
 }
 
-// ── Component ─────────────────────────────────────────────────────────────────
-
 const IdleResourceCard: React.FC<Props> = ({
   node,
   dutyPct,
@@ -85,7 +77,6 @@ const IdleResourceCard: React.FC<Props> = ({
   const suspendLabel = showNodeHeader ? nodeName : 'this node';
   const cost         = computeCost(node, kwhRate, pue);
 
-  // ── Cloud path (duty-based) ──────────────────────────────────────────────
   if (dutyPct != null) {
     if (dutyPct >= IDLE_DUTY_THRESHOLD) return null;
 
@@ -128,7 +119,6 @@ const IdleResourceCard: React.FC<Props> = ({
     );
   }
 
-  // ── Localhost path (idle-since tracking) ─────────────────────────────────
   if (idleSinceMs == null) return null;
   const idleMs = Date.now() - idleSinceMs;
   if (idleMs < ONE_HOUR_MS) return null;

@@ -24,15 +24,6 @@
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
-// ── /api/ps ───────────────────────────────────────────────────────────────────
-
-// The structs below mirror the wire format. Some fields have no consumer in
-// step 1 — `residency.rs` in step 2 and the rules in step 4 read the rest — but
-// they are declared here rather than added piecemeal, because step 0 showed the
-// published API documentation is an unreliable guide to what a real install
-// returns: these shapes were captured from live responses, and re-deriving them
-// later from the docs would reintroduce exactly the bug this module fixes.
-
 /// Deserialize an optional `u64` without ever failing the enclosing response.
 ///
 /// `Option<u64>` rejects a value of the wrong JSON type, and serde propagates
@@ -74,7 +65,7 @@ impl PsResponse {
 }
 
 /// One loaded model, as `/api/ps` reports it.
-#[allow(dead_code)] // wire format; see the note above
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct PsModel {
     pub(crate) name:  Option<String>,
@@ -102,10 +93,8 @@ pub(crate) struct PsModel {
     pub(crate) details: ModelDetails,
 }
 
-// ── details, shared by /api/ps, /api/tags and /api/show ───────────────────────
-
 /// The `details` object. Documented only by example, so all optional.
-#[allow(dead_code)] // wire format; see the note above
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct ModelDetails {
     pub(crate) parent_model: Option<String>,
@@ -126,8 +115,6 @@ pub(crate) struct ModelDetails {
     pub(crate) runner:           Option<String>,
 }
 
-// ── /api/tags ─────────────────────────────────────────────────────────────────
-
 /// `GET /api/tags` — every installed model, loaded or not.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct TagsResponse {
@@ -136,7 +123,7 @@ pub(crate) struct TagsResponse {
 }
 
 /// One installed model.
-#[allow(dead_code)] // wire format; see the note above
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct TagModel {
     pub(crate) name:        Option<String>,
@@ -158,10 +145,8 @@ pub(crate) struct TagModel {
     pub(crate) details: ModelDetails,
 }
 
-// ── /api/show ─────────────────────────────────────────────────────────────────
-
 /// `POST /api/show` — configured parameters and architecture metadata.
-#[allow(dead_code)] // wire format; see the note above
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct ShowResponse {
     /// Free-text `key value` lines, one per configured parameter.
@@ -200,20 +185,16 @@ impl ModelInfo {
     /// namespaced — so a family Ollama spells differently from its own
     /// `model_info` prefix still resolves.
     pub(crate) fn architecture(&self, family_hint: Option<&str>) -> Option<String> {
-        // 1. The family, if its keys are actually present.
         if let Some(f) = family_hint.map(str::trim).filter(|f| !f.is_empty())
             && self.has_prefix(f)
         {
             return Some(f.to_string());
         }
-        // 2. general.architecture, the map's own answer.
         if let Some(arch) = self.get("general.architecture").and_then(|v| v.as_str())
             && self.has_prefix(arch)
         {
             return Some(arch.to_string());
         }
-        // 3. The family or general.architecture even without matching keys —
-        //    better than nothing for callers that only want the label.
         if let Some(f) = family_hint.map(str::trim).filter(|f| !f.is_empty()) {
             return Some(f.to_string());
         }
@@ -301,7 +282,6 @@ impl ArchValue {
         }
         let arr = v.as_array()?;
         let first = arr.first()?.as_u64()?;
-        // Every element must be a number; a mixed array is not a layer vector.
         let mut total: u64 = 0;
         for item in arr {
             total = total.checked_add(item.as_u64()?)?;
@@ -346,10 +326,8 @@ impl ArchValue {
     }
 }
 
-// ── /api/generate (final, non-streaming response) ─────────────────────────────
-
 /// The final packet of `POST /api/generate`. Durations are nanoseconds.
-#[allow(dead_code)] // wire format; see the note near /api/ps
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct GenerateResponse {
     pub(crate) model:       Option<String>,
@@ -407,8 +385,6 @@ fn rate(count: u64, duration_ns: u64) -> Option<f32> {
     if tps > 0.0 { Some(tps as f32) } else { None }
 }
 
-// ── /api/version ──────────────────────────────────────────────────────────────
-
 /// `GET /api/version`. Informational only — capabilities are detected from
 /// real responses, never inferred from this string.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -420,8 +396,6 @@ pub(crate) struct VersionResponse {
 mod tests {
     use super::*;
 
-    // Captured from Ollama 0.40.16 during step 0. Trimmed to the fields under
-    // test, but field names and shapes are verbatim.
     const PS_QWEN: &str = r#"{
       "models": [{
         "name": "qwen3.5:4b",
@@ -457,21 +431,16 @@ mod tests {
 
     #[test]
     fn ps_tolerates_every_field_being_absent() {
-        // The whole point of the type: a sparse response must parse, not fail.
         let ps: PsResponse = serde_json::from_str(r#"{"models":[{}]}"#).unwrap();
         let m = &ps.models[0];
         assert!(m.name.is_none() && m.size.is_none() && m.context_length.is_none());
         assert!(m.details.family.is_none());
 
-        // An empty body and an absent models array both yield no models.
         assert!(serde_json::from_str::<PsResponse>("{}").unwrap().models.is_empty());
     }
 
     #[test]
     fn a_wrong_typed_number_costs_one_field_not_the_whole_response() {
-        // The failure mode this guards: `Option<u64>` rejects a non-number and
-        // serde fails the entire body, so one odd field would have cost the
-        // harvester every model in that poll.
         let ps: PsResponse = serde_json::from_str(
             r#"{"models":[{"name":"m","size":"not-a-number","size_vram":123,"context_length":[]}]}"#,
         )
@@ -482,20 +451,17 @@ mod tests {
         assert_eq!(m.size, None, "the bad field is dropped, not fatal");
         assert_eq!(m.context_length, None);
 
-        // Same for a generate response.
         let g: GenerateResponse =
             serde_json::from_str(r#"{"eval_count":{},"eval_duration":349588000}"#).unwrap();
         assert_eq!(g.eval_count, None);
         assert_eq!(g.eval_duration, Some(349_588_000));
 
-        // And negatives, which are not valid u64.
         let neg: PsResponse = serde_json::from_str(r#"{"models":[{"size":-1}]}"#).unwrap();
         assert_eq!(neg.models[0].size, None);
     }
 
     #[test]
     fn ps_ignores_unknown_fields() {
-        // A newer Ollama adding fields must not break parsing.
         let ps: PsResponse =
             serde_json::from_str(r#"{"models":[{"name":"m","brand_new_field":42}],"also_new":1}"#)
                 .unwrap();
@@ -508,8 +474,6 @@ mod tests {
         assert!(ps.find("m:1b").is_some());
         assert!(ps.find("other").is_none());
     }
-
-    // ── model_info family resolution: the bug this module fixes ──────────────
 
     fn show_with(info: serde_json::Value, family: &str) -> ShowResponse {
         serde_json::from_value(serde_json::json!({
@@ -541,14 +505,11 @@ mod tests {
         assert_eq!(show.model_info.arch_u64(a, "attention.head_count"), Some(32));
         assert_eq!(show.model_info.arch_u64(a, "attention.head_count_kv"), Some(8));
         assert_eq!(show.model_info.arch_u64(a, "embedding_length"), Some(4096));
-        // general.* fallback still works for keys that live there.
         assert_eq!(show.model_info.arch_u64(a, "parameter_count"), Some(8_030_261_312));
     }
 
     #[test]
     fn model_info_resolves_qwen35_keys_that_the_old_code_lost() {
-        // Verbatim shapes from the maintainer's host. Under the old hardcoded
-        // `llama.` prefix every one of these read as None.
         let show = show_with(
             serde_json::json!({
                 "general.architecture": "qwen35",
@@ -570,19 +531,15 @@ mod tests {
         assert_eq!(show.model_info.arch_u64(a, "embedding_length"), Some(2560));
         assert_eq!(show.model_info.arch_u64(a, "attention.head_count"), Some(16));
 
-        // The array case. 8 layers of 4 heads over 32 layers: there is no true
-        // per-layer figure, so no single number is offered.
         assert_eq!(
             show.model_info.arch_u64(a, "attention.head_count_kv"),
             None,
             "a non-uniform array has no honest per-layer scalar",
         );
-        // The exact total is what KV-cache math needs, and it is carried whole.
         let kv = show.model_info.arch_value(a, "attention.head_count_kv").unwrap();
         assert_eq!(kv.layer_total(), Some(32));
         assert_eq!(kv.layers(), Some(32));
         assert_eq!(kv.scalar(), None);
-        // The raw value stays reachable for a consumer that needs per-layer data.
         let raw = show.model_info.get("qwen35.attention.head_count_kv").unwrap();
         let per_layer: Vec<u64> = raw.as_array().unwrap().iter().filter_map(|v| v.as_u64()).collect();
         assert_eq!(per_layer.len(), 32);
@@ -591,21 +548,17 @@ mod tests {
 
     #[test]
     fn hardcoded_llama_prefix_would_have_returned_nothing() {
-        // Pins the regression: reading qwen35 data under a `llama.` prefix.
         let show = show_with(
             serde_json::json!({ "qwen35.block_count": 32, "qwen35.context_length": 262144 }),
             "qwen35",
         );
         assert_eq!(show.model_info.arch_u64(Some("llama"), "block_count"), None);
         assert_eq!(show.model_info.arch_u64(Some("llama"), "context_length"), None);
-        // And `general.context_length` is absent on real models, so the old
-        // `.or_else()` chain had nothing left to fall back to.
         assert_eq!(show.model_info.get("general.context_length"), None);
     }
 
     #[test]
     fn architecture_falls_back_when_the_family_does_not_match_the_prefix() {
-        // Family says one thing, the keys say another: trust the keys.
         let show = show_with(
             serde_json::json!({ "general.architecture": "qwen35", "qwen35.block_count": 32 }),
             "some-other-name",
@@ -622,7 +575,6 @@ mod tests {
         assert_eq!(empty.architecture(Some("llama")).as_deref(), Some("llama"));
         assert_eq!(empty.arch_u64(Some("llama"), "block_count"), None);
         assert_eq!(empty.arch_u64(None, "block_count"), None);
-        // A blank family is not a prefix.
         assert_eq!(empty.architecture(Some("   ")), None);
     }
 
@@ -630,34 +582,26 @@ mod tests {
     fn value_coercion_keeps_the_exact_total_and_rounds_nothing() {
         let parse = |v: serde_json::Value| ArchValue::parse(&v);
 
-        // A scalar is a scalar, and is a true per-layer figure.
         assert_eq!(parse(serde_json::json!(7)), Some(ArchValue::Scalar(7)));
         assert_eq!(parse(serde_json::json!(7)).unwrap().scalar(), Some(7));
         assert_eq!(parse(serde_json::json!(7)).unwrap().layer_total(), None);
 
-        // A uniform array has one: every layer carries it.
         let uniform = parse(serde_json::json!([4, 4, 4])).unwrap();
         assert_eq!(uniform.scalar(), Some(4));
         assert_eq!(uniform.layer_total(), Some(12));
         assert_eq!(uniform.layers(), Some(3));
 
-        // A non-uniform array does not. This is the case step 1 rounded: the
-        // mean of [1, 2] is 1.5, and `ceil` made it 2 — a 33% overestimate
-        // once a consumer multiplies it back up by the layer count.
         let mixed = parse(serde_json::json!([1, 2])).unwrap();
         assert_eq!(mixed.scalar(), None);
         assert_eq!(mixed.layer_total(), Some(3));
         assert_eq!(mixed.layers(), Some(2));
 
-        // Nothing that is not a layer vector is coerced into one.
         assert_eq!(parse(serde_json::json!([])), None);
         assert_eq!(parse(serde_json::json!("4096")), None);
         assert_eq!(parse(serde_json::json!([1, "x"])), None);
         assert_eq!(parse(serde_json::json!(-1)), None);
         assert_eq!(parse(serde_json::json!(null)), None);
     }
-
-    // ── /api/tags ────────────────────────────────────────────────────────────
 
     #[test]
     fn tags_parses_the_observed_shape() {
@@ -677,7 +621,6 @@ mod tests {
         let m = &tags.models[0];
         assert_eq!(m.size, Some(4_920_753_328));
         assert_eq!(m.capabilities, vec!["completion", "tools"]);
-        // The cheap max-context source for a model that is not loaded.
         assert_eq!(m.details.context_length, Some(131072));
         assert_eq!(m.details.runner.as_deref(), Some("ggml"));
     }
@@ -690,11 +633,8 @@ mod tests {
         assert!(tags.models[0].details.context_length.is_none());
     }
 
-    // ── /api/generate ────────────────────────────────────────────────────────
-
     #[test]
     fn generate_parses_and_derives_rates() {
-        // Captured from a real probe response.
         let g: GenerateResponse = serde_json::from_str(r#"{
           "model": "qwen3.5:4b", "done": true, "done_reason": "length",
           "total_duration": 3585902375, "load_duration": 3110125417,
@@ -705,7 +645,6 @@ mod tests {
         }"#).unwrap();
         assert_eq!(g.done_reason.as_deref(), Some("length"));
         assert_eq!(g.prompt_eval_cached_count, Some(0));
-        // 8 tokens in 0.349588 s
         let tps = g.eval_tps().unwrap();
         assert!((tps - 22.88).abs() < 0.05, "eval_tps was {tps}");
         let pe = g.prompt_eval_tps().unwrap();

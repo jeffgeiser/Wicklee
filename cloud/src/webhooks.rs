@@ -2,12 +2,6 @@
 
 use crate::*;
 
-// ── Threshold Webhooks (Pro+) ────────────────────────────────────────────────
-//
-// CRUD + test endpoints for user-registered webhook subscriptions. The
-// evaluator that fires actual webhooks runs inside the telemetry-push
-// path so every SSE update is checked against subscriptions in-line.
-
 pub(crate) const SUPPORTED_WEBHOOK_EVENTS: &[&str] = &[
     "thermal_state_changed",
     "inference_state_changed",
@@ -49,13 +43,11 @@ pub(crate) async fn handle_webhook_create(
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
     if !role.can_mutate() { return role_forbidden("member"); }
-    // Org-aware: org members are entitled by the org subscription.
     let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
     if !is_pro_or_above(&tier) {
         return upgrade_required("Threshold Webhooks", UpgradePlan::Team);
     }
 
-    // Validate body.
     if let Err(e) = resolve_outbound(&body.url).await {
         return (StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": e }))).into_response();
@@ -72,7 +64,6 @@ pub(crate) async fn handle_webhook_create(
     }
     let cooldown_s = body.cooldown_s.unwrap_or(60).max(10);
 
-    // If a node_id is supplied, verify the user owns it.
     if let Some(ref nid) = body.node_id {
         let owns = node_in_tenant(nid, &user_id, &org_id, &state.pool).await;
         if !owns {
@@ -88,7 +79,6 @@ pub(crate) async fn handle_webhook_create(
         }
 
     let id = uuid::Uuid::new_v4().to_string();
-    // 32-byte HMAC secret, hex-encoded → 64 chars. Returned ONCE on creation.
     let secret_bytes: [u8; 32] = std::array::from_fn(|_| rand::random());
     let secret = hex::encode(secret_bytes);
     let tenant_id: String = tenant_scope(&user_id, &org_id).1.to_string();
@@ -115,7 +105,7 @@ pub(crate) async fn handle_webhook_create(
         "tag":        body.tag,
         "threshold":  body.threshold,
         "cooldown_s": cooldown_s,
-        "secret":     secret,  // shown ONCE — receiver uses for HMAC verification
+        "secret":     secret,
         "enabled":    true,
     })).into_response()
 }
@@ -185,7 +175,6 @@ pub(crate) async fn handle_webhook_delete(
     ).bind(&id).bind(&user_id).execute(&state.pool).await;
     match res {
         Ok(r) if r.rows_affected() > 0 => {
-            // Drop state rows alongside.
             let _ = sqlx::query("DELETE FROM webhook_state WHERE subscription_id = $1")
                 .bind(&id).execute(&state.pool).await;
             Json(serde_json::json!({ "deleted": id })).into_response()
@@ -246,31 +235,12 @@ pub(crate) async fn handle_webhook_test(
     }
 }
 
-// ── Threshold Webhooks — per-telemetry-tick evaluator ───────────────────────
-//
-// Runs on every /api/telemetry POST.  Loads enabled subscriptions for this
-// tenant and node, compares against the previous-tick state stored in
-// `webhook_state`, fires the webhook when a transition or crossing matches.
-//
-// State semantics:
-//   thermal_state_changed   — fires when prev_value (string) != current
-//   inference_state_changed — same, on inference_state field
-//   wes_below               — fires when prev_value_num was >= threshold
-//                             and current is < threshold (crossing in)
-//   wes_above               — fires when prev_value_num was <= threshold
-//                             and current is > threshold (crossing out)
-//
-// Cooldown is enforced via last_fired_ms in webhook_state — even if a
-// crossing happens repeatedly (flapping), no fire within cooldown_s.
-
 pub(crate) async fn evaluate_webhooks(
     tenant_id: &str,
     node_id:   &str,
     metrics:   &MetricsPayload,
     pool:      &sqlx::PgPool,
 ) {
-    // Pull all enabled subscriptions for this tenant that target either
-    // any node or this specific node.
     let subs: Vec<(String, String, String, String, Option<String>, Option<f32>, i32, Option<i64>)> =
         sqlx::query_as(
             "SELECT id, url, secret, event_type, node_id, threshold, cooldown_s, last_fired_ms
@@ -298,8 +268,6 @@ pub(crate) async fn evaluate_webhooks(
     let now = now_ms() as i64;
     let cur_thermal   = metrics.thermal_state.clone().unwrap_or_else(|| "Normal".into());
     let cur_inference = metrics.inference_state.clone().unwrap_or_else(|| "idle".into());
-    // Compute current WES the same way the agent + frontend do:
-    //   tok/s ÷ (watts × thermal_penalty)
     let cur_wes: Option<f32> = {
         let tps = metrics.ollama_tokens_per_second.or(metrics.vllm_tokens_per_sec)
             .filter(|v| *v > 0.0);
@@ -319,7 +287,6 @@ pub(crate) async fn evaluate_webhooks(
     };
 
     for (sub_id, url, secret, event_type, _sub_node, threshold, cooldown_s, _last_fired) in subs {
-        // Read prev state for THIS (sub, node) pair.
         let prev: Option<(Option<String>, Option<f32>, Option<i64>)> = sqlx::query_as(
             "SELECT prev_value, prev_value_num, last_fired_ms
              FROM webhook_state
@@ -327,16 +294,12 @@ pub(crate) async fn evaluate_webhooks(
         ).bind(&sub_id).bind(node_id).fetch_optional(pool).await.unwrap_or(None);
         let (prev_value, prev_value_num, last_fired_ms) = prev.unwrap_or((None, None, None));
 
-        // Cooldown check — same condition won't refire within cooldown_s.
         if let Some(lf) = last_fired_ms
             && now.saturating_sub(lf) < (cooldown_s as i64) * 1_000 {
-                // Still update prev_value so we don't miss an actual crossing
-                // when cooldown ends, but skip the fire.
                 let _ = update_webhook_state_no_fire(&sub_id, node_id, &event_type, &cur_thermal, &cur_inference, cur_wes, pool).await;
                 continue;
             }
 
-        // Detect the firing condition per event type.
         let (fired, payload) = match event_type.as_str() {
             "thermal_state_changed" => {
                 let prev_t = prev_value.as_deref().unwrap_or(&cur_thermal);
@@ -369,7 +332,6 @@ pub(crate) async fn evaluate_webhooks(
             _ => (false, serde_json::Value::Null),
         };
 
-        // Update state row regardless of fire — keeps prev_value fresh.
         let _ = update_webhook_state_no_fire(&sub_id, node_id, &event_type, &cur_thermal, &cur_inference, cur_wes, pool).await;
 
         if fired {
@@ -378,8 +340,6 @@ pub(crate) async fn evaluate_webhooks(
             let sub_id_clone = sub_id.clone();
             let node_id_clone = node_id.to_string();
             let pool_clone   = pool.clone();
-            // Fire-and-forget delivery so the telemetry-push response isn't
-            // blocked by a slow webhook receiver.
             tokio::spawn(async move {
                 match deliver_webhook(&url_clone, &secret_clone, &payload).await {
                     Ok(s) => {

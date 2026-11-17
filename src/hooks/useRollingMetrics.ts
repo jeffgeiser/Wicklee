@@ -44,7 +44,6 @@ export function useRollingBuffer(window: number = NODE_ROLLING_WINDOW) {
   function push(value: number | null | undefined, tsMs = 0): number | null {
     const s = state.current;
     if (value != null && isFinite(value)) {
-      // Dedup: skip if this timestamp has already been pushed
       if (!(tsMs > 0 && tsMs <= s.lastTs)) {
         if (tsMs > 0) s.lastTs = tsMs;
         s.buf =

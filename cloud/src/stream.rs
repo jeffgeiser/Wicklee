@@ -23,11 +23,6 @@ pub(crate) async fn handle_fleet_stream(
             Json(serde_json::json!({ "error": "Invalid or expired stream token" }))).into_response(),
     };
 
-    // Frames are produced by a per-connection task feeding a small channel.
-    // The old stream closure ran its DB refreshes through block_in_place +
-    // block_on, parking a runtime worker for every refresh of every open
-    // dashboard. When the client disconnects the receiver drops, the next
-    // send fails, and the task exits.
     let (tx, rx) = mpsc::channel::<Result<Event, Infallible>>(4);
     tokio::spawn(fleet_stream_task(state, user_id, org_id, tx));
 
@@ -102,9 +97,6 @@ pub(crate) async fn fleet_stream_task(
     org_id:  Option<String>,
     tx:      mpsc::Sender<Result<Event, Infallible>>,
 ) {
-    // The stream token is checked only at connect (it expires in 60 s), so a
-    // logout revocation must also end streams already open: each 60 s refresh
-    // checks the user's revocation time against when this stream started.
     let stream_started_ms = now_ms() as i64;
     let (tcol, tval) = tenant_scope(&user_id, &org_id);
 
@@ -112,7 +104,6 @@ pub(crate) async fn fleet_stream_task(
     let mut tier  = resolve_tier(&user_id, &org_id, &state.pool).await;
 
     let mut interval = tokio::time::interval(Duration::from_secs(2));
-    // A slow client shouldn't get a burst of catch-up frames.
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut tick: u32 = 0;
 
@@ -125,10 +116,8 @@ pub(crate) async fn fleet_stream_task(
             ).bind(&user_id).fetch_optional(&state.pool).await
                 .ok().flatten().flatten().unwrap_or(0);
             if revoked_ms >= stream_started_ms {
-                return; // dropping tx ends the SSE response
+                return;
             }
-            // Keep the last good set on a transient DB error rather than
-            // blanking the dashboard until the next refresh.
             if let Some(fresh) = load_fleet_stream_nodes(tcol, tval, &state.pool).await {
                 nodes = fresh;
             }
@@ -140,7 +129,7 @@ pub(crate) async fn fleet_stream_task(
             build_fleet_frame(&nodes, node_limit_for_tier(&tier, false), &metrics_map)
         };
         if tx.send(Ok(Event::default().data(data))).await.is_err() {
-            return; // client disconnected
+            return;
         }
     }
 }

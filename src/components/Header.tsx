@@ -26,13 +26,7 @@ const Header: React.FC<HeaderProps> = ({ activeTab, pairingInfo, onOpenPairing, 
   };
 
   return (
-    // ── z-40: sticky header paints above the fixed nav rail (z-30) at root ──
-    // <main> carries no z-index so creates no stacking context; the sticky
-    // z-index is therefore evaluated at the root level where z-40 > z-30.
-    // The logo lives here — in the content-area header — and is never inside
-    // the nav rail. Nav expand/collapse cannot obscure it.
     <header className="h-16 border-b border-gray-200 dark:border-gray-700 bg-white/80 dark:bg-gray-800/20 backdrop-blur-md px-6 flex items-center justify-between sticky top-0 z-40 transition-colors">
-      {/* Left: logo + page title */}
       <div className="flex items-center gap-4">
         <Logo className="text-xl" connectionState={connectionState} theme={theme} />
         {titles[activeTab] && (
@@ -44,7 +38,6 @@ const Header: React.FC<HeaderProps> = ({ activeTab, pairingInfo, onOpenPairing, 
 
       <div className="flex items-center gap-6">
         <div className="flex items-center gap-4">
-          {/* Fleet Connect button */}
           {pairingInfo?.status === 'connected' ? (
             <button
               onClick={onOpenPairing}
@@ -77,7 +70,6 @@ const Header: React.FC<HeaderProps> = ({ activeTab, pairingInfo, onOpenPairing, 
             </button>
           )}
 
-          {/* Bell — hidden until notification system is built */}
         </div>
       </div>
     </header>

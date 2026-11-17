@@ -125,10 +125,6 @@ pub(crate) fn energy_base_cte() -> String {
     )
 }
 
-// ── Rust mirror (unit-testable) ──────────────────────────────────────────────
-// Test-only: the production path is the SQL above; this mirrors it so the
-// math can be checked without a database.
-
 #[cfg(test)]
 pub(crate) mod mirror {
     use super::{MAX_SAMPLE_GAP_S, ROLLUP_BUCKET_S};
@@ -246,16 +242,13 @@ mod tests {
 
     #[test]
     fn reproduces_and_fixes_12x_energy_inflation() {
-        // GeiserBMC: ~14.9 W steady, no tokens, 30 days.
         let s = series(30.0, 14.9, 0.0, 0);
         let now = s.last().unwrap().ts_s + 2.0;
         let (old_kwh, _, old_hours) = legacy_30s(&s);
         let new = integrate_samples(&s, now);
 
-        // Correct: 14.9 W × 720 h = 10.73 kWh.
         assert!((new.kwh() - 10.728).abs() < 0.01, "kwh {}", new.kwh());
         assert!((new.covered_s / 3600.0 - 720.0).abs() < 0.1);
-        // Old formula ~12.5× (≈134 kWh, matching the observed 134.92 kWh).
         let ratio = old_kwh / new.kwh();
         assert!((ratio - 12.5).abs() < 0.05, "ratio {ratio}");
         assert!(old_kwh > 130.0 && old_kwh < 140.0, "old {old_kwh}");
@@ -264,19 +257,13 @@ mod tests {
 
     #[test]
     fn tokens_integrate_only_live_time() {
-        // macmini: ~19.5 tok/s reported continuously (probe baseline while
-        // idle), live 1 sample in 25 (4%).
         let s = series(30.0, 0.3, 19.5, 25);
         let now = s.last().unwrap().ts_s + 2.0;
         let (_, old_tok, _) = legacy_30s(&s);
         let new = integrate_samples(&s, now);
-        // Old: ≈ 19.5 × 30 × rows ≈ 632M (observed 574M) — ~340 days of
-        // nonstop generation inside a 30-day window.
         assert!(old_tok > 500e6, "old tokens {old_tok}");
-        // Continuous tok/s × real time is the ceiling: 19.5 × 30 d ≈ 50.5M.
         let ceiling = 19.5 * 30.0 * DAY;
         assert!(new.tokens < ceiling);
-        // Live share of samples is 4%; the live dt mix lands within 3–6%.
         let share = new.tokens / ceiling;
         assert!(share > 0.03 && share < 0.06, "live share {share}");
         assert!((new.live_s / new.covered_s - share).abs() < 1e-4);
@@ -284,13 +271,11 @@ mod tests {
 
     #[test]
     fn offline_gap_is_capped_not_billed() {
-        // 1 h online at 2 s, 10 h offline, 1 h online.
         let mut s: Vec<Sample> = (0..1800).map(|i| Sample { ts_s: i as f64 * 2.0, watts: 100.0, tok_s: 0.0, live: false }).collect();
         let resume = 11.0 * 3600.0;
         s.extend((0..1800).map(|i| Sample { ts_s: resume + i as f64 * 2.0, watts: 100.0, tok_s: 0.0, live: false }));
         let now = resume + 3600.0;
         let i = integrate_samples(&s, now);
-        // 2 h × 100 W = 200 Wh, plus at most one capped 60 s gap (≈1.6 Wh).
         assert!(i.energy_wh >= 199.9 && i.energy_wh <= 201.8, "{}", i.energy_wh);
     }
 
@@ -299,13 +284,11 @@ mod tests {
         assert_eq!(sample_dt_s(100.0, Some(102.5), 1e9), 2.5);
         assert_eq!(sample_dt_s(100.0, None, 101.0), 1.0);
         assert_eq!(sample_dt_s(100.0, None, 1e9), MAX_SAMPLE_GAP_S);
-        assert_eq!(sample_dt_s(100.0, Some(99.0), 1e9), 0.0); // never negative
+        assert_eq!(sample_dt_s(100.0, Some(99.0), 1e9), 0.0);
     }
 
     #[test]
     fn duplicate_state_change_pushes_do_not_double_count() {
-        // An immediate state-transition push 0.3 s after a regular push adds a
-        // row; with dt-weighting it only splits the interval.
         let a = vec![
             Sample { ts_s: 0.0, watts: 50.0, tok_s: 0.0, live: false },
             Sample { ts_s: 2.0, watts: 50.0, tok_s: 0.0, live: false },
@@ -319,7 +302,6 @@ mod tests {
 
     #[test]
     fn rollup_bucket_new_rows_exact_and_legacy_rows_full_bucket() {
-        // A full 5-min bucket at ~2.4 s cadence: 125 rows of 15 W.
         let s = series(300.0 / DAY, 15.0, 0.0, 0);
         assert_eq!(s.len(), 125);
         let exact = integrate_samples(&s, 300.0);
@@ -327,26 +309,21 @@ mod tests {
         let row = RollupRow { watts_avg: 15.0, tok_s_avg: 0.0, duty_pct: 0.0, sample_count: 125, stored: Some(exact) };
         assert_eq!(rollup_bucket_integral(&row), exact);
 
-        // Pre-fix row: no integral columns. Old math: 125 × 30 s = 3750 s
-        // (12.5× a 300 s bucket). Fallback: one full bucket.
         let legacy = RollupRow { stored: None, ..row };
         let i = rollup_bucket_integral(&legacy);
         assert_eq!(i.covered_s, 300.0);
-        assert!((i.energy_wh - 1.25).abs() < 1e-9); // 15 W × 5 min
-        // A sparse bucket is bounded by the per-row cap.
+        assert!((i.energy_wh - 1.25).abs() < 1e-9);
         let sparse = RollupRow { sample_count: 2, ..legacy };
         assert_eq!(rollup_bucket_integral(&sparse).covered_s, 120.0);
     }
 
     #[test]
     fn thirty_days_of_legacy_rollups_match_raw_integral() {
-        // 30 days of full legacy buckets for a 15 W node == 10.8 kWh.
         let buckets = (30.0 * DAY / ROLLUP_BUCKET_S) as usize;
         let row = RollupRow { watts_avg: 15.0, tok_s_avg: 0.0, duty_pct: 0.0, sample_count: 125, stored: None };
         let mut total = Integral::default();
         for _ in 0..buckets { total.add(&rollup_bucket_integral(&row)); }
         assert!((total.kwh() - 10.8).abs() < 1e-6, "{}", total.kwh());
-        // Old: sample_count × 30 s → 135 kWh.
         let old = buckets as f64 * 15.0 * 125.0 * 30.0 / 3600.0 / 1000.0;
         assert!((old - 135.0).abs() < 1e-6);
     }
@@ -392,8 +369,6 @@ mod db_tests {
                 .bind(TENANT).execute(&pool).await.unwrap();
         }
 
-        // 26 h of raw rows at the real ~2.4 s push cadence:
-        //   WK-A: 15 W idle (GeiserBMC-like), WK-B: 0.3 W, 19.5 tok/s, live 1 row in 25.
         sqlx::query(
             "INSERT INTO metrics_raw (ts, node_id, tenant_id, tok_s, watts, inference_state, ollama_active_model)
              SELECT NOW() - INTERVAL '26 hours' + make_interval(secs => g * 2.4), n.node_id, $1,
@@ -405,8 +380,6 @@ mod db_tests {
                           ('WK-B', 19.5::real, 0.3::real, 'llama3.1:8b')) n(node_id, tok_s, watts, model)"
         ).bind(TENANT).execute(&pool).await.unwrap();
 
-        // cost-by-model (fleet.rs) uses the same dt rule: WK-B's model ran
-        // the trailing 24 h at 0.3 W → 24 h, 7.2 Wh (old: ~300 h).
         let cbm: Vec<(String, Option<f32>, Option<f32>, Option<f64>, Option<f64>, i64)> =
             sqlx::query_as(&crate::cost_by_model_sql())
                 .bind(TENANT).bind("24 hours").fetch_all(&pool).await.unwrap();
@@ -417,12 +390,9 @@ mod db_tests {
 
         let before = node_energy(&pool, "2 days").await;
         let a = &before[0];
-        // 26 h × 15 W = 0.390 kWh (old 30 s math: ≈ 4.9 kWh).
         assert!((a.1 - 0.390).abs() < 0.002, "raw-only kWh {}", a.1);
         assert!((a.3 - 26.0).abs() < 0.01, "raw-only hours {}", a.3);
 
-        // Roll up everything older than 24 h; totals must not change
-        // (no gap, no double count across the raw/rollup boundary).
         crate::run_rollup(&pool).await;
         let rolled: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM metrics_5min WHERE tenant_id = $1 AND energy_wh IS NOT NULL")
@@ -435,8 +405,6 @@ mod db_tests {
             assert!((b.3 - a.3).abs() < 0.02, "{} hours {} → {}", b.0, b.3, a.3);
         }
 
-        // Legacy (pre-fix) rollups for the rest of the 30 days: integral
-        // columns NULL, 125 rows per bucket at ~2.4 s.
         sqlx::query(
             "INSERT INTO metrics_5min (ts, node_id, tenant_id, tok_s_avg, watts_avg, inference_duty_pct, sample_count, ollama_active_model)
              SELECT b, n.node_id, $1, n.tok_s, n.watts, n.duty, 125, n.model
@@ -450,15 +418,11 @@ mod db_tests {
 
         let month = node_energy(&pool, "30 days").await;
         let (a, b) = (&month[0], &month[1]);
-        // 15 W × 720 h = 10.8 kWh — was 134.9 kWh in production.
         assert!((a.1 - 10.8).abs() < 0.02, "WK-A 30d kWh {}", a.1);
         assert!((a.3 - 720.0).abs() < 0.5, "WK-A 30d hours {}", a.3);
-        // 0.3 W × 720 h = 0.216 kWh; tokens = 19.5 tok/s × ~4% of 30 d ≈ 2.0M
-        // (old math counted the idle probe baseline at 30 s/row: ≈ 630M).
         assert!((b.1 - 0.216).abs() < 0.002, "WK-B 30d kWh {}", b.1);
         assert!(b.2 > 1.8e6 && b.2 < 2.2e6, "WK-B 30d tokens {}", b.2);
 
-        // Idle-waste uses the same base: WK-B's loaded-but-idle model.
         let report = crate::compute_idle_waste(&pool, TENANT, 30, 0.16).await;
         let t = &report["totals"];
         let phantom_kwh = t["phantom_kwh"].as_f64().unwrap();

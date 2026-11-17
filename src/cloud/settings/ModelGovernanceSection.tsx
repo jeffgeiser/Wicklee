@@ -175,7 +175,6 @@ const ModelGovernanceSection: React.FC<Props> = ({ subscriptionTier, getToken, o
       {header}
       <div className="px-6 py-6 space-y-5">
 
-        {/* Status — an empty list means UNGOVERNED, not "all blocked". */}
         <div className={`rounded-xl px-5 py-3 border ${
           active ? 'bg-teal-500/5 border-teal-500/20' : 'bg-gray-700/30 border-gray-700'
         }`}>
@@ -200,7 +199,6 @@ const ModelGovernanceSection: React.FC<Props> = ({ subscriptionTier, getToken, o
           <p className="text-[11px] text-rose-400">{error}</p>
         )}
 
-        {/* Add entry */}
         <div className="flex flex-col sm:flex-row gap-2">
           <input
             value={newModel}
@@ -226,7 +224,6 @@ const ModelGovernanceSection: React.FC<Props> = ({ subscriptionTier, getToken, o
           </button>
         </div>
 
-        {/* Allow-list */}
         {loading && entries.length === 0 ? (
           <p className="text-[11px] text-gray-500">Loading…</p>
         ) : entries.length === 0 ? (
@@ -254,7 +251,6 @@ const ModelGovernanceSection: React.FC<Props> = ({ subscriptionTier, getToken, o
           </div>
         )}
 
-        {/* Violations */}
         {violations.length > 0 && (
           <div className="space-y-2">
             <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">

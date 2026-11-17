@@ -23,12 +23,6 @@
 //! loudly the first time rather than quietly succeeding for months. That
 //! promise is the reason this type has no field such text could land in.
 
-// Every item here exists for one of the two configurations. A build with no
-// local store has no verify route and no stored-receipt rules, so the verify
-// comparison, the `Verified` evidence path and the row conversions the store
-// needs have no caller there — present and compiled, but unreached. Allowed
-// for that target only: the default build still fails on genuinely dead code
-// in this file, and every other module keeps its dead-code check on musl too.
 #![cfg_attr(target_env = "musl", allow(dead_code))]
 
 use serde::Serialize;
@@ -190,7 +184,6 @@ fn rate(count: Option<u64>, ns: Option<u64>) -> Option<f64> {
 pub(crate) fn receipt_id(source: ReceiptSource, material: &str) -> String {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for part in [source.as_str(), material] {
-        // The separator keeps ("ab","c") from hashing as ("a","bc").
         for b in part.as_bytes().iter().chain(std::iter::once(&0x1f_u8)) {
             h ^= u64::from(*b);
             h = h.wrapping_mul(0x0100_0000_01b3);
@@ -305,13 +298,10 @@ pub(crate) fn from_callback(
 
     // A load duration the runtime bothered to report means it loaded
     // something. Trusting the tracker's view instead would call every receipt
-    // warm whenever a poll had not landed yet.
     let cold = !ambient.was_loaded || load_ns.is_some_and(|ns| ns > COLD_LOAD_NS);
     let start_state = if cold { StartState::ColdUnknown } else { StartState::Loaded };
 
     Ok(Receipt {
-        // serde_json sorts object keys, so the same body serialises the same
-        // way whatever order the caller sent its fields in.
         id: receipt_id(ReceiptSource::Callback, &body.to_string()),
         ts_ms: ambient.ts_ms,
         source: ReceiptSource::Callback,
@@ -376,9 +366,6 @@ pub(crate) fn from_proxy_trace(t: &crate::store::TraceRow, ambient: &Ambient) ->
     let u = |v: Option<i64>| v.and_then(|x| u64::try_from(x).ok());
     let load_ns = u(t.load_duration_ns);
     Receipt {
-        // The trace id is already unique per proxied request, so there is
-        // nothing to deduplicate and no reason to hash the packet: one
-        // request through the proxy is one receipt.
         id: receipt_id(ReceiptSource::Proxy, &t.id),
         ts_ms: t.ts_ms,
         source: ReceiptSource::Proxy,
@@ -387,9 +374,6 @@ pub(crate) fn from_proxy_trace(t: &crate::store::TraceRow, ambient: &Ambient) ->
         context_length: ambient.running_context_length,
         size_bytes: ambient.size_bytes,
         size_vram_bytes: ambient.size_vram_bytes,
-        // The reported load duration decides, not the tracker: a receipt is
-        // written seconds after the request, by which time the tracker's view
-        // is of the host now rather than of the host then.
         start_state: if load_ns.is_some_and(|ns| ns > COLD_LOAD_NS) {
             StartState::ColdUnknown
         } else {
@@ -402,9 +386,6 @@ pub(crate) fn from_proxy_trace(t: &crate::store::TraceRow, ambient: &Ambient) ->
         eval_count: u(t.eval_count),
         eval_ns: u(t.eval_duration_ns),
         total_ns: u(t.total_duration_ns),
-        // Wicklee did not time this request; the runtime did, and the proxy
-        // only watched the bytes go past. A wall time measured around the
-        // relay would include the client's own read speed.
         wall_ms: None,
         co_resident: ambient.co_resident.clone(),
         thermal_state: ambient.thermal_state.clone(),
@@ -564,9 +545,6 @@ mod tests {
     mod memory {
         use super::*;
 
-        // Full paths rather than the `json!` macro: this module is compiled
-        // only on musl, where a resolution slip would surface in CI instead of
-        // here.
         fn receipt(model: &str, n: u64) -> Receipt {
             let mut body = spec_example();
             body["model"] = serde_json::Value::from(model);
@@ -600,7 +578,6 @@ mod tests {
             }
             let held = m.query(None, MEMORY_CAP * 2);
             assert_eq!(held.len(), MEMORY_CAP, "capped");
-            // The newest survive: the first ten pushed are the ones gone.
             assert_eq!(held.last().unwrap().eval_count, Some(MEMORY_CAP as u64 + 10));
         }
 
@@ -627,10 +604,8 @@ mod tests {
         assert_eq!(r.co_resident, vec!["other:7b".to_string()]);
         assert_eq!(r.wall_ms, None, "a caller's wall time is not the inference's");
 
-        // 298 tokens in 4.868 s.
         let tps = r.decode_tps().unwrap();
         assert!((tps - 61.2).abs() < 0.1, "decode {tps}");
-        // 26 tokens in 130.079 ms.
         let prompt = r.prompt_tps().unwrap();
         assert!((prompt - 199.9).abs() < 0.2, "prompt {prompt}");
     }
@@ -645,8 +620,6 @@ mod tests {
                 Err(CallbackError::ContentPresent(field)),
                 "{field} must be refused",
             );
-            // The refusal names the field and lists the whole set, so one
-            // failed call is enough to fix the integration.
             let msg = CallbackError::ContentPresent(field).message();
             assert!(msg.contains(field), "{msg}");
         }
@@ -682,7 +655,6 @@ mod tests {
         let r = from_callback(&body, &ambient()).unwrap();
         assert_eq!(r.start_state, StartState::ColdUnknown, "3.4 s is a load");
 
-        // And a model the tracker had not seen is cold whatever it reports.
         let mut a = ambient();
         a.was_loaded = false;
         assert_eq!(
@@ -695,20 +667,15 @@ mod tests {
     fn a_retried_post_is_the_same_receipt_however_much_later_it_arrives() {
         let a = from_callback(&spec_example(), &ambient()).unwrap();
 
-        // The case the first draft got wrong: the route builds a fresh
-        // Ambient per request, so a retry arrives with a later timestamp. It
-        // is still the same measurement and must still be one row.
         let mut later = ambient();
         later.ts_ms += 45_000;
         let b = from_callback(&spec_example(), &later).unwrap();
         assert_eq!(a.id, b.id, "a retry is the same receipt, not a new one");
 
-        // One token of difference is a different request.
         let mut other = spec_example();
         other.as_object_mut().unwrap().insert("eval_count".into(), json!(299));
         assert_ne!(from_callback(&other, &ambient()).unwrap().id, a.id);
 
-        // Field order is the caller's business, not an identity.
         let reordered: serde_json::Value = serde_json::from_str(
             r#"{"eval_count":298,"model":"coder:14b","num_ctx":32768,
                 "total_duration":8113331500,"load_duration":6396458,
@@ -739,8 +706,6 @@ mod tests {
             ts_ms: 1_700_000_000_000,
             node_id: "WK-TEST".into(),
             model: "coder:14b".into(),
-            // The rounded millisecond fields the dashboard uses. The receipt
-            // must not be built from these.
             latency_ms: 8_113,
             ttft_ms: 130,
             tpot_ms: 16.33,
@@ -767,13 +732,11 @@ mod tests {
         assert_eq!(r.co_resident, vec!["other:7b".to_string()]);
         assert!((r.decode_tps().unwrap() - 61.2).abs() < 0.1);
 
-        // One request through the proxy is one receipt, keyed on its trace id.
         assert_eq!(r.id, from_proxy_trace(&t, &a).id);
         let mut other = t.clone();
         other.id = "99999999-2222-3333-4444-555555555555".into();
         assert_ne!(from_proxy_trace(&other, &a).id, r.id);
 
-        // A real load makes it cold even though the tracker says it was there.
         let mut cold = t.clone();
         cold.load_duration_ns = Some(3_364_000_000);
         assert_eq!(from_proxy_trace(&cold, &a).start_state, StartState::ColdUnknown);
@@ -787,7 +750,6 @@ mod tests {
         assert!((s.low - 59.8).abs() < 1e-9);
         assert!((s.high - 61.2).abs() < 1e-9);
 
-        // Even count takes the mean of the middle two.
         let even = Stats::of(&[1.0, 2.0, 3.0, 4.0]).unwrap();
         assert!((even.median - 2.5).abs() < 1e-9);
 

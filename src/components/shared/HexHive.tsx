@@ -67,7 +67,6 @@ const HexHive: React.FC<HexHiveProps> = ({ rows, onNodeClick }) => {
               : isActive              ? 'drop-shadow(0 0 8px rgba(245,158,11,0.55))'
               :                         'none';
 
-            // Compute WES for tooltip
             const watts = m ? getNodePowerW(m) : null;
             const wes = (m && tps != null && tps > 0 && watts != null && watts > 0)
               ? computeWES(tps, watts, m.thermal_state)

@@ -9,8 +9,6 @@ pub(crate) fn extract_api_key(headers: &HeaderMap) -> Option<String> {
         .or_else(|| extract_bearer(headers))
 }
 
-// ── Agent API v1 types ────────────────────────────────────────────────────────
-
 #[derive(Serialize)]
 pub(crate) struct V1NodeInfo {
     pub(crate) node_id:      String,
@@ -79,8 +77,6 @@ pub(crate) struct V1CreateKeyResponse {
     pub(crate) scope:      &'static str,
 }
 
-// ── Agent API v1 handlers — key management ────────────────────────────────────
-
 /// POST /api/v1/keys
 pub(crate) async fn handle_v1_create_key(
     State(state): State<AppState>,
@@ -105,8 +101,6 @@ pub(crate) async fn handle_v1_create_key(
     };
     if !role.can_mutate() { return role_forbidden("member"); }
 
-    // Org-scoped keys: minted only by org Admins, bound to the verified org
-    // claim. Personal keys (the default) keep the original per-user scope.
     let scope = body.scope.as_deref().unwrap_or("personal");
     let key_org: Option<String> = match scope {
         "personal" => None,
@@ -167,7 +161,6 @@ pub(crate) async fn handle_v1_list_keys(
     };
 
     // Personal keys (yours, org_id NULL) + the active org's keys (visible to
-    // every member — they're shared infrastructure; only Admins mint/revoke).
     let keys: Vec<(String, String, i64, Option<i64>, Option<String>)> = sqlx::query_as(
         "SELECT key_id, name, created_at, last_used_ms, org_id
          FROM api_keys
@@ -203,8 +196,6 @@ pub(crate) async fn handle_delete_node(
     };
     if !role.is_admin() { return role_forbidden("admin"); }
 
-    // Org members can remove any node in the shared fleet; solo users only
-    // their own. tenant_id on the metrics tables is the same scope column.
     let (tcol, tval) = tenant_scope(&user_id, &org_id);
     let result = sqlx::query(
         &format!("DELETE FROM nodes WHERE wk_id = $1 AND {tcol} = $2")
@@ -216,13 +207,11 @@ pub(crate) async fn handle_delete_node(
                 Json(serde_json::json!({ "error": "Node not found" }))).into_response()
         }
         Ok(_) => {
-            // Purge stored metrics (tenant_id = org_id for org nodes).
             let _ = sqlx::query("DELETE FROM metrics_raw WHERE node_id = $1 AND tenant_id = $2")
                 .bind(&node_id).bind(tval).execute(&state.pool).await;
             let _ = sqlx::query("DELETE FROM metrics_5min WHERE node_id = $1 AND tenant_id = $2")
                 .bind(&node_id).bind(tval).execute(&state.pool).await;
 
-            // Evict from in-memory cache.
             state.metrics.write().unwrap().remove(&node_id);
             audit(&state.pool, &user_id, &org_id, "node.removed", &node_id, serde_json::json!({}));
             StatusCode::NO_CONTENT.into_response()
@@ -252,8 +241,6 @@ pub(crate) async fn handle_v1_delete_key(
     };
     if !role.can_mutate() { return role_forbidden("member"); }
 
-    // Personal keys: owner deletes their own. Org keys: any Admin of the
-    // key's org (checked against the verified claim, not ownership).
     let personal = sqlx::query(
         "DELETE FROM api_keys WHERE key_id = $1 AND user_id = $2 AND org_id IS NULL"
     ).bind(&key_id).bind(&user_id).execute(&state.pool).await;
@@ -266,7 +253,7 @@ pub(crate) async fn handle_v1_delete_key(
         }
         Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": "Internal error" }))).into_response(),
-        Ok(_) => {} // not a personal key — fall through to the org path
+        Ok(_) => {}
     }
 
     if let Some(ref org) = org_id {
@@ -294,8 +281,6 @@ pub(crate) async fn handle_v1_delete_key(
     (StatusCode::NOT_FOUND,
         Json(serde_json::json!({ "error": "Key not found" }))).into_response()
 }
-
-// ── Agent API v1 handlers — fleet data ────────────────────────────────────────
 
 /// GET /api/v1/fleet
 pub(crate) async fn handle_v1_fleet(
@@ -457,16 +442,13 @@ pub(crate) async fn handle_v1_route_best(
         if now.saturating_sub(entry.last_seen_ms) >= ONLINE_THRESHOLD_MS { return None; }
         let m = entry.metrics.as_ref()?;
 
-        // Per-model routing: when model param is specified, check if node has it loaded
         if let Some(ref target_model) = model_filter {
-            // Check active_models array first (multi-model)
             if let Some(ref models) = m.active_models {
                 if let Some(am) = models.iter().find(|am| &am.model == target_model) {
                     return Some(NodeScore { node_id, tok_s: am.tok_s, wes: am.wes });
                 }
-                return None; // Node doesn't have this model loaded
+                return None;
             }
-            // Fallback to singular active model
             if m.ollama_active_model.as_deref() != Some(target_model) {
                 return None;
             }
@@ -497,8 +479,6 @@ pub(crate) async fn handle_v1_route_best(
         latency: best_latency, efficiency: best_efficiency, default: "efficiency",
     }).into_response()
 }
-
-// ── GET /api/v1/insights/latest ───────────────────────────────────────────────
 
 #[derive(Serialize)]
 pub(crate) struct V1InsightsFleet {

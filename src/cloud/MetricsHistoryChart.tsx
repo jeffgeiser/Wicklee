@@ -24,8 +24,6 @@ import { useFleetStream } from '../contexts/FleetStreamContext';
 import { getNodePowerW } from '../utils/power';
 import { CLOUD_URL } from '../utils/cloudUrl';
 
-// ── Types ─────────────────────────────────────────────────────────────────────
-
 type MetricKey  = 'tok_s' | 'watts' | 'gpu_pct' | 'mem_pct' | 'ttft_ms' | 'e2e_latency_ms';
 
 interface MetricPoint {
@@ -47,11 +45,9 @@ interface MetricsNode {
 
 interface ChartPoint {
   label:     string;
-  value:     number | null;  // selected metric
-  p95:       number | null;  // tok_s P95 (only for tok_s metric)
+  value:     number | null;
+  p95:       number | null;
 }
-
-// ── Metric definitions ────────────────────────────────────────────────────────
 
 const METRIC_CONFIG: Record<MetricKey, {
   label:      string;
@@ -138,8 +134,6 @@ const METRIC_CONFIG: Record<MetricKey, {
 
 const METRICS: MetricKey[] = ['tok_s', 'watts', 'gpu_pct', 'mem_pct', 'ttft_ms', 'e2e_latency_ms'];
 
-// ── Props ─────────────────────────────────────────────────────────────────────
-
 interface Props {
   getToken:         () => Promise<string | null>;
   subscriptionTier: SubscriptionTier;
@@ -147,8 +141,6 @@ interface Props {
   selectedNodeId?: string | null;
   onNodeSelect?:   (nodeId: string) => void;
 }
-
-// ── Tooltip ───────────────────────────────────────────────────────────────────
 
 const MetricTooltip: React.FC<{
   active?: boolean;
@@ -160,7 +152,6 @@ const MetricTooltip: React.FC<{
   const cfg = METRIC_CONFIG[metric];
   const main = payload.find(p => p.name === 'value');
   const p95  = payload.find(p => p.name === 'p95');
-  // == null, not falsy: 0 tok/s / 0 W are legitimate points to show.
   if (main?.value == null) return null;
   return (
     <div className="bg-gray-800 border border-gray-700 rounded-xl px-3 py-2 text-xs shadow-xl">
@@ -177,8 +168,6 @@ const MetricTooltip: React.FC<{
   );
 };
 
-// ── Component ─────────────────────────────────────────────────────────────────
-
 const MetricsHistoryChart: React.FC<Props> = ({
   getToken, subscriptionTier,
   selectedNodeId: externalSelectedId,
@@ -190,8 +179,6 @@ const MetricsHistoryChart: React.FC<Props> = ({
   const [internalSelectedId, setInternalSelectedId] = useState<string | null>(null);
 
   const selectedId = externalSelectedId ?? internalSelectedId;
-  // Stable setter that reads the latest onNodeSelect through a ref, so
-  // fetchHistory (deps [getToken]) never calls a stale parent callback.
   const externalOnNodeSelectRef = useRef(externalOnNodeSelect);
   externalOnNodeSelectRef.current = externalOnNodeSelect;
   const setSelectedId = useCallback((id: string) => {
@@ -203,11 +190,6 @@ const MetricsHistoryChart: React.FC<Props> = ({
   const [error,      setError]      = useState<string | null>(null);
   const [lastFetch,  setLastFetch]  = useState(0);
 
-  // fetchHistory reads the selection through a ref: with deps = [getToken],
-  // a closed-over selectedId stays frozen at its mount value (null), so every
-  // range change / refresh concluded "no selection" and snapped the chart
-  // back to the first node with data, stomping the user's (and the parent's
-  // synced) selection.
   const selectedIdRef = useRef(selectedId);
   selectedIdRef.current = selectedId;
 
@@ -234,8 +216,6 @@ const MetricsHistoryChart: React.FC<Props> = ({
       }
       setLastFetch(Date.now());
     } catch (e) {
-      // A superseded fetch (range switched) aborts — ignore so a stale
-      // earlier response can't overwrite newer data or flash an error.
       if ((e as { name?: string } | null)?.name === 'AbortError') return;
       setError('Network error — check connection');
     } finally {
@@ -243,8 +223,6 @@ const MetricsHistoryChart: React.FC<Props> = ({
     }
   }, [getToken, setSelectedId]);
 
-  // Abort the in-flight request when the range changes or on unmount, so a
-  // slow earlier fetch can't land after a newer one (stale-overwrite race).
   useEffect(() => {
     const ctrl = new AbortController();
     fetchHistory(range, ctrl.signal);
@@ -263,14 +241,9 @@ const MetricsHistoryChart: React.FC<Props> = ({
     p95:   hasP95 && cfg.getP95(p) != null ? parseFloat((cfg.getP95(p) as number).toFixed(cfg.decimals)) : null,
   }));
 
-  // Live current value from SSE (shown as a reference line annotation)
   const liveNode  = selectedId ? allNodeMetrics[selectedId] : null;
   const liveValue = liveNode ? cfg.getLive(liveNode) : null;
 
-  // Every SubscriptionTier must appear here: the lookup below falls back to 0
-  // (community) for unknown keys, so an omitted tier silently loses access to
-  // ranges it pays for. 'business' was missing, which locked Business accounts
-  // out of 7D/30D/90D — less history than the cheaper Team tier.
   const userRank = tierRank(subscriptionTier);
   const isRangeLocked = (r: TimeRange): boolean => {
     const rc = RANGE_CONFIG[r];
@@ -282,7 +255,6 @@ const MetricsHistoryChart: React.FC<Props> = ({
     ? Math.round((Date.now() - lastFetch) / 1000)
     : null;
 
-  // ── CSV export — build from in-memory chart data ──────────────────────
   const handleCsvDownload = useCallback(() => {
     if (!node || node.points.length === 0) return;
     const header = 'timestamp,tok_s,watts,gpu_pct,mem_pct';
@@ -304,7 +276,6 @@ const MetricsHistoryChart: React.FC<Props> = ({
   return (
     <div className="bg-gray-800 border border-gray-700 rounded-2xl overflow-hidden">
 
-      {/* ── Header ───────────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between px-5 py-4 border-b border-gray-700 gap-4 flex-wrap">
         <div className="flex items-center gap-2">
           <Activity className="w-3.5 h-3.5 text-gray-500 shrink-0" />
@@ -317,7 +288,6 @@ const MetricsHistoryChart: React.FC<Props> = ({
           )}
         </div>
 
-        {/* Time range + refresh */}
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-1 bg-gray-900/60 rounded-lg p-0.5">
             {RANGES.map(r => {
@@ -364,7 +334,6 @@ const MetricsHistoryChart: React.FC<Props> = ({
         </div>
       </div>
 
-      {/* ── Metric selector ──────────────────────────────────────────────────── */}
       <div className="flex items-center gap-1 px-5 pt-3 pb-1">
         {METRICS.map(m => {
           const mc = METRIC_CONFIG[m];
@@ -385,7 +354,6 @@ const MetricsHistoryChart: React.FC<Props> = ({
         })}
       </div>
 
-      {/* ── Node tabs (multi-node) ───────────────────────────────────────────── */}
       {nodes.length > 1 && (
         <div className="flex items-center gap-1 px-5 pb-2 overflow-x-auto">
           {nodes.map(n => (
@@ -404,7 +372,6 @@ const MetricsHistoryChart: React.FC<Props> = ({
         </div>
       )}
 
-      {/* ── Chart area ───────────────────────────────────────────────────────── */}
       <div className="px-2 pb-4 pt-2">
         {error ? (
           <div className="flex flex-col items-center justify-center h-40 gap-3">
@@ -461,7 +428,6 @@ const MetricsHistoryChart: React.FC<Props> = ({
                 cursor={{ stroke: '#374151', strokeWidth: 1 }}
               />
 
-              {/* Main area */}
               <Area
                 type="monotone"
                 dataKey="value"
@@ -473,7 +439,6 @@ const MetricsHistoryChart: React.FC<Props> = ({
                 connectNulls
               />
 
-              {/* P95 dashed reference line for tok/s on 24h+ */}
               {hasP95 && (
                 <Line
                   type="monotone"
@@ -488,7 +453,6 @@ const MetricsHistoryChart: React.FC<Props> = ({
                 />
               )}
 
-              {/* Live current value — horizontal reference */}
               {liveValue != null && (
                 <ReferenceLine
                   y={liveValue}
@@ -509,7 +473,6 @@ const MetricsHistoryChart: React.FC<Props> = ({
         )}
       </div>
 
-      {/* ── Legend ───────────────────────────────────────────────────────────── */}
       {hasData && hasP95 && (
         <div className="flex items-center gap-4 px-5 pb-3 text-[10px] text-gray-600">
           <span className="flex items-center gap-1.5">

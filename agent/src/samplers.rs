@@ -3,27 +3,9 @@
 
 use super::*;
 
-// ── NVIDIA Harvester ──────────────────────────────────────────────────────────
-//
-// ── NVML memory info v2 helper ────────────────────────────────────────────────
-//
-// nvmlDeviceGetMemoryInfo (v1) returns NVML_ERROR_NOT_SUPPORTED on NVIDIA
-// Grace Blackwell (GB10/GB200 Superchip) and similar unified-memory SoC
-// designs where the GPU does not have a traditional dedicated framebuffer.
-// nvmlDeviceGetMemoryInfo_v2 adds a `reserved` field and works correctly on
-// these architectures.  nvml-wrapper 0.10 only wraps v1, so we call v2
-// directly through the nvml-wrapper-sys bindings.
-//
-// This function takes an already-loaded NvmlLib (no dlopen inside the poll
-// loop) and acquires the device handle internally.  The raw nvmlDevice_t
-// pointer is created and consumed within this synchronous fn — it never
-// escapes into the async task, keeping the future Send-safe.
-//
-// Returns (total_mb, used_mb) on success, None if v2 is also unsupported.
 #[cfg(any(all(target_os = "linux", not(target_env = "musl")), target_os = "windows"))]
 pub(crate) fn nvml_memory_v2(lib: &nvml_wrapper_sys::bindings::NvmlLib, device_index: u32) -> Option<(u64, u64)> {
     use std::mem;
-    // NVML_STRUCT_VERSION(Memory, 2) = sizeof(nvmlMemory_v2_t) | (2 << 24)
     let version: u32 = (mem::size_of::<nvmlMemory_v2_t>() as u32) | (2_u32 << 24);
 
     unsafe {
@@ -40,10 +22,6 @@ pub(crate) fn nvml_memory_v2(lib: &nvml_wrapper_sys::bindings::NvmlLib, device_i
     }
 }
 
-// Helper: load libnvidia-ml at runtime to access v2 APIs not yet exposed by
-// the nvml-wrapper safe layer.  The library is already in-process (loaded by
-// Nvml::init()); the OS loader returns the same DSO handle reference-counted,
-// so this is cheap and does not cause double-init.
 #[cfg(any(all(target_os = "linux", not(target_env = "musl")), target_os = "windows"))]
 pub(crate) fn load_nvml_lib() -> Option<nvml_wrapper_sys::bindings::NvmlLib> {
     use nvml_wrapper_sys::bindings::NvmlLib;
@@ -56,26 +34,6 @@ pub(crate) fn load_nvml_lib() -> Option<nvml_wrapper_sys::bindings::NvmlLib> {
     names.iter().find_map(|n| unsafe { NvmlLib::new(n).ok() })
 }
 
-// Initialises NVML on the first call; if unavailable (no drivers, macOS, etc.)
-// returns immediately with an all-None cache — no crash, no retry spam.
-// Polls device 0 every 2 s for: GPU util, VRAM, temperature, board power draw.
-// No sudo required on Linux — NVML reads through the kernel driver interface.
-//
-// Memory API selection — probed once at startup, held for the session lifetime:
-//
-//   V1       Standard discrete GPU (GeForce, RTX, A-series, H100, B100, B200…)
-//            nvmlDeviceGetMemoryInfo works; reports dedicated GDDR/HBM directly.
-//
-//   V2(lib)  Hopper/Blackwell HBM systems where v1 returns NOT_SUPPORTED.
-//            Uses nvmlDeviceGetMemoryInfo_v2 via the sys crate.
-//
-//   Unified  GB10 / DGX Spark — LPDDR5x unified memory, no dedicated VRAM
-//            budget; nvidia-smi reports [N/A] for memory.total.  We instead:
-//              • total  = system RAM (the full unified pool the GPU accesses)
-//              • used   = sum of used_gpu_memory across running compute processes
-//            This matches exactly what nvidia-smi shows per-process and gives
-//            the fleet UI a meaningful VRAM utilisation signal.
-
 pub(crate) fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
     let shared = Arc::new(Mutex::new(NvidiaMetrics::default()));
 
@@ -85,15 +43,11 @@ pub(crate) fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
         tokio::spawn(async move {
             let nvml = match Nvml::init() {
                 Ok(n) => n,
-                Err(_) => return, // diagnostic already logged in run_startup_diagnostics
+                Err(_) => return,
             };
-
-            // ── One-time setup before the poll loop ───────────────────────────
 
             enum MemApi {
                 V1,
-                // Boxed: NvmlLib is a large table of fn pointers and would
-                // otherwise dominate the enum's size (clippy::large_enum_variant).
                 V2(Box<nvml_wrapper_sys::bindings::NvmlLib>),
                 /// Unified-memory SoC: no discrete VRAM pool in NVML.
                 /// `total_mb` is the system RAM total read once from /proc/meminfo
@@ -106,11 +60,6 @@ pub(crate) fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
                 let probe = nvml.device_by_index(0).ok();
                 let name  = probe.as_ref().and_then(|d| d.name().ok());
 
-                // System RAM total — used as the Unified pool denominator on
-                // hardware where NVML reports no dedicated VRAM (GB10, etc.).
-                // sysinfo is already a direct dependency and handles both Linux
-                // (/proc/meminfo) and Windows (GlobalMemoryStatusEx) internally,
-                // so no platform-specific code is needed here.
                 let sys_total_mb: u64 = {
                     let mut sys = sysinfo::System::new();
                     sys.refresh_memory();
@@ -118,10 +67,7 @@ pub(crate) fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
                 };
 
                 let api = match probe.as_ref().map(|d| d.memory_info()) {
-                    // v1 works and reports a non-zero total → use it directly.
                     Some(Ok(mem)) if mem.total > 0 => MemApi::V1,
-                    // v1 returned N/A or zero: try the v2 struct (Hopper / HBM Blackwell).
-                    // If v2 also yields no data the device is a unified-memory SoC → Unified.
                     _ => match load_nvml_lib() {
                         Some(lib) if nvml_memory_v2(&lib, 0).is_some() => MemApi::V2(Box::new(lib)),
                         _ => MemApi::Unified { total_mb: sys_total_mb },
@@ -139,13 +85,11 @@ pub(crate) fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
                     Err(_) => continue,
                 };
 
-                // Static properties — use the cached value, no NVML round-trip.
                 let mut m = NvidiaMetrics { nvidia_gpu_name: gpu_name_cached.clone(), ..Default::default() };
 
                 m.nvidia_gpu_utilization_percent =
                     device.utilization_rates().ok().map(|u| u.gpu as f32);
 
-                // Memory — use whichever API was confirmed to work at startup.
                 match &mem_api {
                     MemApi::V1 => {
                         if let Ok(mem) = device.memory_info() {
@@ -160,9 +104,6 @@ pub(crate) fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
                         }
                     }
                     MemApi::Unified { total_mb } => {
-                        // Sum GPU-resident allocations across all active compute
-                        // processes.  This is the same accounting nvidia-smi uses
-                        // to surface per-process memory on unified-memory SoCs.
                         use nvml_wrapper::enums::device::UsedGpuMemory;
                         let used_mb: u64 = device
                             .running_compute_processes()
@@ -184,17 +125,6 @@ pub(crate) fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
                 m.nvidia_power_draw_w =
                     device.power_usage().ok().map(|mw| mw as f32 / 1_000.0);
 
-                // ── WES v2: NVML throttle-reason bitmask ─────────────────
-                // Maps hardware clock-throttle reasons to a thermal penalty
-                // factor. This is the most authoritative thermal signal on
-                // NVIDIA hardware — no temperature inference required.
-                //
-                // Priority when multiple thermal bits are set: 2.5 (worst-case)
-                //   HW_THERMAL_SLOWDOWN alone   → 2.0
-                //   SW_THERMAL_SLOWDOWN alone   → 1.25
-                //   HW_SLOWDOWN / HW_POWER_BRAKE alone → 1.25
-                //   No throttle bits, temp ≥90°C → 1.1 (pre-throttle)
-                //   No throttle bits, temp <90°C → 1.0 (healthy)
                 if let Ok(reasons) = device.current_throttle_reasons() {
                     let hw_thermal  = reasons.contains(ThrottleReasons::HW_THERMAL_SLOWDOWN);
                     let sw_thermal  = reasons.contains(ThrottleReasons::SW_THERMAL_SLOWDOWN);
@@ -213,7 +143,6 @@ pub(crate) fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
                     } else if sw_thermal || hw_slowdown || pwr_brake {
                         1.25
                     } else {
-                        // No throttle bits active — check pre-throttle threshold.
                         m.nvidia_gpu_temp_c
                             .map(|t| if t >= 90 { 1.1 } else { 1.0 })
                             .unwrap_or(1.0)
@@ -222,10 +151,6 @@ pub(crate) fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
                     m.nvidia_throttle_penalty = Some(penalty);
                 }
 
-                // ── GPU clock throttle percentage ─────────────────────────────
-                // (cur_graphics_mhz / max_graphics_mhz) → inverse is throttle %.
-                // Zero-privilege; returns None on virtualised GPUs where clock
-                // info is unavailable (safe — patterns gate on Some(_) density).
                 if let (Ok(cur_mhz), Ok(max_mhz)) = (
                     device.clock_info(Clock::Graphics),
                     device.max_clock_info(Clock::Graphics),
@@ -235,11 +160,6 @@ pub(crate) fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
                         m.clock_throttle_pct = Some(((1.0 - ratio) * 100.0).clamp(0.0, 100.0));
                     }
 
-                // ── PCIe link width ───────────────────────────────────────────
-                // current_pcie_link_width() returns the negotiated lane count (1/4/8/16).
-                // max_pcie_link_width() returns the maximum the card + slot support.
-                // When current < max, the GPU is lane-degraded (wrong slot or failed lane).
-                // Zero-privilege; returns NotSupported on virtualised guests.
                 if let Ok(cur_w) = device.current_pcie_link_width() {
                     m.pcie_link_width = Some(cur_w);
                 }
@@ -256,8 +176,6 @@ pub(crate) fn start_nvidia_harvester() -> Arc<Mutex<NvidiaMetrics>> {
 
     shared
 }
-
-// ── Background Harvester ──────────────────────────────────────────────────────
 
 /// Platform sensor harvester feeding `AppleSiliconMetrics`.
 ///
@@ -294,8 +212,6 @@ pub(crate) fn spawn_windows_thermal_harvester(shared: Arc<Mutex<AppleSiliconMetr
         let mut interval = tokio::time::interval(WMI_THERMAL_INTERVAL);
         loop {
             interval.tick().await;
-            // wmic is a blocking std::process::Command — keep it off the
-            // async workers.
             let state = tokio::task::spawn_blocking(read_thermal_wmi).await.ok().flatten();
             if state.is_some() { failures = 0; } else { failures += 1; }
             if let Ok(mut g) = shared.lock() { g.thermal_state = state; }
@@ -311,24 +227,15 @@ pub(crate) fn spawn_windows_thermal_harvester(shared: Arc<Mutex<AppleSiliconMetr
 pub(crate) fn spawn_macos_metrics_harvester(shared_clone: Arc<Mutex<AppleSiliconMetrics>>) {
     tokio::spawn(async move {
         let chip_name = read_apple_chip_name().await;
-        // Read once at startup — iogpu.wired_limit_mb reflects the hardware
-        // budget, not runtime state. Apple Silicon only; None on Intel Macs.
         let wired_limit_mb = read_iogpu_wired_limit_mb();
 
-        // powermetrics samples over a 5 s window (try_powermetrics_nosudo uses
-        // `-i 5000`), so awaiting it inline would gate this whole loop to ~5 s and
-        // staling the cheap thermal/GPU/memory reads. Run it on its own task and
-        // have the 2 s loop below merge whatever the latest sample is.
         let pm_cache: Arc<Mutex<Option<AppleSiliconMetrics>>> = Arc::new(Mutex::new(None));
         {
             let pm_cache = Arc::clone(&pm_cache);
             tokio::spawn(async move {
                 loop {
                     match try_powermetrics_nosudo().await {
-                        // Success already blocked ~5 s, so this self-paces at ~5 s.
                         Some(pm) => { if let Ok(mut g) = pm_cache.lock() { *g = Some(pm); } }
-                        // Unavailable (non-root / Intel Mac): returns fast — clear
-                        // the cache and back off so we don't busy-spin.
                         None => {
                             if let Ok(mut g) = pm_cache.lock() { *g = None; }
                             tokio::time::sleep(Duration::from_secs(5)).await;
@@ -348,31 +255,23 @@ pub(crate) fn spawn_macos_metrics_harvester(shared_clone: Arc<Mutex<AppleSilicon
                 ..Default::default()
             };
 
-            // 1. Thermal: sysctl (Intel) → pmset (M-series)
             m.thermal_state = read_thermal_sysctl();
             if m.thermal_state.is_none() {
                 m.thermal_state = read_thermal_pmset().await;
             }
 
-            // 2. GPU: IOAccelerator → IOGPUDevice (Apple Silicon AGX)
             m.gpu_utilization_percent = read_gpu_ioreg().await;
 
-            // 3. Memory pressure via vm_stat (no sudo required)
             m.memory_pressure_percent = read_memory_pressure_vmstat().await;
 
-            // 4. Power + thermal via powermetrics — read the latest sample from the
-            //    background task (refreshed ~every 5 s) instead of blocking here.
-            //    Copy all power fields: cpu, gpu, ane, and the combined SoC total.
-            //    apple_soc_power_w (= soc_power_w) is the true ~13-20 W system draw
-            //    during inference; cpu_power_w alone (~1.7-7 W) under-reports by 2-3×.
             let latest_pm = pm_cache.lock().ok().and_then(|g| g.clone());
             if let Some(pm) = latest_pm {
                 m.cpu_power_w  = pm.cpu_power_w;
                 m.ecpu_power_w = pm.ecpu_power_w;
                 m.pcpu_power_w = pm.pcpu_power_w;
-                m.gpu_power_w  = pm.gpu_power_w;  // GPU cluster power (W)
-                m.ane_power_w  = pm.ane_power_w;  // Apple Neural Engine power (W)
-                m.soc_power_w  = pm.soc_power_w;  // Combined SoC total — prefer this for WES
+                m.gpu_power_w  = pm.gpu_power_w;
+                m.ane_power_w  = pm.ane_power_w;
+                m.soc_power_w  = pm.soc_power_w;
                 if pm.memory_pressure_percent.is_some() {
                     m.memory_pressure_percent = pm.memory_pressure_percent;
                 }
@@ -388,25 +287,6 @@ pub(crate) fn spawn_macos_metrics_harvester(shared_clone: Arc<Mutex<AppleSilicon
         }
     });
 }
-
-// ── WES v2: Thermal Penalty Sampler ───────────────────────────────────────────
-//
-// Maps the current thermal_state string (or NVML bitmask result) to a numeric
-// penalty factor, then maintains a 30-sample (60 s) rolling window per the WES v2
-// spec. The window averages and peak are forwarded in every MetricsPayload.
-//
-// WES v2 penalty table (refined from v1 — Serious was 2.0, now 1.75):
-//   Normal   → 1.00
-//   Fair     → 1.25
-//   Serious  → 1.75  ← changed from 2.0
-//   Critical → 2.00
-//
-// Source tags:
-//   "nvml"         — NVML throttle-reason bitmask (hardware-authoritative; NVIDIA only)
-//   "iokit"        — macOS pmset / sysctl thermal level
-//   "clock_ratio"  — AMD k10temp + scaling_cur_freq / cpuinfo_max_freq ratio
-//   "sysfs"        — Linux /sys/class/thermal zone max (non-AMD fallback)
-//   "unavailable"  — no thermal data on this platform
 
 /// Resolve thermal state for the MetricsPayload, with idle CPU override.
 ///
@@ -438,9 +318,6 @@ pub(crate) fn resolve_thermal_state(
 ) -> Option<String> {
     apple_state.clone()
         .or_else(|| linux_thermal.as_ref().map(|lt| {
-            // Idle CPU override: clock_ratio at low CPU is frequency scaling, not throttle.
-            // Must match the same logic in start_wes_sampler() so thermal_state and
-            // penalty_avg stay consistent in the payload.
             if lt.source == "clock_ratio" && cpu_usage_pct < 15.0 {
                 "Normal".to_string()
             } else {
@@ -455,7 +332,7 @@ pub(crate) fn thermal_penalty_v2(state: &str) -> f32 {
         "Critical" => 2.00,
         "Serious"  => 1.75,
         "Fair"     => 1.25,
-        _          => 1.00,  // "Normal" and any unknown/empty value
+        _          => 1.00,
     }
 }
 
@@ -488,7 +365,7 @@ pub(crate) fn start_wes_sampler(
     apple_metrics:         Arc<Mutex<AppleSiliconMetrics>>,
     nvidia_metrics:        Arc<Mutex<NvidiaMetrics>>,
     linux_thermal_metrics: Arc<Mutex<Option<LinuxThermalResult>>>,
-    cpu_usage_pct:         Arc<std::sync::atomic::AtomicU32>,  // IEEE f32 bits
+    cpu_usage_pct:         Arc<std::sync::atomic::AtomicU32>,
 ) -> Arc<Mutex<WesMetrics>> {
     let shared = Arc::new(Mutex::new(WesMetrics::default()));
     let shared_clone = Arc::clone(&shared);
@@ -498,7 +375,6 @@ pub(crate) fn start_wes_sampler(
             std::collections::VecDeque::with_capacity(30);
 
         let mut interval = tokio::time::interval(Duration::from_secs(2));
-        // Discard the immediate first tick so the first real sample has data.
         interval.tick().await;
 
         loop {
@@ -508,20 +384,15 @@ pub(crate) fn start_wes_sampler(
             let apple  = apple_metrics.lock().map(|g| g.clone()).unwrap_or_default();
             let linux  = linux_thermal_metrics.lock().map(|g| g.clone()).unwrap_or(None);
 
-            // Determine penalty + source (highest-quality source wins).
-            // AMD clock_ratio path carries a direct_penalty (can exceed 2.0 for
-            // severe throttle); sysfs path uses thermal_penalty_v2(state).
             let (penalty, source): (f32, &'static str) =
                 if let Some(p) = nvidia.nvidia_throttle_penalty {
                     (p, "nvml")
                 } else if let Some(ref state) = apple.thermal_state {
                     // macOS: pmset/sysctl. Windows: the platform harvester's
-                    // WMI thermal-zone reading lands in the same field.
                     let src = if cfg!(target_os = "windows") { "wmi" } else { "iokit" };
                     (thermal_penalty_v2(state.as_str()), src)
                 } else if let Some(ref lt) = linux {
                     let cpu_pct = f32::from_bits(cpu_usage_pct.load(std::sync::atomic::Ordering::Relaxed));
-                    // Idle CPU override: clock_ratio at low CPU is frequency scaling, not throttle.
                     let p = if lt.source == "clock_ratio" && cpu_pct < 15.0 {
                         1.0
                     } else {
@@ -532,7 +403,6 @@ pub(crate) fn start_wes_sampler(
                     (1.0, "unavailable")
                 };
 
-            // Rolling window: evict oldest sample when full.
             if window.len() >= 30 {
                 window.pop_front();
             }
@@ -542,7 +412,6 @@ pub(crate) fn start_wes_sampler(
             let avg = window.iter().copied().sum::<f32>() / n;
             let peak = window.iter().copied().fold(f32::NEG_INFINITY, f32::max);
 
-            // Round to 3 decimal places — avoids floating-point noise in JSON.
             let round3 = |v: f32| (v * 1_000.0).round() / 1_000.0;
 
             if let Ok(mut guard) = shared_clone.lock() {

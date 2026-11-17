@@ -49,16 +49,13 @@ export const ALL_CATEGORIES: ModelCategory[] = [
 export function inferCategory(modelId: string): ModelCategory {
   const id = modelId.toLowerCase();
 
-  // ── Vision (multimodal) ─────────────────────────────────────────────────
-  // Llava, moondream, Qwen-VL, Phi-Vision, Gemma-Vision, internvl, cogvlm,
-  // pixtral, Idefics, BunnY, Mini-CPM-V
   if (
-    /\bvl\b/.test(id) ||                   // "Qwen3-VL", "InternVL"
+    /\bvl\b/.test(id) ||
     /-vl-|vl-/.test(id) ||
     /vision/.test(id) ||
     /llava/.test(id) ||
     /moondream/.test(id) ||
-    /paddleocr/.test(id) ||                // OCR is a vision task
+    /paddleocr/.test(id) ||
     /pixtral/.test(id) ||
     /idefics/.test(id) ||
     /cogvlm/.test(id) ||
@@ -68,10 +65,9 @@ export function inferCategory(modelId: string): ModelCategory {
     return 'Vision';
   }
 
-  // ── Audio (ASR + TTS) ───────────────────────────────────────────────────
   if (
     /whisper/.test(id) ||
-    /\bsts?\b/.test(id) ||                 // standalone "tts" / "stt"
+    /\bsts?\b/.test(id) ||
     /-tts(?:-|$)/.test(id) ||
     /parler/.test(id) ||
     /seamless/.test(id) ||
@@ -83,9 +79,6 @@ export function inferCategory(modelId: string): ModelCategory {
     return 'Audio';
   }
 
-  // ── Embedding ───────────────────────────────────────────────────────────
-  // bge-*, e5-*, gte-*, nomic-embed-*, jina-embeddings, mxbai-embed,
-  // snowflake-arctic-embed
   if (
     /\bembed/.test(id) ||
     /\bembedding/.test(id) ||
@@ -101,8 +94,6 @@ export function inferCategory(modelId: string): ModelCategory {
     return 'Embedding';
   }
 
-  // ── Code ────────────────────────────────────────────────────────────────
-  // qwen-coder, deepseek-coder, starcoder, codellama, granite-code, codegemma
   if (
     /\bcoder\b/.test(id) ||
     /\bcode\b/.test(id) ||
@@ -117,9 +108,6 @@ export function inferCategory(modelId: string): ModelCategory {
     return 'Code';
   }
 
-  // ── Reasoning ───────────────────────────────────────────────────────────
-  // qwq, deepseek-r1, openthinker, marco-o1, reflection, thinking-models,
-  // r1-distill, openrlhf
   if (
     /\bqwq\b/.test(id) ||
     /deepseek-?r1/.test(id) ||
@@ -139,7 +127,6 @@ export function inferCategory(modelId: string): ModelCategory {
     return 'Reasoning';
   }
 
-  // ── General fallback ────────────────────────────────────────────────────
   return 'General';
 }
 

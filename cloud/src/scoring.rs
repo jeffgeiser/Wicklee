@@ -14,7 +14,7 @@
 //! hard gate existed in one binary but not the other, so the same model
 //! graded differently on the cloud fleet view vs the localhost dashboard.
 
-#![allow(dead_code)] // not every binary uses every item
+#![allow(dead_code)]
 
 /// VRAM overhead estimate for a candidate model that hasn't been loaded yet.
 ///
@@ -37,14 +37,6 @@ pub(crate) fn estimate_vram_mb(file_size_bytes: u64) -> u64 {
 /// "Mixtral-8x7B" (returns 8×7=56), "DeepSeek-67B".
 pub(crate) fn extract_params_b(model_id: &str) -> Option<f32> {
     let lower = model_id.to_lowercase();
-    // First try "NxMB" (MoE expert count × per-expert params) — e.g. "8x7b" → 56.
-    // NOTE: this is the naive expert product; real MoE totals run ~17% lower
-    // (Mixtral 8x7B is 46.7B) because attention/embedding weights are shared.
-    // Acceptable here: the only consumer is the ±(30%–200%) plausibility band.
-    // Scan EVERY 'x' position — `find('x')` stopped at the 'x' in
-    // "miXtral", so "Mixtral-8x7B" fell through to the plain scan and parsed
-    // as 7B; its ~26 GB Q4 files then exceeded the 200% plausibility bound
-    // and were rejected as mislabeled.
     for (idx, _) in lower.match_indices('x') {
         if idx == 0 || idx + 1 >= lower.len() { continue; }
         let before: String = lower[..idx].chars().rev()
@@ -59,8 +51,6 @@ pub(crate) fn extract_params_b(model_id: &str) -> Option<f32> {
                 return Some(e * p);
             }
     }
-    // Fallback: plain "NB" or "N.MB", word-boundaried so "1b" in "1binary"
-    // doesn't match.
     let bytes = lower.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
@@ -88,19 +78,15 @@ pub(crate) fn extract_params_b(model_id: &str) -> Option<f32> {
 /// as bytes — every correctly-sized GGUF came out at ~12% of "expected" and
 /// was rejected by the 30% floor, silently emptying model discovery.
 pub(crate) fn bytes_per_param_for_quant(quant: &str) -> Option<f32> {
-    // Calibrated against real GGUF files, not nominal bit widths — K-quants
-    // are mixed precision (Llama 3.1 8B Q4_K_M = 4.92 GB / 8.03B = 0.61 B/W;
-    // Q2_K = 3.18 GB / 8.03B = 0.40 B/W). Single source for the agent's
-    // model-fit sizing; src/utils/quantSize.ts mirrors these values.
     let q = quant.to_ascii_uppercase();
-    if q.starts_with("IQ2") { return Some(0.34); }                          // ~2.7 bits
-    if q.starts_with("Q2") { return Some(0.39); }                           // ~3.2 bits
-    if q.starts_with("Q3") || q.starts_with("IQ3") { return Some(0.45); }  // ~3.6 bits
-    if q.starts_with("IQ4") { return Some(0.56); }                          // ~4.5 bits
-    if q.starts_with("Q4") { return Some(0.60); }                           // ~4.85 bits
-    if q.starts_with("Q5") { return Some(0.69); }                           // ~5.5 bits
-    if q.starts_with("Q6") { return Some(0.82); }                           // ~6.6 bits
-    if q.starts_with("Q8") { return Some(1.0); }                            // ~8.5 bits
+    if q.starts_with("IQ2") { return Some(0.34); }
+    if q.starts_with("Q2") { return Some(0.39); }
+    if q.starts_with("Q3") || q.starts_with("IQ3") { return Some(0.45); }
+    if q.starts_with("IQ4") { return Some(0.56); }
+    if q.starts_with("Q4") { return Some(0.60); }
+    if q.starts_with("Q5") { return Some(0.69); }
+    if q.starts_with("Q6") { return Some(0.82); }
+    if q.starts_with("Q8") { return Some(1.0); }
     if q == "F16" || q == "BF16" { return Some(2.0); }
     if q == "F32" { return Some(4.0); }
     None

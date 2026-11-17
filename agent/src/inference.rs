@@ -3,29 +3,21 @@ use crate::{AppleSiliconMetrics, NvidiaMetrics, OllamaMetrics, VllmMetrics, Llam
 /// Platform-independent sensor bundle. All fields are Option — absent sensors
 /// are skipped. No platform #[cfg] branches in the state machine itself.
 pub(crate) struct HardwareSignals {
-    // Apple Silicon
-    pub(crate) ane_power_w:    Option<f32>,  // ANE power — ML-specific, most accurate signal
-    pub(crate) soc_power_w:    Option<f32>,  // Combined CPU+GPU+ANE (fallback if ANE absent)
+    pub(crate) ane_power_w:    Option<f32>,
+    pub(crate) soc_power_w:    Option<f32>,
     /// GPU HW active residency % from IOKit (primary) / powermetrics (fallback).
     /// Distinct from GPU *power*: M2 base GPU reads ~88 mW at 40 % residency.
     /// Used as Tier 3 "Power Blindness" override for M2/M3 base chips.
     pub(crate) apple_gpu_pct:  Option<f32>,
-    // NVIDIA
     pub(crate) nvidia_gpu_pct: Option<f32>,
-    pub(crate) nvidia_vram_mb: Option<u64>,  // non-zero = Ollama process holds GPU memory
+    pub(crate) nvidia_vram_mb: Option<u64>,
     pub(crate) nvidia_power_w: Option<f32>,
-    // Runtime presence — gates BUSY detection (GPU load without any AI runtime)
-    pub(crate) ai_runtime_loaded: bool,      // ollama_running || vllm_running
-    // Model actually loaded in VRAM — gates Tier 3 to prevent false LIVE from
-    // everyday GPU activity when a runtime process is running but idle (no model).
-    pub(crate) ai_model_loaded:   bool,      // ollama_active_model.is_some() || ...
-    // Tier 1 exact
+    pub(crate) ai_runtime_loaded: bool,
+    pub(crate) ai_model_loaded:   bool,
     pub(crate) vllm_requests:     Option<u32>,
     pub(crate) llamacpp_requests: Option<u32>,
-    // Tier 2 attribution
     pub(crate) probe_active:         bool,
     pub(crate) last_user_request_ts: Option<std::time::Instant>,
-    // IDLE-SPD display
     pub(crate) recent_probe: bool,
     /// A probe baseline exists and is inside its scheduled refresh window.
     /// IDLE-SPD only — unlike `recent_probe` it never gates Tier 3, so probes
@@ -116,12 +108,6 @@ impl std::fmt::Display for InferenceState {
 ///   Busy      Hardware loaded, no AI runtime
 ///   Idle      Silicon at rest
 pub(crate) fn compute_inference_state(s: &HardwareSignals) -> InferenceState {
-    // ── Tier 1: Exact runtime counts (zero heuristic) ────────────────────────
-    // The agent's own scheduled baseline probe is a real completion request, so it
-    // shows up in these counts (num_requests_running / slots_processing).
-    // While a probe is in flight, discount exactly one request — otherwise
-    // every idle-node probe blipped LIVE and was pushed to the cloud via the
-    // state-transition bypass. Concurrent user traffic still counts (≥2).
     let probe_inflight = u32::from(s.probe_active);
     if s.vllm_requests.is_some_and(|r| r > probe_inflight) {
         return InferenceState::Live;
@@ -130,38 +116,18 @@ pub(crate) fn compute_inference_state(s: &HardwareSignals) -> InferenceState {
         return InferenceState::Live;
     }
 
-    // ── Tier 2: Attribution-confirmed user request ────────────────────────────
-    // last_user_request_ts is set by /api/ps harvester only when the expires_at
-    // change is NOT from our own probe (snapshot-based filter), so this timestamp
-    // is guaranteed to represent a real user request.
     if s.last_user_request_ts.is_some_and(|t| t.elapsed().as_secs() < 15) {
         return InferenceState::Live;
     }
 
-    // ── Tier 3: Physics / sensor fusion (≤500ms latency) ─────────────────────
-    // Gated by:
-    //   !probe_active — probe itself heats silicon
-    //   !recent_probe — GPU residency lingers 10-15s after probe ends; without
-    //                   this gate the 20% threshold hallucinates LIVE from probe heat
-    //   ai_model_loaded — prevents LIVE from everyday GPU activity when a
-    //                     runtime is running but has no model in VRAM
-    //
-    // High-confidence override: the synthetic probe never drives GPU above ~60%.
-    // If residency is ≥ 75% during the recent_probe window it can only be real
-    // user inference — skip the recent_probe gate.
     let saturated_gpu = s.apple_gpu_pct.is_some_and(|g| g >= 75.0)
                      || s.nvidia_gpu_pct.is_some_and(|g| g >= 75.0);
 
     if !s.probe_active && (!s.recent_probe || saturated_gpu) && s.ai_model_loaded {
         let ai_specific = s.ane_power_w.is_some_and(|p| p > 0.5);
         let physics =
-            // SoC power gate (M1 Pro/Max/Ultra, M2/M3 Pro/Max — larger GPU arrays)
             s.soc_power_w.is_some_and(|p| p > 8.0)
-            // "Power Blindness" override: M2/M3 base GPU reports near-zero power
-            // (~88 mW) even at 40%+ residency. Use GPU residency directly.
-            // 20% sits above system-idle flicker (3–5%) and below inference load (40%+).
             || s.apple_gpu_pct.is_some_and(|g| g > 20.0)
-            // NVIDIA checks
             || (s.nvidia_gpu_pct.is_some_and(|g| g > 30.0)
                 && s.nvidia_vram_mb.is_some_and(|v| v > 0))
             || s.nvidia_power_w.is_some_and(|p| p > 40.0);
@@ -171,15 +137,10 @@ pub(crate) fn compute_inference_state(s: &HardwareSignals) -> InferenceState {
         }
     }
 
-    // ── IDLE-SPD: fresh probe baseline available ──────────────────────────────
-    // Also requires a model in VRAM — no point showing IDLE-SPD if the runtime
-    // is running but has no model loaded. `fresh_baseline` covers the gap
-    // between scheduled probes (minutes apart, see harvester::ProbePolicy).
     if (s.recent_probe || s.fresh_baseline) && s.ai_model_loaded {
         return InferenceState::IdleSpd;
     }
 
-    // ── BUSY: hardware loaded, no AI runtime ─────────────────────────────────
     let any_load = s.nvidia_gpu_pct.is_some_and(|g| g > 20.0)
                 || s.soc_power_w.is_some_and(|p| p > 10.0);
     if any_load && !s.ai_runtime_loaded {
@@ -189,7 +150,6 @@ pub(crate) fn compute_inference_state(s: &HardwareSignals) -> InferenceState {
     InferenceState::Idle
 }
 
-// ── Unit tests for inference state machine ──────────────────────────────────
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,8 +174,6 @@ mod tests {
         }
     }
 
-    // ── Test 1: Probe running + user inference → NOT LIVE ────────────────────
-    // Probe is on silicon; physics would be ambiguous. Must stay non-LIVE.
     #[test]
     fn probe_active_high_gpu_not_live() {
         let s = HardwareSignals {
@@ -228,9 +186,6 @@ mod tests {
         assert_ne!(compute_inference_state(&s), InferenceState::Live);
     }
 
-    // ── Tier 1 probe discount: the probe's own request must not read LIVE ───
-    // The scheduled baseline probe is a real completion request, so it appears in
-    // num_requests_running / slots_processing while in flight.
     #[test]
     fn vllm_probe_own_request_not_live() {
         let s = HardwareSignals {
@@ -243,7 +198,6 @@ mod tests {
         assert_ne!(compute_inference_state(&s), InferenceState::Live);
     }
 
-    // Concurrent user traffic during a probe still counts (≥ 2 requests).
     #[test]
     fn vllm_user_request_during_probe_still_live() {
         let s = HardwareSignals {
@@ -268,8 +222,6 @@ mod tests {
         assert_ne!(compute_inference_state(&s), InferenceState::Live);
     }
 
-    // ── Test 2: Probe just ended + high GPU → LIVE (saturated override) ─────
-    // GPU ≥ 75% is physically impossible from probe residual → must be user.
     #[test]
     fn recent_probe_saturated_gpu_is_live() {
         let s = HardwareSignals {
@@ -282,8 +234,6 @@ mod tests {
         assert_eq!(compute_inference_state(&s), InferenceState::Live);
     }
 
-    // ── Test 3: Probe just ended + medium GPU → IDLE-SPD ────────────────────
-    // 50% could be probe residency decay (~45-60% range). Must stay IDLE-SPD.
     #[test]
     fn recent_probe_medium_gpu_is_idle_spd() {
         let s = HardwareSignals {
@@ -296,7 +246,6 @@ mod tests {
         assert_eq!(compute_inference_state(&s), InferenceState::IdleSpd);
     }
 
-    // ── Test 4: No probe history + GPU 99% → LIVE ───────────────────────────
     #[test]
     fn no_probe_high_gpu_is_live() {
         let s = HardwareSignals {
@@ -308,8 +257,6 @@ mod tests {
         assert_eq!(compute_inference_state(&s), InferenceState::Live);
     }
 
-    // ── Test 5: No probe history + GPU 15% → IDLE or BUSY ──────────────────
-    // 15% is below the 20% physics threshold.
     #[test]
     fn no_probe_low_gpu_with_runtime_is_idle() {
         let s = HardwareSignals {
@@ -331,7 +278,6 @@ mod tests {
         assert_eq!(compute_inference_state(&s), InferenceState::Busy);
     }
 
-    // ── Test 6: Tier 2 fires within 15s → LIVE ─────────────────────────────
     #[test]
     fn tier2_recent_user_request_is_live() {
         let s = HardwareSignals {
@@ -344,7 +290,6 @@ mod tests {
     #[test]
     fn tier2_expired_user_request_is_not_live() {
         let s = HardwareSignals {
-            // 20s ago — beyond the 15s window
             last_user_request_ts: Some(
                 std::time::Instant::now()
                     .checked_sub(std::time::Duration::from_secs(20))
@@ -355,7 +300,6 @@ mod tests {
         assert_ne!(compute_inference_state(&s), InferenceState::Live);
     }
 
-    // ── Test 7: vLLM requests > 0 → LIVE unconditionally (Tier 1) ──────────
     #[test]
     fn vllm_requests_is_live() {
         let s = HardwareSignals {
@@ -365,7 +309,6 @@ mod tests {
         assert_eq!(compute_inference_state(&s), InferenceState::Live);
     }
 
-    // ── Test 8: llama.cpp slots_processing > 0 → LIVE unconditionally (Tier 1)
     #[test]
     fn llamacpp_requests_is_live() {
         let s = HardwareSignals {
@@ -375,7 +318,6 @@ mod tests {
         assert_eq!(compute_inference_state(&s), InferenceState::Live);
     }
 
-    // ── Test 9: ANE power > 0.5W → LIVE (ai_specific path) ─────────────────
     #[test]
     fn ane_power_is_live() {
         let s = HardwareSignals {
@@ -387,9 +329,6 @@ mod tests {
         assert_eq!(compute_inference_state(&s), InferenceState::Live);
     }
 
-    // ── Additional edge cases ───────────────────────────────────────────────
-
-    // Wire-format serialization is correct.
     #[test]
     fn inference_state_as_str() {
         assert_eq!(InferenceState::Live.as_str(),    "live");
@@ -398,14 +337,12 @@ mod tests {
         assert_eq!(InferenceState::Idle.as_str(),    "idle");
     }
 
-    // Display impl matches as_str (used by .to_string() at call sites).
     #[test]
     fn inference_state_display() {
         assert_eq!(InferenceState::Live.to_string(), "live");
         assert_eq!(InferenceState::IdleSpd.to_string(), "idle-spd");
     }
 
-    // NVIDIA saturated GPU also triggers the override.
     #[test]
     fn nvidia_saturated_gpu_during_recent_probe_is_live() {
         let s = HardwareSignals {
@@ -419,22 +356,17 @@ mod tests {
         assert_eq!(compute_inference_state(&s), InferenceState::Live);
     }
 
-    // ── Runtime running but no model loaded + high GPU → NOT LIVE ───────────
-    // Ollama process is running but no model is in VRAM. GPU activity is from
-    // other apps (Chrome, compositing). Must not trigger Tier 3.
     #[test]
     fn runtime_running_no_model_high_gpu_is_not_live() {
         let s = HardwareSignals {
             apple_gpu_pct:     Some(25.0),
-            ai_runtime_loaded: true,   // Ollama process running
-            ai_model_loaded:   false,  // but no model loaded
+            ai_runtime_loaded: true,
+            ai_model_loaded:   false,
             ..idle_signals()
         };
         assert_eq!(compute_inference_state(&s), InferenceState::Idle);
     }
 
-    // ── Runtime running, no model, recent probe → NOT IDLE-SPD ───────────────
-    // Edge case: recent_probe=true but no model loaded shouldn't show IDLE-SPD.
     #[test]
     fn runtime_no_model_recent_probe_is_idle() {
         let s = HardwareSignals {
@@ -446,9 +378,6 @@ mod tests {
         assert_eq!(compute_inference_state(&s), InferenceState::Idle);
     }
 
-    // ── Fresh (scheduled) baseline between probes → IDLE-SPD ────────────────
-    // Probes fire minutes apart; a baseline inside its refresh window keeps
-    // IDLE-SPD steady when the silicon is quiet.
     #[test]
     fn fresh_baseline_quiet_gpu_is_idle_spd() {
         let s = HardwareSignals {
@@ -461,8 +390,6 @@ mod tests {
         assert_eq!(compute_inference_state(&s), InferenceState::IdleSpd);
     }
 
-    // A fresh baseline must NOT gate Tier 3 the way recent_probe does:
-    // moderate GPU load long after the last probe is real inference.
     #[test]
     fn fresh_baseline_does_not_blind_physics() {
         let s = HardwareSignals {
@@ -475,7 +402,6 @@ mod tests {
         assert_eq!(compute_inference_state(&s), InferenceState::Live);
     }
 
-    // Fresh baseline with no model resident → plain IDLE.
     #[test]
     fn fresh_baseline_no_model_is_idle() {
         let s = HardwareSignals {
@@ -486,7 +412,6 @@ mod tests {
         assert_eq!(compute_inference_state(&s), InferenceState::Idle);
     }
 
-    // Bare idle — no sensors, no runtime → IDLE.
     #[test]
     fn bare_idle() {
         assert_eq!(compute_inference_state(&idle_signals()), InferenceState::Idle);

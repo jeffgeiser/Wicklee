@@ -14,22 +14,6 @@ pub(crate) static HTTP_AGENT: std::sync::LazyLock<ureq::Agent> = std::sync::Lazy
         .build()
 });
 
-// ── Outbound URL guard (SSRF) ─────────────────────────────────────────────────
-//
-// Webhook, audit-drain, OTel and Slack URLs are customer-supplied, and the
-// `/test` endpoints echo the receiver's status code. Unchecked, that turns the
-// control plane into a probe of its own network (Railway internal services,
-// cloud metadata at 169.254.169.254, localhost admin ports). Every outbound
-// call to such a URL goes through `resolve_outbound*`, which:
-//   - requires http(s) and a host,
-//   - resolves the host and rejects any non-public address,
-//   - returns the checked addresses so the client is PINNED to them (no DNS
-//     rebinding between check and connect),
-// and the clients built from it never follow redirects (a public receiver
-// could otherwise 302 us to an internal address).
-// Self-hosted installs deliver to their own private network by design, so
-// private targets are allowed there (or with OUTBOUND_ALLOW_PRIVATE=true).
-
 pub(crate) fn outbound_private_allowed() -> bool {
     static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *FLAG.get_or_init(|| {
@@ -42,11 +26,11 @@ pub(crate) fn is_public_ipv4(ip: std::net::Ipv4Addr) -> bool {
     let o = ip.octets();
     !(ip.is_private() || ip.is_loopback() || ip.is_link_local() || ip.is_unspecified()
         || ip.is_broadcast() || ip.is_multicast() || ip.is_documentation()
-        || o[0] == 0                                  // 0.0.0.0/8
-        || (o[0] == 100 && (o[1] & 0xc0) == 64)       // 100.64.0.0/10 CGNAT
-        || (o[0] == 192 && o[1] == 0 && o[2] == 0)    // 192.0.0.0/24
-        || (o[0] == 198 && (o[1] & 0xfe) == 18)       // 198.18.0.0/15
-        || o[0] >= 240)                               // reserved
+        || o[0] == 0
+        || (o[0] == 100 && (o[1] & 0xc0) == 64)
+        || (o[0] == 192 && o[1] == 0 && o[2] == 0)
+        || (o[0] == 198 && (o[1] & 0xfe) == 18)
+        || o[0] >= 240)
 }
 
 pub(crate) fn is_public_ip(ip: std::net::IpAddr) -> bool {
@@ -58,10 +42,10 @@ pub(crate) fn is_public_ip(ip: std::net::IpAddr) -> bool {
             }
             let seg = v6.segments();
             !(v6.is_loopback() || v6.is_unspecified() || v6.is_multicast()
-                || (seg[0] & 0xfe00) == 0xfc00                 // fc00::/7 ULA
-                || (seg[0] & 0xffc0) == 0xfe80                 // fe80::/10 link-local
-                || (seg[0] == 0x0064 && seg[1] == 0xff9b)      // 64:ff9b::/96 NAT64
-                || (seg[0] == 0x2001 && seg[1] == 0x0db8))     // documentation
+                || (seg[0] & 0xfe00) == 0xfc00
+                || (seg[0] & 0xffc0) == 0xfe80
+                || (seg[0] == 0x0064 && seg[1] == 0xff9b)
+                || (seg[0] == 0x2001 && seg[1] == 0x0db8))
         }
     }
 }

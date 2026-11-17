@@ -261,7 +261,6 @@ pub(crate) async fn handle_put_audit_drain(
     let secret = hex::encode(secret_bytes);
     let (tcol, tval) = tenant_scope(&user_id, &org_id);
 
-    // Start the cursor at the tenant's current max id so only NEW events flow.
     let start_sql = format!("SELECT COALESCE(MAX(id), 0) FROM audit_log WHERE {tcol} = $1");
     let start_id: i64 = sqlx::query_scalar(&start_sql)
         .bind(tval).fetch_one(&state.pool).await.unwrap_or(0);
@@ -282,7 +281,7 @@ pub(crate) async fn handle_put_audit_drain(
                 serde_json::json!({}));
             Json(serde_json::json!({
                 "url": body.url, "enabled": true,
-                "secret": secret,  // shown ONCE — verify X-Wicklee-Signature with it
+                "secret": secret,
             })).into_response()
         }
         Err(e) => { eprintln!("[audit-drain] upsert failed: {e}");
@@ -389,8 +388,6 @@ pub(crate) async fn audit_drain_task(pool: sqlx::PgPool) {
     }
 }
 
-// ── Model governance API (Enterprise) ────────────────────────────────────────
-
 #[derive(serde::Deserialize)]
 pub(crate) struct CreateModelPolicyBody {
     /// Model name, or a trailing-`*` prefix pattern (e.g. "llama3.1:8b*").
@@ -447,8 +444,6 @@ pub(crate) async fn handle_model_policy_list(
     }).collect();
 
     Json(serde_json::json!({
-        // No entries = nothing is governed. Surfaced explicitly so the UI can
-        // say so rather than showing an empty list that looks like "all blocked".
         "active":  !entries.is_empty(),
         "entries": entries,
     })).into_response()
@@ -463,8 +458,6 @@ pub(crate) async fn handle_model_policy_create(
     let (user_id, org_id, role, tenant_id) = match governance_auth(&state, &headers).await {
         Ok(v) => v, Err(resp) => return resp,
     };
-    // Admin-only: an allow-list is a security control, so editing it matches
-    // the bar for node removal rather than day-to-day ops.
     if !matches!(role, OrgRole::Admin) { return role_forbidden("admin"); }
 
     let model = body.model.trim().to_string();
@@ -472,8 +465,6 @@ pub(crate) async fn handle_model_policy_create(
         return (StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": "model must be 1-200 chars" }))).into_response();
     }
-    // A bare "*" would allow every model, silently turning governance off for
-    // the scope while looking configured. Reject it explicitly.
     if model == "*" {
         return (StatusCode::BAD_REQUEST,
             Json(serde_json::json!({
@@ -495,7 +486,6 @@ pub(crate) async fn handle_model_policy_create(
      .execute(&state.pool).await;
 
     if let Err(e) = res {
-        // Unique index on (tenant, model, coalesce(tag,'')).
         if e.to_string().contains("idx_model_policies_uniq") {
             return (StatusCode::CONFLICT,
                 Json(serde_json::json!({ "error": "That model is already allowed for this scope" }))).into_response();
@@ -565,8 +555,6 @@ pub(crate) async fn handle_model_policy_violations(
     Json(serde_json::json!({ "violations": violations })).into_response()
 }
 
-// ── Model governance evaluation ──────────────────────────────────────────────
-
 /// One allow-list entry. `tag: None` = fleet-wide.
 #[derive(Debug, Clone)]
 pub(crate) struct ModelPolicy {
@@ -601,9 +589,6 @@ pub(crate) fn model_matches(pattern: &str, model: &str) -> bool {
         return false;
     }
     match p.strip_suffix('*') {
-        // A bare "*" would allow everything, which defeats the point of an
-        // allow-list — treat it as matching nothing rather than silently
-        // disabling governance for the scope.
         Some("") => false,
         Some(prefix) => m.starts_with(prefix),
         None => p == m,
@@ -634,13 +619,11 @@ pub(crate) fn model_policy_violation(
         .collect();
 
     if applicable.is_empty() {
-        return None; // ungoverned
+        return None;
     }
     if applicable.iter().any(|p| model_matches(&p.model, model)) {
-        return None; // allowed
+        return None;
     }
-    // Name the narrowest governing scope for the message: a tag if one governs
-    // this node, otherwise the fleet-wide rule.
     let scope = applicable.iter()
         .find_map(|p| p.tag.clone())
         .unwrap_or_else(|| "fleet".to_string());
@@ -665,14 +648,14 @@ pub(crate) async fn evaluate_model_policy(
         .map(|m| m.trim().to_string())
         .filter(|m| !m.is_empty());
 
-    let Some(model) = model else { return }; // nothing loaded — nothing to govern
+    let Some(model) = model else { return };
 
     let policies: Vec<ModelPolicy> = sqlx::query_as::<_, (String, Option<String>)>(
         "SELECT model, tag FROM model_policies WHERE tenant_id = $1"
     ).bind(tenant_id).fetch_all(pool).await.unwrap_or_default()
      .into_iter().map(|(model, tag)| ModelPolicy { model, tag }).collect();
 
-    if policies.is_empty() { return; } // governance not configured — fail safe
+    if policies.is_empty() { return; }
 
     let tags: Option<String> = sqlx::query_scalar("SELECT tags FROM nodes WHERE wk_id = $1")
         .bind(node_id).fetch_optional(pool).await.ok().flatten();
@@ -680,7 +663,6 @@ pub(crate) async fn evaluate_model_policy(
 
     let verdict = model_policy_violation(&model, &tags, &policies);
 
-    // Previously flagged model for this node, used to fire once per offence.
     let prev: Option<(Option<String>, Option<String>)> = sqlx::query_as(
         "SELECT last_model, last_flagged FROM model_policy_state WHERE tenant_id = $1 AND node_id = $2"
     ).bind(tenant_id).bind(node_id).fetch_optional(pool).await.unwrap_or(None);
@@ -716,8 +698,6 @@ pub(crate) async fn evaluate_model_policy(
             ).bind(tenant_id).bind(node_id).bind(&model).bind(now).execute(pool).await;
         }
         None => {
-            // Compliant: clear last_flagged so a return to the unapproved model
-            // is treated as a fresh offence.
             let _ = sqlx::query(
                 "INSERT INTO model_policy_state (tenant_id, node_id, last_model, last_flagged, last_flagged_ms)
                  VALUES ($1, $2, $3, NULL, NULL)
@@ -738,8 +718,6 @@ mod model_governance_tests {
 
     #[test]
     fn empty_allowlist_governs_nothing() {
-        // The fail-safe that makes this feature opt-in: with no policies, no
-        // model is ever a violation.
         assert_eq!(model_policy_violation("anything:7b", &normalize_tags(Some("env:prod")), &[]), None);
     }
 
@@ -753,12 +731,10 @@ mod model_governance_tests {
     #[test]
     fn tag_scoped_entry_leaves_untagged_nodes_ungoverned() {
         let p = vec![pol("llama3.1:8b", Some("env:prod"))];
-        // Node carries the tag -> governed.
         assert_eq!(
             model_policy_violation("mistral:7b", &normalize_tags(Some("env:prod")), &p),
             Some("env:prod".into())
         );
-        // Node does not -> untouched. A dev box must not inherit prod policy.
         assert_eq!(model_policy_violation("mistral:7b", &normalize_tags(Some("env:dev")), &p), None);
         assert_eq!(model_policy_violation("mistral:7b", &[], &p), None);
     }
@@ -770,8 +746,6 @@ mod model_governance_tests {
         assert_eq!(model_policy_violation("llama3.1:8b", &prod, &p), None, "fleet entry applies");
         assert_eq!(model_policy_violation("mistral:7b",  &prod, &p), None, "tag entry applies");
         assert!(model_policy_violation("qwen2.5:32b", &prod, &p).is_some());
-        // On an untagged node only the fleet entry applies, so the prod-only
-        // model is NOT allowed there.
         assert_eq!(model_policy_violation("mistral:7b", &[], &p), Some("fleet".into()));
     }
 
@@ -783,7 +757,6 @@ mod model_governance_tests {
 
     #[test]
     fn trailing_star_matches_by_prefix() {
-        // Real fleets swap quants, so exact-only would be unusable.
         assert!(model_matches("llama3.1:8b*", "llama3.1:8b-instruct-q4_K_M"));
         assert!(model_matches("llama3.1:8b*", "llama3.1:8b"));
         assert!(!model_matches("llama3.1:8b*", "llama3.1:70b"));
@@ -791,8 +764,6 @@ mod model_governance_tests {
 
     #[test]
     fn bare_star_matches_nothing() {
-        // Otherwise a single "*" row would quietly disable governance for the
-        // scope while the UI still showed it as configured.
         assert!(!model_matches("*", "anything"));
         let p = vec![pol("*", None)];
         assert_eq!(model_policy_violation("anything", &[], &p), Some("fleet".into()));
@@ -800,7 +771,6 @@ mod model_governance_tests {
 
     #[test]
     fn sql_wildcards_in_model_names_are_literal() {
-        // Matching happens in Rust, not via LIKE, so % and _ are not patterns.
         assert!(!model_matches("llama%", "llama3.1:8b"));
         assert!(!model_matches("llama_.1:8b", "llama3.1:8b"));
         assert!(model_matches("weird%name", "weird%name"));
@@ -818,7 +788,6 @@ mod model_governance_tests {
         assert_eq!(normalize_tags(Some("env:prod, Team:ML ,, ")), vec!["env:prod", "team:ml"]);
         assert_eq!(normalize_tags(None), Vec::<String>::new());
         assert_eq!(normalize_tags(Some("")), Vec::<String>::new());
-        // Spaces inside a tag are stripped, matching replace(lower(tags),' ','').
         assert_eq!(normalize_tags(Some("env: prod")), vec!["env:prod"]);
     }
 
@@ -854,13 +823,10 @@ mod csv_escape_tests {
 
     #[test]
     fn formula_injection_is_neutralized() {
-        // A node display name like "=HYPERLINK(...)" must not execute when
-        // the export is opened in Excel/Sheets.
         assert_eq!(csv_escape("=1+2"), "'=1+2");
         assert_eq!(csv_escape("+SUM(A1)"), "'+SUM(A1)");
         assert_eq!(csv_escape("-2+3"), "'-2+3");
         assert_eq!(csv_escape("@cmd"), "'@cmd");
-        // Formula prefix + comma → apostrophe AND quoting compose.
         assert_eq!(csv_escape("=cmd,arg"), "\"'=cmd,arg\"");
     }
 }

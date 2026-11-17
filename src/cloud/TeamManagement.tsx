@@ -10,32 +10,11 @@ import { IS_AGENT, IS_DEMO } from '../utils/buildTarget';
  * On the agent/localhost build, this renders a static message (Clerk not available).
  */
 
-// Clerk is loaded with a dynamic import(), never a static one, so its module
-// init never runs in agent builds — the same rule App.tsx follows for
-// CloudApp / SignInPage.
-//
-// This used to be a `require('@clerk/clerk-react')` inside try/catch. In a
-// Vite ESM bundle `require` is not defined in the browser, so the call threw,
-// the catch swallowed it, ClerkOrgProfile stayed null, and the cloud branch
-// below was never taken: the org-management UI never rendered on wicklee.dev
-// and Team-tier users always saw the "available on the cloud dashboard"
-// fallback — on the cloud dashboard. Surfaced by the September lint pass
-// (no-require-imports).
-//
-// Shape matters for bundle size. IS_AGENT / IS_DEMO fold to literals at build
-// time, so the ternary folds too and the import() is gone from those bundles.
-// A bare `const X = React.lazy(() => import(...))` is NOT enough: Rollup keeps
-// the call as a possible side effect even when X is unreferenced, and
-// OrganizationProfile's ~22 kB landed in the agent chunk that already carries
-// @clerk/clerk-react for the sign-in pages. Measured both ways.
 const ClerkOrgProfile = (IS_AGENT || IS_DEMO)
   ? null
   : React.lazy(() =>
       import('@clerk/clerk-react').then(m => ({ default: m.OrganizationProfile })),
     );
-// OrganizationProfile renders nothing without an active organization, so a
-// user who hasn't created one yet gets Clerk's CreateOrganization instead.
-// Same dynamic-import shape as above so agent/demo bundles stay Clerk-free.
 const ClerkCreateOrg = (IS_AGENT || IS_DEMO)
   ? null
   : React.lazy(() =>
@@ -96,7 +75,6 @@ const TeamManagement: React.FC<TeamManagementProps> = ({ orgId }) => {
     );
   }
 
-  // Fallback for localhost/agent builds
   return (
     <div className="flex flex-col items-center justify-center py-16 text-center">
       <Users className="w-12 h-12 text-gray-600 mb-4" />

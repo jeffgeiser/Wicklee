@@ -13,23 +13,12 @@ import { useFleetStream } from '../contexts/FleetStreamContext';
 import { useFleetCounts } from '../hooks/useFleetCounts';
 import { useLocalMetricsStream } from '../hooks/useLocalMetricsStream';
 
-// ── Constants ─────────────────────────────────────────────────────────────────
-
 import { IS_LOCAL_HOST as isLocalHost } from '../utils/buildTarget';
 
-// ── Management table grid ──────────────────────────────────────────────────────
-// Fixed column widths — no responsive hiding.
-// Container is overflow-x: auto so the table scrolls horizontally on narrow
-// viewports rather than collapsing or hiding columns.
-// Columns: SELECT(40) | NODE(140) | IDENTITY(1fr) | OS(80) | MEMORY(130) |
-//          CONNECTIVITY(110) | UPTIME(90) | VERSION(80) | COVERAGE(100)
 const MGMT_GRID_CLS = 'grid gap-x-4 items-center [grid-template-columns:40px_140px_1fr_80px_130px_110px_90px_80px_100px]';
-
-// ── Utilities ─────────────────────────────────────────────────────────────────
 
 type NodeOS = 'macOS' | 'Linux' | 'Windows' | 'Unknown';
 
-// Fallback inference for older agents that predate the explicit os field.
 const inferOsFromMetrics = (m: SentinelMetrics | null): NodeOS => {
   if (!m) return 'Unknown';
   if (m.nvidia_power_draw_w != null) return 'Linux';
@@ -52,7 +41,7 @@ const derivePermissions = (m: SentinelMetrics | null): PermLevel => {
   const hasPower   = m.cpu_power_w != null || m.nvidia_vram_total_mb != null;
   const hasThermal = m.thermal_state != null;
   if (hasPower && hasThermal) return 'full';
-  if (hasPower)               return 'partial'; // power but no thermal (e.g. Linux without lm-sensors)
+  if (hasPower)               return 'partial';
   const chip = (m.chip_name ?? m.gpu_name ?? '').toLowerCase();
   if (chip.includes('apple') || /\bm[1-4]\b/.test(chip)) return 'partial';
   return 'limited';
@@ -60,25 +49,17 @@ const derivePermissions = (m: SentinelMetrics | null): PermLevel => {
 
 const deriveMemCapacity = (m: SentinelMetrics | null): string => {
   if (!m) return '—';
-  // NVIDIA Grace Blackwell / GB10 — VRAM ≈ total RAM, same unified architecture as Apple Silicon.
-  // Detect by VRAM being ≥ 90 % of reported system RAM (discrete GPUs are always much smaller).
   if (m.nvidia_vram_total_mb != null && m.total_memory_mb > 0 &&
       m.nvidia_vram_total_mb >= m.total_memory_mb * 0.9)
     return `${Math.round(m.nvidia_vram_total_mb / 1024)} GB unified`;
-  // NVIDIA discrete GPU — VRAM is separate from system RAM.
   if (m.nvidia_vram_total_mb != null)
     return `${Math.round(m.nvidia_vram_total_mb / 1024)} GB VRAM`;
-  // Apple Silicon — memory_pressure_percent is IOKit/macOS-exclusive.
-  // Do NOT use cpu_power_w here: Linux RAPL also populates that field on AMD/Intel nodes.
   if (m.memory_pressure_percent != null && m.total_memory_mb > 0)
     return `${Math.round(m.total_memory_mb / 1024)} GB unified`;
-  // x86 / standard system RAM (AMD, Intel, generic Linux ARM).
   if (m.total_memory_mb > 0)
     return `${Math.round(m.total_memory_mb / 1024)} GB RAM`;
   return '—';
 };
-
-// ── Internal types ────────────────────────────────────────────────────────────
 
 type SortKey     = 'registered' | 'nodeId' | 'hostname' | 'location';
 type StatusFilter = 'all' | 'online' | 'offline';
@@ -92,8 +73,6 @@ interface EnrichedNode {
   locationLabel: string | null;
   idx:           number;
 }
-
-// ── Header tile ───────────────────────────────────────────────────────────────
 
 const MgmtTile: React.FC<{
   label:    string;
@@ -123,8 +102,6 @@ const MgmtTile: React.FC<{
     <div>{children}</div>
   </div>
 );
-
-// ── Table header row ──────────────────────────────────────────────────────────
 
 const MgmtTableHeader: React.FC<{
   filteredIds:      string[];
@@ -161,8 +138,6 @@ const MgmtTableHeader: React.FC<{
   );
 };
 
-// ── Expanded detail band ──────────────────────────────────────────────────────
-
 const DetailBand: React.FC<{
   node:              NodeAgent;
   metrics:           SentinelMetrics | null;
@@ -194,7 +169,6 @@ const DetailBand: React.FC<{
   return (
     <div className="border-t border-gray-100 dark:border-gray-700 grid grid-cols-1 divide-y divide-gray-100 dark:divide-gray-800 min-[860px]:grid-cols-3 min-[860px]:divide-y-0 min-[860px]:divide-x">
 
-      {/* A — CONNECTIVITY */}
       <div className="px-4 py-4 space-y-3">
         <p className="text-[8px] font-bold uppercase tracking-widest text-gray-400 dark:text-gray-500">
           Connectivity
@@ -213,7 +187,6 @@ const DetailBand: React.FC<{
         </div>
       </div>
 
-      {/* B — NODE SETTINGS */}
       <div className="px-4 py-4 space-y-3">
         <p className="text-[8px] font-bold uppercase tracking-widest text-gray-400 dark:text-gray-500">
           Node Settings
@@ -267,13 +240,11 @@ const DetailBand: React.FC<{
         )}
       </div>
 
-      {/* C — DIAGNOSTICS */}
       <div className="px-4 py-4 space-y-3">
         <p className="text-[8px] font-bold uppercase tracking-widest text-gray-400 dark:text-gray-500">
           Diagnostics
         </p>
 
-        {/* Resident Models — all models currently loaded in memory */}
         {(() => {
           const runtime = m?.vllm_running ? 'vLLM' : m?.ollama_running ? 'Ollama' : m?.llamacpp_model_name ? 'llama.cpp' : null;
           const multiModels = m?.active_models && m.active_models.length > 0 ? m.active_models : null;
@@ -433,8 +404,6 @@ const DetailBand: React.FC<{
   );
 };
 
-// ── Management row ────────────────────────────────────────────────────────────
-
 const MgmtRow: React.FC<{
   enriched:          EnrichedNode;
   isLocal:           boolean;
@@ -465,7 +434,6 @@ const MgmtRow: React.FC<{
     dotState === 'offline' ? `Unreachable · last seen ${fmtAgo(lastSeenMs!)}` :
     'Pending · waiting for first report';
 
-  // Condensed tooltip for Identity cell — surfaces columns hidden at narrow widths
   const identityTooltip = [
     os !== 'Unknown' ? os : null,
     memCap !== '—'   ? memCap : null,
@@ -476,12 +444,10 @@ const MgmtRow: React.FC<{
     <div
       className={`${enriched.isFlagged ? 'border-l-2 border-l-amber-400/50' : ''} ${!isOnline ? 'opacity-60' : ''}`}
     >
-      {/* Collapsed row */}
       <div
         className={`group ${MGMT_GRID_CLS} px-4 py-3 min-h-[48px] hover:bg-gray-50 dark:hover:bg-gray-700/40 transition-colors cursor-pointer`}
         onClick={() => setOpen(o => !o)}
       >
-        {/* Checkbox (sticky) */}
         <div
           onClick={e => { e.stopPropagation(); onToggleSelect(); }}
           className="flex items-center justify-center overflow-hidden sticky left-4 bg-white dark:bg-gray-800 group-hover:bg-gray-50 dark:group-hover:bg-gray-700/40"
@@ -492,7 +458,6 @@ const MgmtRow: React.FC<{
           }
         </div>
 
-        {/* Status + Node ID (sticky) */}
         <div className="flex items-center gap-2 overflow-hidden sticky left-[68px] bg-white dark:bg-gray-800 group-hover:bg-gray-50 dark:group-hover:bg-gray-700/40">
           <span className={`shrink-0 w-2 h-2 rounded-full ${dotCls}`} title={dotTooltip} />
           <div className="min-w-0">
@@ -510,7 +475,6 @@ const MgmtRow: React.FC<{
           </div>
         </div>
 
-        {/* Identity */}
         <div className="min-w-0 overflow-hidden" title={identityTooltip}>
           {chipName ? (
             <>
@@ -528,12 +492,6 @@ const MgmtRow: React.FC<{
               </p>
             </>
           ) : isOnline && os !== 'Unknown' ? (
-            // Node is online and sending metrics, but chip/GPU name wasn't reported.
-            // This used to advise re-running the installer, on the theory that the
-            // plain linux-aarch64 build lacked NVML. It did not — both Linux assets
-            // were the same build, and since v0.14.0 there is only one. So a
-            // reinstall changes nothing here; the cause is libnvidia-ml not being
-            // loadable (driver absent or too old), which is a host fix.
             <>
               <p className="text-xs font-telin text-gray-500 truncate">{os} Node</p>
               <p
@@ -548,7 +506,6 @@ const MgmtRow: React.FC<{
           )}
         </div>
 
-        {/* OS */}
         <div className="min-w-0 overflow-hidden">
           {isOnline && os !== 'Unknown'
             ? <p className="text-xs font-telin text-gray-700 dark:text-gray-300 truncate">{os}</p>
@@ -556,7 +513,6 @@ const MgmtRow: React.FC<{
           }
         </div>
 
-        {/* Memory capacity + utilisation bar */}
         <div className="min-w-0 overflow-hidden">
           <p className="text-xs font-telin text-gray-700 dark:text-gray-300 truncate">{memCap}</p>
           {m != null && (() => {
@@ -573,7 +529,6 @@ const MgmtRow: React.FC<{
           })()}
         </div>
 
-        {/* Connectivity */}
         <div className="overflow-hidden">
           {isOnline ? (
             isLocal ? (
@@ -592,7 +547,6 @@ const MgmtRow: React.FC<{
           )}
         </div>
 
-        {/* Runtime — which inference engine this node is running */}
         <div className="overflow-hidden">
           <span className="text-xs font-telin text-gray-500">
             {isOnline
@@ -604,14 +558,12 @@ const MgmtRow: React.FC<{
           </span>
         </div>
 
-        {/* Agent Version — from live metrics heartbeat */}
         <div className="overflow-hidden">
           <span className="text-xs font-telin text-gray-500">
             {m?.agent_version ? `v${m.agent_version}` : '—'}
           </span>
         </div>
 
-        {/* Coverage */}
         <div className="overflow-hidden min-w-0">
           {!isOnline ? (
             <span
@@ -633,7 +585,6 @@ const MgmtRow: React.FC<{
               title={[
                 'Some metrics unavailable',
                 m?.cpu_power_w == null    ? 'CPU power data missing' : null,
-                // Only flag missing NVML VRAM on non-Apple nodes — Apple Silicon has no discrete GPU
                 (m?.nvidia_vram_total_mb == null && m?.memory_pressure_percent == null)
                   ? 'GPU data missing' : null,
                 m?.thermal_state == null  ? 'Thermal data missing'    : null,
@@ -644,11 +595,9 @@ const MgmtRow: React.FC<{
           )}
         </div>
 
-        {/* SPACER */}
         <div />
       </div>
 
-      {/* Expanded detail band */}
       {open && (
         <DetailBand
           node={node}
@@ -664,9 +613,6 @@ const MgmtRow: React.FC<{
   );
 };
 
-// ── Telemetry Relay Status — slim single-row ──────────────────────────────────
-// Shows whether this node is relaying telemetry to wicklee.dev (paired) or
-// operating in Sovereign Mode with no outbound data (unpaired / disconnected).
 const TelemetryRelayStatus: React.FC<{ pairingInfo: PairingInfo | null | undefined }> = ({ pairingInfo }) => {
   const isRelaying = pairingInfo?.status === 'connected';
   const isPending  = pairingInfo?.status === 'pending';
@@ -697,9 +643,6 @@ const TelemetryRelayStatus: React.FC<{ pairingInfo: PairingInfo | null | undefin
   );
 };
 
-// ── Harvester Health — agent build localhost view ─────────────────────────────
-// Shows the status of each metric harvester: NVML, RAPL, IOKit/AGX, Ollama,
-// vLLM, and Thermal. Each entry shows Active / Not detected based on live metrics.
 const HarvesterHealth: React.FC<{ metrics: SentinelMetrics | null }> = ({ metrics: m }) => {
   const chip = (m?.chip_name ?? m?.gpu_name ?? '').toLowerCase();
   const isApple  = m?.cpu_power_w != null && (chip.includes('apple') || /\bm[1-4]\b/.test(chip));
@@ -777,8 +720,6 @@ const HarvesterHealth: React.FC<{ metrics: SentinelMetrics | null }> = ({ metric
   );
 };
 
-// ── NodesListProps ────────────────────────────────────────────────────────────
-
 interface NodesListProps {
   nodes:                 NodeAgent[];
   getNodeSettings?:      (nodeId: string) => NodeEffectiveSettings;
@@ -793,8 +734,6 @@ interface NodesListProps {
   onNodesRemoved?:       (removedIds: string[]) => void;
 }
 
-// ── Main component ────────────────────────────────────────────────────────────
-
 const NodesList: React.FC<NodesListProps> = ({
   nodes, getNodeSettings, onNavigateToSettings, pairingInfo,
   getToken, cloudUrl, onNodesRemoved,
@@ -805,9 +744,7 @@ const NodesList: React.FC<NodesListProps> = ({
     connected: cloudConnected,
   } = useFleetStream();
 
-  // Local-only state
   const [localMetrics, setLocalMetrics] = useState<SentinelMetrics | null>(null);
-  // ── Local agent stream (local only; shared connection) ─────────────────────
   const { connected: localConnected } = useLocalMetricsStream(setLocalMetrics);
 
   const [search, setSearch]               = useState('');
@@ -816,7 +753,6 @@ const NodesList: React.FC<NodesListProps> = ({
   const [statusFilter, setStatusFilter]   = useState<StatusFilter>('all');
   const [showFlaggedOnly, setShowFlaggedOnly] = useState(false);
   const [selectedNodes, setSelectedNodes] = useState<Set<string>>(new Set());
-  // Two-step confirmation: first click arms, second click fires.
   const [disconnectConfirming, setDisconnectConfirming] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [disconnectError, setDisconnectError] = useState<string | null>(null);
@@ -825,15 +761,12 @@ const NodesList: React.FC<NodesListProps> = ({
   const sortRef  = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
-  // Unified references
   const allMetrics = isLocalHost
     ? (localMetrics ? { [localMetrics.node_id ?? 'local']: localMetrics } : {})
     : cloudMetrics;
   const lastSeenMap = cloudLastSeen;
   const connected = isLocalHost ? localConnected : cloudConnected;
 
-  // Single source of truth for all node counts.
-  // Must be called before any early returns (Rules of Hooks).
   const counts = useFleetCounts(nodes);
 
   useEffect(() => {
@@ -844,7 +777,6 @@ const NodesList: React.FC<NodesListProps> = ({
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  // ── Bulk helpers ───────────────────────────────────────────────────────────
   const handleBulkExport = () => {
     const rows = [...selectedNodes].map(id => ({
       node_id:     id,
@@ -860,18 +792,13 @@ const NodesList: React.FC<NodesListProps> = ({
   };
 
   const handleBulkDisconnect = useCallback(async () => {
-    // First click arms the confirmation state.
     if (!disconnectConfirming) {
       setDisconnectError(null);
       setDisconnectConfirming(true);
-      // Clear any previous timeout, then auto-cancel after 6s if not confirmed.
       if (confirmTimeoutRef.current) clearTimeout(confirmTimeoutRef.current);
       confirmTimeoutRef.current = setTimeout(() => setDisconnectConfirming(false), 6000);
       return;
     }
-    // Second click fires.
-    // cloudUrl may be '' (empty string) in same-origin proxy mode — that's valid.
-    // Use == null to allow empty string while still blocking undefined/null.
     if (!getToken || cloudUrl == null || disconnecting) return;
     if (confirmTimeoutRef.current) clearTimeout(confirmTimeoutRef.current);
     setDisconnecting(true);
@@ -887,22 +814,16 @@ const NodesList: React.FC<NodesListProps> = ({
           })
         )
       );
-      // Only treat 204 No Content (or any 2xx) as genuine success.
-      // 404 is NOT treated as success — a 404 can mean the backend route
-      // doesn't exist yet, not that the node was already removed.
       const removed = ids.filter((_, i) => {
         const r = results[i];
         return r.status === 'fulfilled' && r.value.ok;
       });
       const failCount = ids.length - removed.length;
       if (removed.length > 0) {
-        // Clear ALL selections after a successful delete, not just the removed
-        // ones — prevents stale selections from being caught in the next confirm.
         setSelectedNodes(new Set());
         onNodesRemoved?.(removed);
       }
       if (failCount > 0) {
-        // Surface the HTTP status of the first failure so it's diagnosable.
         const firstFail = results.find(r =>
           r.status === 'rejected' || (r.status === 'fulfilled' && !r.value.ok)
         );
@@ -934,7 +855,6 @@ const NodesList: React.FC<NodesListProps> = ({
       const next = new Set(prev); ids.forEach(id => next.add(id)); return next;
     });
 
-  // ── Localhost single-node view ─────────────────────────────────────────────
   if (isLocalHost) {
     const m    = localMetrics;
     const perm = derivePermissions(m);
@@ -964,10 +884,8 @@ const NodesList: React.FC<NodesListProps> = ({
 
     return (
       <div className="space-y-6">
-        {/* ── Harvester Health ────────────────────────────────────────────────── */}
         <HarvesterHealth metrics={m} />
 
-        {/* Header tiles */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
           <MgmtTile label="Node Memory" icon={Database} iconCls="text-blue-400">
             <p className="text-xl font-bold font-telin text-gray-900 dark:text-white leading-none">{mem}</p>
@@ -1017,7 +935,6 @@ const NodesList: React.FC<NodesListProps> = ({
           </MgmtTile>
         </div>
 
-        {/* Node table */}
         <div className="border border-gray-200 dark:border-gray-700 rounded-2xl overflow-x-auto bg-white dark:bg-gray-800">
           <MgmtTableHeader
             filteredIds={[localNode.id]}
@@ -1034,10 +951,8 @@ const NodesList: React.FC<NodesListProps> = ({
           />
         </div>
 
-        {/* ── Telemetry Relay Status ──────────────────────────────────────────── */}
         <TelemetryRelayStatus pairingInfo={pairingInfo} />
 
-        {/* CTA */}
         <div className="bg-indigo-500/5 border border-indigo-500/20 rounded-2xl p-6 flex flex-col sm:flex-row items-center justify-between gap-4">
           <div>
             <p className="text-sm font-semibold text-gray-800 dark:text-gray-200">
@@ -1061,7 +976,6 @@ const NodesList: React.FC<NodesListProps> = ({
     );
   }
 
-  // ── Hosted view — empty state ──────────────────────────────────────────────
   if (nodes.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-32 text-center space-y-4">
@@ -1071,7 +985,6 @@ const NodesList: React.FC<NodesListProps> = ({
     );
   }
 
-  // ── Enrich nodes ────────────────────────────────────────────────────────────
   const enriched: EnrichedNode[] = nodes.map((node, idx) => {
     const metrics      = allMetrics[node.id] ?? null;
     const ls           = lastSeenMap[node.id];
@@ -1081,22 +994,14 @@ const NodesList: React.FC<NodesListProps> = ({
     const vllmOk       = metrics?.vllm_running      === true;
     const llamacppOk   = metrics?.llamacpp_running   === true;
     const offlineGt10  = !isOnline && ls != null && Date.now() - ls > 10 * 60 * 1000;
-    // Flag only when no recognised inference runtime is active — vLLM-only nodes should not be flagged.
     const isFlagged    = perm !== 'full' || !(ollamaOk || vllmOk || llamacppOk) || offlineGt10;
     const locationLabel = getNodeSettings?.(node.id)?.locationLabel ?? null;
     return { node, metrics, lastSeenMs: ls, isOnline, isFlagged, locationLabel, idx };
   });
 
-  // onlineCount / offlineCount removed — all display counts now derive from
-  // useFleetCounts (counts.online, counts.total) for a single source of truth.
   const flaggedCount = enriched.filter(e => e.isFlagged).length;
   const allLive      = enriched.filter(e => e.isOnline).map(e => e.metrics!);
 
-  // ── Header tile computations ────────────────────────────────────────────────
-
-  // Fleet VRAM — single source of truth via efficiency.ts canonical aggregators.
-  // Combines NVIDIA VRAM + Apple Silicon GPU wired budget; excludes BMC/onboard
-  // graphics (< INFERENCE_VRAM_THRESHOLD_MB) and CPU-only nodes.
   const totalUsedMb = calculateTotalVramMb(allLive);
   const totalCapMb  = calculateTotalVramCapacityMb(allLive);
   const hasGpu      = totalCapMb > 0;
@@ -1106,7 +1011,6 @@ const NodesList: React.FC<NodesListProps> = ({
     : '—';
   const vramSub = fleetVramSubtitle(allLive, { showCounts: true }) ?? 'no GPU nodes detected';
 
-  // Hardware Mix
   const osCounts: Record<string, number> = {};
   const chipFamilies: Set<string> = new Set();
   enriched.forEach(({ metrics: m }) => {
@@ -1119,7 +1023,6 @@ const NodesList: React.FC<NodesListProps> = ({
   const osPills       = Object.entries(osCounts).sort((a, b) => b[1] - a[1]);
   const chipFamilyStr = [...chipFamilies].join(' · ') || '—';
 
-  // ── Filter + sort ───────────────────────────────────────────────────────────
   const q = search.trim().toLowerCase();
   let filtered = enriched.filter(({ node, metrics: m, isOnline, isFlagged, locationLabel }) => {
     if (showFlaggedOnly && !isFlagged) return false;
@@ -1150,7 +1053,6 @@ const NodesList: React.FC<NodesListProps> = ({
   return (
     <div className="space-y-4">
 
-      {/* ── Header tiles ─────────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
 
         <MgmtTile label="Fleet VRAM" icon={Database} iconCls="text-blue-400">
@@ -1216,7 +1118,6 @@ const NodesList: React.FC<NodesListProps> = ({
 
       </div>
 
-      {/* ── Search + sort bar ─────────────────────────────────────────────── */}
       <div className="flex items-center gap-3">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
@@ -1274,7 +1175,6 @@ const NodesList: React.FC<NodesListProps> = ({
         </div>
       </div>
 
-      {/* ── Status filter tabs ─────────────────────────────────────────────── */}
       <div className="flex items-center gap-1 flex-wrap">
         {(['all', 'online', 'offline'] as StatusFilter[]).map(f => {
           const count  = f === 'all' ? counts.total : f === 'online' ? counts.online : (counts.total - counts.online);
@@ -1324,7 +1224,6 @@ const NodesList: React.FC<NodesListProps> = ({
         )}
       </div>
 
-      {/* ── Node table ────────────────────────────────────────────────────── */}
       <div className="border border-gray-200 dark:border-gray-700 rounded-2xl overflow-x-auto bg-white dark:bg-gray-800">
         <MgmtTableHeader
           filteredIds={filteredIds}
@@ -1359,7 +1258,6 @@ const NodesList: React.FC<NodesListProps> = ({
         )}
       </div>
 
-      {/* ── Footer ─────────────────────────────────────────────────────────── */}
       <p className="text-[11px] text-gray-600 text-center pt-1">
         <span className="text-gray-400 font-semibold">
           {counts.online} node{counts.online !== 1 ? 's' : ''} online
@@ -1370,7 +1268,6 @@ const NodesList: React.FC<NodesListProps> = ({
         )}
       </p>
 
-      {/* ── Bulk Actions bar ─────────────────────────────────────────────── */}
       {selectedNodes.size > 0 && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-5 py-3 bg-gray-900 border border-gray-700/80 rounded-2xl shadow-2xl shadow-black/60 backdrop-blur-sm animate-in fade-in slide-in-from-bottom-2 duration-200">
           <span className="text-xs font-semibold text-gray-200 tabular-nums">
@@ -1410,7 +1307,6 @@ const NodesList: React.FC<NodesListProps> = ({
         </div>
       )}
 
-      {/* Error toast — appears below the bulk bar when a disconnect fails */}
       {disconnectError && (
         <div className="fixed bottom-[72px] left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-4 py-2.5 bg-red-950 border border-red-800/60 rounded-xl shadow-xl animate-in fade-in slide-in-from-bottom-2 duration-200">
           <span className="text-xs text-red-300">{disconnectError}</span>

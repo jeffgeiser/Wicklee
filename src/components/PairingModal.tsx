@@ -13,8 +13,6 @@ interface PairingModalProps {
 const PairingModal: React.FC<PairingModalProps> = ({ isOpen, onClose, pairingInfo, onGenerate, onDisconnect }) => {
   const [copied, setCopied] = useState(false);
   const [secondsLeft, setSecondsLeft] = useState(0);
-  // Remember the code from the pending phase so we can still show it after
-  // the agent auto-transitions to Connected (happens in ~1s).
   const [pendingCode, setPendingCode] = useState<string | null>(null);
 
   useEffect(() => {
@@ -23,7 +21,6 @@ const PairingModal: React.FC<PairingModalProps> = ({ isOpen, onClose, pairingInf
     }
   }, [pairingInfo?.status, pairingInfo?.code]);
 
-  // Clear remembered code when modal closes or user disconnects.
   useEffect(() => {
     if (!isOpen || pairingInfo?.status === 'unpaired') {
       setPendingCode(null);
@@ -70,7 +67,6 @@ const PairingModal: React.FC<PairingModalProps> = ({ isOpen, onClose, pairingInf
             <X className="w-5 h-5" />
           </button>
 
-          {/* ── Unpaired ── */}
           {(!pairingInfo || pairingInfo.status === 'unpaired') && (
             <div className="space-y-6 text-center">
               <div className="w-16 h-16 bg-indigo-600/20 rounded-2xl border border-indigo-500/30 flex items-center justify-center mx-auto">
@@ -97,7 +93,6 @@ const PairingModal: React.FC<PairingModalProps> = ({ isOpen, onClose, pairingInf
             </div>
           )}
 
-          {/* ── Pending ── */}
           {pairingInfo?.status === 'pending' && (
             <div className="space-y-5">
               <div className="flex items-center gap-3">
@@ -149,7 +144,6 @@ const PairingModal: React.FC<PairingModalProps> = ({ isOpen, onClose, pairingInf
             </div>
           )}
 
-          {/* ── Connected ── */}
           {pairingInfo?.status === 'connected' && (
             <div className="space-y-5 text-center">
               <div className="w-16 h-16 bg-green-500/20 rounded-2xl border border-green-500/30 flex items-center justify-center mx-auto">
@@ -163,8 +157,6 @@ const PairingModal: React.FC<PairingModalProps> = ({ isOpen, onClose, pairingInf
                 Node Identity: <span className="text-indigo-400">{pairingInfo.node_id}</span>
               </p>
 
-              {/* Show the pairing code if it was just generated — user needs to
-                  enter it on wicklee.dev to link this node to their account. */}
               {pendingCode && (
                 <div className="bg-zinc-900 border border-indigo-500/20 rounded-2xl p-5 space-y-3 text-left">
                   <p className="text-[11px] text-indigo-400 uppercase tracking-widest font-bold text-center">

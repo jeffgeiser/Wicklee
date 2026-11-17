@@ -107,7 +107,6 @@ function eventMeta(ev: FleetEvent): EventMeta {
         label: ev.detail ?? 'pattern dismissed',
         cls: 'text-gray-500',
       };
-    // Fleet observations (server-side alerts)
     case 'zombied_engine':
       return {
         icon: <Gauge className="w-3.5 h-3.5 text-red-400 shrink-0 mt-0.5" />,
@@ -138,7 +137,6 @@ function eventMeta(ev: FleetEvent): EventMeta {
         label: ev.detail ?? 'agent version mismatch',
         cls: 'text-amber-400',
       };
-    // Resolved observation variants
     case 'zombied_engine_resolved':
     case 'thermal_redline_resolved':
     case 'oom_warning_resolved':
@@ -161,7 +159,6 @@ function eventMeta(ev: FleetEvent): EventMeta {
 const EventFeed: React.FC<EventFeedProps> = ({ events }) => {
   return (
     <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl flex flex-col h-full overflow-hidden shadow-sm dark:shadow-none">
-      {/* Header */}
       <div className="p-4 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between bg-gray-50/50 dark:bg-gray-700/20">
         <div className="flex items-center gap-2">
           <Terminal className="w-4 h-4 text-blue-600 dark:text-blue-400" />
@@ -178,7 +175,6 @@ const EventFeed: React.FC<EventFeedProps> = ({ events }) => {
         )}
       </div>
 
-      {/* Event list — scrollable, no expand/collapse */}
       <div className="flex-1 overflow-y-auto p-3 space-y-1">
         {events.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full py-10 text-center">
@@ -188,7 +184,6 @@ const EventFeed: React.FC<EventFeedProps> = ({ events }) => {
           </div>
         ) : (
           (() => {
-            // Collapse consecutive events with the same (nodeId, type) into a single entry with a count badge.
             const collapsed: { ev: FleetEvent; count: number; firstTs: number; lastTs: number }[] = [];
             for (const ev of events) {
               const prev = collapsed[collapsed.length - 1];

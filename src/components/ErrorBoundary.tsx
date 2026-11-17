@@ -21,10 +21,6 @@ interface State {
  * transient bad data that has since updated).
  */
 export default class ErrorBoundary extends Component<Props, State> {
-  // This project ships no React type declarations (no @types/react; React
-  // resolves as implicit `any`), so the inherited class members aren't
-  // visible to TS. Declare the two this boundary uses — type-only, no
-  // runtime effect — rather than pulling in @types/react app-wide.
   declare props: Props;
   declare setState: (partial: Partial<State>) => void;
 
@@ -35,8 +31,6 @@ export default class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
-    // Surfaced to the console (and any wired error reporting) rather than
-    // swallowed silently — the SSE path already logs; this covers render.
     console.error(`[error-boundary${this.props.surface ? `:${this.props.surface}` : ''}]`, error, info.componentStack);
   }
 

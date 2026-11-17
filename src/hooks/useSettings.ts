@@ -13,8 +13,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { ELECTRICITY_RATE_USD_PER_KWH } from '../utils/efficiency';
 
-// ── Currency catalogue ────────────────────────────────────────────────────────
-
 export const CURRENCY_OPTIONS = [
   { value: 'USD', label: 'USD — US Dollar',          symbol: '$'  },
   { value: 'EUR', label: 'EUR — Euro',                symbol: '€'  },
@@ -28,8 +26,6 @@ export const CURRENCY_OPTIONS = [
 ] as const;
 
 type CurrencyCode = typeof CURRENCY_OPTIONS[number]['value'];
-
-// ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface FleetSettings {
   kwhRate: number;
@@ -68,8 +64,6 @@ export interface NodeEffectiveSettings {
   hasAnyOverride: boolean;
 }
 
-// ── Defaults ──────────────────────────────────────────────────────────────────
-
 export const FLEET_DEFAULTS: FleetSettings = {
   kwhRate: ELECTRICITY_RATE_USD_PER_KWH,
   currency: 'USD',
@@ -79,8 +73,6 @@ export const FLEET_DEFAULTS: FleetSettings = {
   wesDisplay: 'auto',
   themePreference: 'dark',
 };
-
-// ── Storage helpers ───────────────────────────────────────────────────────────
 
 const STORAGE_KEY = 'wicklee_settings';
 
@@ -97,8 +89,6 @@ function parseSettings(raw: string | null): WickleeSettings {
   }
 }
 
-// ── Hook ──────────────────────────────────────────────────────────────────────
-
 export function useSettings() {
   const [settings, setSettings] = useState<WickleeSettings>(() =>
     parseSettings(localStorage.getItem(STORAGE_KEY))
@@ -106,7 +96,6 @@ export function useSettings() {
   const [savedToast, setSavedToast] = useState(false);
   const toastRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Migrate old wk_node_pue → wicklee_settings.nodes[id].pue
   useEffect(() => {
     try {
       const old = localStorage.getItem('wk_node_pue');
@@ -122,7 +111,7 @@ export function useSettings() {
         return next;
       });
       localStorage.removeItem('wk_node_pue');
-    } catch { /* ignore */ }
+    } catch { }
   }, []);
 
   const showToast = useCallback(() => {

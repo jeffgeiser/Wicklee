@@ -217,7 +217,6 @@ async fn consented_run(
     let status = resp.status();
     let Some(answer) = resp.json::<serde_json::Value>().await.ok().filter(|b| {
         // An older agent's SPA fallback answers 200 with HTML, which parses as
-        // nothing this command recognises.
         b.get("plan").is_some() || b.get("error").is_some() || b.get("outcome").is_some()
     }) else {
         eprintln!("wicklee: the agent on 127.0.0.1:{port} does not serve {route}.");
@@ -225,8 +224,6 @@ async fn consented_run(
         return 1;
     };
 
-    // A refusal, or a host that cannot run it. Printed as the reason rather
-    // than as a failure: most of these are "wait a minute", not "it broke".
     if answer.get("plan").is_none() && answer.get("outcome").is_none() {
         eprintln!("wicklee: {}", answer["error"].as_str().unwrap_or("the run was refused"));
         if let Some(hint) = answer["hint"].as_str() {
@@ -236,8 +233,6 @@ async fn consented_run(
     }
     if !status.is_success() && answer.get("plan").is_some() {
         print!("{}", answer["consent_text"].as_str().unwrap_or_default());
-        // Verify's first run is a baseline and measures nothing by itself.
-        // Worth saying before the yes, not after.
         if answer["is_baseline"] == serde_json::json!(true) {
             println!("  this is the first run, so it becomes the baseline. Change something, then run it again");
         }
@@ -255,7 +250,6 @@ async fn consented_run(
         }
     }
 
-    // Step two: with consent.
     body["consent"] = serde_json::json!(true);
     let Ok(resp) = post(body).await else {
         eprintln!("wicklee: the agent stopped responding partway through the run.");
@@ -644,8 +638,6 @@ pub(crate) fn render_findings(body: &serde_json::Value) -> String {
 
     out.push_str(&render_not_checked(body));
 
-    // Three different states, and conflating them is the whole hazard: asked
-    // and got them, asked and the store could not answer, did not ask.
     let asked = body["includes_resolved"] == serde_json::Value::Bool(true);
     if !asked && body["persisted"] == serde_json::Value::Bool(false) {
         out.push_str(
@@ -666,8 +658,6 @@ fn render_finding(f: &serde_json::Value) -> String {
     let mut out = String::new();
     let statements = f["statements"].as_array().map(Vec::as_slice).unwrap_or(&[]);
     if statements.is_empty() {
-        // Should not happen: a finding needs an observed statement. Printing
-        // the title is better than printing an id with nothing beside it.
         out.push_str(&wrap_statement(id, "", f["title"].as_str().unwrap_or("")));
         return out;
     }
@@ -791,10 +781,6 @@ fn describe(row: &serde_json::Value) -> String {
 
     match row["readiness"].as_str().unwrap_or("") {
         "ready_now" => format!("Ready now, {activity}"),
-        // "Fits" and "will not displace anything" are different claims, and
-        // only the first has been measured — so where something else is
-        // resident the agent marks co-residency unverified, and the line says
-        // so rather than reading as an all-clear.
         "requires_loading" if row["coexistence"].as_str() == Some("unverified") => {
             "Requires loading. Fits by accounting; may still displace resident models (unverified)"
                 .to_string()
@@ -840,9 +826,6 @@ fn eviction(row: &serde_json::Value) -> String {
             "may clear one or more resident models, and the log does not say which".to_string()
         }
         "unknown_victim" => "may clear one or more resident models".to_string(),
-        // No level at all: it does not fit, and nothing else is resident.
-        // There is no eviction that would help, which is a different answer
-        // from "something will be cleared and we cannot say what".
         _ => "it does not fit in free memory, and nothing is resident to evict".to_string(),
     }
 }
@@ -854,10 +837,6 @@ fn undetermined(row: &serde_json::Value) -> String {
     if row["headroom"].is_null() {
         return "free accelerator memory is unknown on this host".to_string();
     }
-    // It appears to fit, on an estimate nothing has calibrated. Saying so is
-    // the whole point: the previous wording for this case claimed it "may
-    // require eviction", which asserted something about resident models that
-    // was not true — and said it on a host with nothing resident at all.
     if row["footprint"]["basis"] == "estimated_weights_only"
         && row["footprint"]["calibrated"] != serde_json::Value::Bool(true)
     {
@@ -932,7 +911,6 @@ mod tests {
         assert_eq!(model.as_deref(), Some("qwen3.5:4b"));
         assert!(json);
 
-        // Flag order does not matter, and the flag is not taken as the model.
         let Invocation::Run(Command::Ready { model, json }) =
             parse(&args(&["ready", "--json", "coder:14b"]))
         else {
@@ -1025,12 +1003,10 @@ mod tests {
         assert!(out.starts_with("WHICH MODELS CAN RUN SAFELY NOW\n"));
         assert!(out.contains("coder:14b       Ready now, in use 12 s ago"), "got:\n{out}");
         assert!(out.contains("classifier:3b   Ready now, idle"), "got:\n{out}");
-        // The eviction line names the in-use victim, which is the whole point.
         assert!(out.contains("May require eviction: likely clears all 2 resident"), "got:\n{out}");
         assert!(out.contains("including coder:14b, which is in use"), "got:\n{out}");
         assert!(out.contains("Cannot determine:"), "got:\n{out}");
 
-        // Wrapped lines line up under the description column.
         for line in out.lines().filter(|l| l.starts_with(&" ".repeat(NAME_WIDTH + 2))) {
             assert!(line.len() <= NAME_WIDTH + 2 + WRAP_AT, "line too wide: {line:?}");
         }
@@ -1038,11 +1014,8 @@ mod tests {
 
     #[test]
     fn html_from_an_older_agent_is_not_mistaken_for_an_empty_answer() {
-        // The SPA fallback answers 200 with HTML, so "did it parse as JSON" is
-        // not enough on its own — an empty object parses fine.
         assert!(!is_readiness_answer(&serde_json::json!({})));
         assert!(!is_readiness_answer(&serde_json::json!({ "ok": true })));
-        // Both shapes the route really serves.
         assert!(is_readiness_answer(&serde_json::json!({ "models": [] })));
         assert!(is_readiness_answer(&serde_json::json!({ "readiness": { "model": "a" } })));
     }
@@ -1071,9 +1044,7 @@ mod tests {
             observed_at_ms: T0,
         };
 
-        // Fits with room to spare, on a number nothing has calibrated.
         let roomy = never_loaded("embed:small", 2 * GB);
-        // Does not fit, and nothing at all is resident to clear.
         let huge = never_loaded("reasoner:70b", 40 * GB);
         let states = vec![&roomy, &huge];
         let models = assess(&Inputs {
@@ -1089,7 +1060,6 @@ mod tests {
         }));
         println!("{out}");
 
-        // Neither line may imply a resident model, because there are none.
         assert!(!out.contains("clears"), "got:\n{out}");
         assert!(!out.contains("may clear"), "got:\n{out}");
 
@@ -1118,13 +1088,10 @@ mod tests {
             }],
             "activity_signal": true,
         }));
-        // Asserted in pieces: the line is wrapped, so the words are not
-        // contiguous in the output.
         assert!(out.contains("Fits by accounting"), "got:\n{out}");
         assert!(out.contains("may still displace"), "got:\n{out}");
         assert!(out.contains("resident models (unverified)"), "got:\n{out}");
 
-        // Without the field the old line is unchanged.
         let out = render_ready(&serde_json::json!({
             "models": [{
                 "model": "extractor:8b",
@@ -1152,8 +1119,6 @@ mod tests {
         let out = render_ready(&body);
         assert!(out.contains("Not checked: whether any model is in use"), "got:\n{out}");
     }
-
-    // ── inspect and findings ─────────────────────────────────────────────────
 
     fn inspect_body() -> serde_json::Value {
         serde_json::json!({
@@ -1251,21 +1216,17 @@ mod tests {
 
     #[test]
     fn findings_distinguishes_not_asked_from_cannot_answer() {
-        // Did not ask, and the store is there: say how to ask.
         let mut body = inspect_body();
         body["includes_resolved"] = serde_json::json!(false);
         body["persisted"] = serde_json::json!(true);
         let out = render_findings(&body);
         assert!(out.contains("Add --all"), "{out}");
 
-        // Did not ask, and nothing is stored: say that instead, because --all
-        // would not help.
         body["persisted"] = serde_json::json!(false);
         let out = render_findings(&body);
         assert!(out.contains("not being stored"), "{out}");
         assert!(!out.contains("Add --all"), "{out}");
 
-        // Asked, got an answer, and there is nothing in it.
         body["includes_resolved"] = serde_json::json!(true);
         body["persisted"] = serde_json::json!(true);
         let out = render_findings(&body);
@@ -1300,14 +1261,11 @@ mod tests {
 
     #[test]
     fn what_to_change_only_offers_commands_that_would_work() {
-        // A finding naming no model is refused by the verify route with a 409,
-        // so offering the command would send someone to a refusal.
         let mut body = inspect_body();
         body["findings"][0]["models"] = serde_json::json!([]);
         let out = render_inspect(&body);
         assert!(!out.contains("WHAT TO CHANGE"), "{out}");
 
-        // Findings that are not stored cannot be looked up by id either.
         let mut body = inspect_body();
         body["history"]["findings_persisted"] = serde_json::Value::Bool(false);
         let out = render_inspect(&body);
@@ -1334,7 +1292,6 @@ mod tests {
         assert!(out.contains("this agent process only"), "{out}");
         assert!(out.contains("3 transitions"), "{out}");
 
-        // Stored history says nothing, because there is nothing to warn about.
         assert!(!render_inspect(&inspect_body()).contains("this agent process only"));
     }
 
@@ -1346,7 +1303,6 @@ mod tests {
         let out = render_findings(&body);
         assert!(out.starts_with("FINDINGS\n"), "{out}");
         assert!(out.contains("F-a3f29c"), "{out}");
-        // Nothing resolved was served, so no empty section is printed.
         assert!(!out.contains("RESOLVED"), "{out}");
 
         body["findings"] = serde_json::json!([]);
@@ -1367,8 +1323,6 @@ mod tests {
 
     #[test]
     fn an_spa_response_is_not_mistaken_for_an_answer() {
-        // An older agent with no /v1/inspect falls through to the SPA handler,
-        // which answers 200 with HTML. serde gives us a string, not an object.
         let html = serde_json::json!("<!doctype html>");
         assert!(!is_inspect_answer(&html));
         assert!(!is_findings_answer(&html));

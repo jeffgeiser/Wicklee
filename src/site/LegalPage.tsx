@@ -24,7 +24,6 @@ const LegalPage: React.FC<LegalPageProps> = ({ onNavigate, initialTab = 'terms' 
 
   return (
     <div className="min-h-screen bg-gray-900 text-gray-300">
-      {/* Header */}
       <div className="border-b border-gray-700 bg-gray-900/80 backdrop-blur-md sticky top-0 z-20">
         <div className="max-w-4xl mx-auto px-4 sm:px-8 py-4 flex items-center gap-4">
           <button onClick={() => onNavigate('/')} className="text-gray-500 hover:text-white transition-colors">
@@ -34,7 +33,6 @@ const LegalPage: React.FC<LegalPageProps> = ({ onNavigate, initialTab = 'terms' 
         </div>
       </div>
 
-      {/* Tab nav */}
       <div className="max-w-4xl mx-auto px-4 sm:px-8 pt-8">
         <div className="flex gap-1 border-b border-gray-700 mb-8">
           {tabs.map(t => (
@@ -53,7 +51,6 @@ const LegalPage: React.FC<LegalPageProps> = ({ onNavigate, initialTab = 'terms' 
         </div>
       </div>
 
-      {/* Content */}
       <div className="max-w-4xl mx-auto px-4 sm:px-8 pb-20">
         <div className="prose prose-invert prose-sm max-w-none [&_h1]:text-white [&_h1]:text-2xl [&_h1]:font-bold [&_h1]:mb-6 [&_h2]:text-white [&_h2]:text-lg [&_h2]:font-semibold [&_h2]:mt-8 [&_h2]:mb-3 [&_h3]:text-white [&_h3]:text-base [&_h3]:font-semibold [&_h3]:mt-6 [&_h3]:mb-2 [&_p]:mb-3 [&_p]:leading-relaxed [&_ul]:mb-4 [&_ul]:list-disc [&_ul]:pl-6 [&_li]:mb-1.5 [&_a]:text-blue-400 [&_a]:underline">
           {activeTab === 'terms' && <TermsOfService />}
@@ -65,17 +62,6 @@ const LegalPage: React.FC<LegalPageProps> = ({ onNavigate, initialTab = 'terms' 
     </div>
   );
 };
-
-// The paid plans are withdrawn and Paddle is gone from all three tabs: no
-// merchant-of-record clause, no prices, no refund mechanics, because there is
-// nothing being sold. Retention still follows cloud/src/maintenance.rs +
-// agent/src/store.rs — change them together.
-//
-// This is legal text. Clauses that lost their subject were removed rather than
-// rewritten, and nothing was invented to fill the gaps. Two things need the
-// maintainer rather than an edit: whether the Refund tab and its /refund route
-// should exist at all now, and whether §1's description of the Service needs
-// another pass when the hosted dashboard is shut down.
 
 const TermsOfService: React.FC = () => (
   <>

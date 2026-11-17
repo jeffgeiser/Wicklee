@@ -7,9 +7,6 @@ interface SignInPageProps {
 }
 
 const SignInPage: React.FC<SignInPageProps> = () => {
-  // ?redirect_url=/pricing?… (from the Team checkout button) returns the user
-  // there after auth — including via the "Sign up" link. Read once on mount:
-  // Clerk's multi-step routes (/sign-in/factor-one, …) may drop the query.
   const [redirect] = React.useState(() => safeRedirectPath(window.location.search));
   return (
     <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4">

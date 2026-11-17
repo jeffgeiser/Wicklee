@@ -11,7 +11,6 @@ interface AddNodeModalProps {
   cloudUrl: string;
 }
 
-// ── Code row: comment + copyable command ──────────────────────────────────────
 const CmdRow: React.FC<{ cmd: string; comment?: string }> = ({ cmd, comment }) => (
   <div className="flex items-start justify-between gap-2">
     <div className="min-w-0">
@@ -22,10 +21,7 @@ const CmdRow: React.FC<{ cmd: string; comment?: string }> = ({ cmd, comment }) =
   </div>
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
-
 const AddNodeModal: React.FC<AddNodeModalProps> = ({ isOpen, onClose, onNodeAdded, cloudUrl }) => {
-  // All hooks declared unconditionally (IS_AGENT early return is after hooks).
   const [step, setStep]     = useState(1);
   const [digits, setDigits] = useState(['', '', '', '', '', '']);
   const [error, setError]   = useState('');
@@ -33,7 +29,6 @@ const AddNodeModal: React.FC<AddNodeModalProps> = ({ isOpen, onClose, onNodeAdde
   const [success, setSuccess] = useState(false);
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
-  // Reset wizard state each time the modal opens.
   useEffect(() => {
     if (isOpen) {
       setStep(1);
@@ -44,7 +39,6 @@ const AddNodeModal: React.FC<AddNodeModalProps> = ({ isOpen, onClose, onNodeAdde
     }
   }, [isOpen]);
 
-  // In agent/demo builds ClerkProvider is absent — bail before calling useAuth().
   if (IS_AGENT || IS_DEMO) return null;
   // eslint-disable-next-line react-hooks/rules-of-hooks
   const { getToken } = useAuth();
@@ -94,10 +88,8 @@ const AddNodeModal: React.FC<AddNodeModalProps> = ({ isOpen, onClose, onNodeAdde
         body: JSON.stringify({ code }),
       });
       if (!res.ok) {
-        // Parse server message opportunistically — non-JSON bodies (nginx error pages, etc.)
-        // must not throw here and fall through to the generic catch.
         let serverMsg: string | undefined;
-        try { serverMsg = (await res.json() as { error?: string }).error; } catch { /* non-JSON body */ }
+        try { serverMsg = (await res.json() as { error?: string }).error; } catch { }
         const retryAfter = res.headers.get('Retry-After');
         setError(
           res.status === 429 ? `Too many attempts — try again in ${retryAfter ?? '60'}s.` :
@@ -111,7 +103,6 @@ const AddNodeModal: React.FC<AddNodeModalProps> = ({ isOpen, onClose, onNodeAdde
       setSuccess(true);
       setTimeout(() => { onNodeAdded(); onClose(); }, 1500);
     } catch (err) {
-      // TypeError = network failure (fetch couldn't connect); anything else = Clerk / runtime error.
       setError(
         err instanceof TypeError
           ? 'Cannot reach the Wicklee backend. Check your connection and try again.'
@@ -127,7 +118,6 @@ const AddNodeModal: React.FC<AddNodeModalProps> = ({ isOpen, onClose, onNodeAdde
       <div className="bg-gray-900 border border-gray-700 w-full max-w-md rounded-[28px] overflow-hidden shadow-2xl shadow-blue-500/10 animate-in zoom-in-95 duration-200">
         <div className="p-8">
 
-          {/* Header */}
           <div className="flex items-start justify-between mb-6">
             <div>
               <h2 className="text-xl font-bold text-white">Add a Node</h2>
@@ -138,14 +128,12 @@ const AddNodeModal: React.FC<AddNodeModalProps> = ({ isOpen, onClose, onNodeAdde
             </button>
           </div>
 
-          {/* ── Step 0 — Choice: have code or need setup ────────────────── */}
           {step === 1 && (
             <div className="space-y-4">
               <p className="text-sm text-gray-400">
                 Connect a node running the Wicklee agent to your fleet dashboard.
               </p>
 
-              {/* Option A: I have a code */}
               <button
                 type="button"
                 onClick={() => setStep(3)}
@@ -163,7 +151,6 @@ const AddNodeModal: React.FC<AddNodeModalProps> = ({ isOpen, onClose, onNodeAdde
                 </div>
               </button>
 
-              {/* Option B: Need setup help */}
               <button
                 type="button"
                 onClick={() => setStep(2)}
@@ -183,7 +170,6 @@ const AddNodeModal: React.FC<AddNodeModalProps> = ({ isOpen, onClose, onNodeAdde
             </div>
           )}
 
-          {/* ── Step 2 — Setup guide (install + get code) ──────────────────── */}
           {step === 2 && (
             <div className="space-y-4">
               <div className="flex items-center gap-2 mb-1">
@@ -191,7 +177,6 @@ const AddNodeModal: React.FC<AddNodeModalProps> = ({ isOpen, onClose, onNodeAdde
                 <h3 className="text-sm font-semibold text-white">Agent Setup</h3>
               </div>
 
-              {/* Install command */}
               <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4">
                 <CmdRow
                   comment="# 1. Install the agent on the machine you want to monitor"
@@ -199,7 +184,6 @@ const AddNodeModal: React.FC<AddNodeModalProps> = ({ isOpen, onClose, onNodeAdde
                 />
               </div>
 
-              {/* Start as service */}
               <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 space-y-3">
                 <CmdRow
                   comment="# 2. Start as a service (recommended — auto-starts on boot)"
@@ -207,7 +191,6 @@ const AddNodeModal: React.FC<AddNodeModalProps> = ({ isOpen, onClose, onNodeAdde
                 />
               </div>
 
-              {/* Get the code */}
               <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 space-y-3">
                 <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
                   3. Get your pairing code
@@ -239,7 +222,6 @@ const AddNodeModal: React.FC<AddNodeModalProps> = ({ isOpen, onClose, onNodeAdde
             </div>
           )}
 
-          {/* ── Step 3 — Enter pairing code ─────────────────────────────────── */}
           {step === 3 && (
             success ? (
               <div className="flex flex-col items-center gap-3 py-6">

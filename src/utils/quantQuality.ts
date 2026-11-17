@@ -58,14 +58,12 @@ export function quantQualityHint(quant: string): string {
  *                       proxy for the F16/unquantized size, giving model class.
  */
 export function recommendedQuant(maxFileSizeMb: number): string {
-  if (maxFileSizeMb < 2000)  return 'Q8_0';    // < 2 GB: tiny models, use high quality
-  if (maxFileSizeMb < 5000)  return 'Q5_K_M';  // 2-5 GB: small-medium
-  if (maxFileSizeMb < 15000) return 'Q4_K_M';  // 5-15 GB: standard sweet spot
-  if (maxFileSizeMb < 50000) return 'Q4_K_M';  // 15-50 GB: still Q4_K_M
-  return 'Q3_K_M';                              // 50+ GB: aggressive needed
+  if (maxFileSizeMb < 2000)  return 'Q8_0';
+  if (maxFileSizeMb < 5000)  return 'Q5_K_M';
+  if (maxFileSizeMb < 15000) return 'Q4_K_M';
+  if (maxFileSizeMb < 50000) return 'Q4_K_M';
+  return 'Q3_K_M';
 }
-
-// ── Quant family classification (for tok/s history matching) ─────────────────
 
 /**
  * Map a quant string to a coarse "family" used when matching historical
@@ -107,13 +105,11 @@ export function quantFamily(quant: string): 'q4' | 'q5' | 'q8' | 'low' | null {
  */
 export function estimateModelFileSizeMb(modelName: string): number | null {
   if (!modelName) return null;
-  // Match "Nb" or "N.Mb" patterns case-insensitively, with optional dash/colon prefix.
   const m = modelName.toLowerCase().match(/(\d+(?:\.\d+)?)\s*b\b/);
   if (!m) return null;
   const params = parseFloat(m[1]);
   if (!isFinite(params) || params <= 0 || params > 1000) return null;
 
-  // Detect explicit quant in the model name (rare on Ollama; common on HF).
   const qm = modelName.toUpperCase().match(/Q\d(?:_K_[MS]|_[01])?|F16|F32|BF16/);
   const bpw = (qm && bytesPerWeight(qm[0])) ?? OLLAMA_DEFAULT_BYTES_PER_WEIGHT;
   return params * 1024 * bpw;
@@ -160,15 +156,14 @@ export function parseParameterCountB(name: string): number | null {
  * for legacy non-GQA models is better than overestimating for the common case.
  */
 function estimateKvCacheMb(parameterCountB: number, contextLength: number): number {
-  // KV per 1K context, derived from per-class architecture defaults (f16 KV).
   let kvPer1KMb: number;
-  if (parameterCountB < 2) kvPer1KMb = 32;       // 1-1.5B class (Llama 3.2 1B reference)
-  else if (parameterCountB < 4) kvPer1KMb = 112;  // 2-3B class (Llama 3.2 3B reference)
-  else if (parameterCountB < 10) kvPer1KMb = 128; // 7-8B class (Llama 3.1 8B reference)
-  else if (parameterCountB < 20) kvPer1KMb = 160; // 13-14B class
-  else if (parameterCountB < 40) kvPer1KMb = 256; // 30-34B class (Qwen 2.5 32B reference)
-  else if (parameterCountB < 80) kvPer1KMb = 320; // 70-72B class (Llama 3.3 70B reference)
-  else kvPer1KMb = 400;                            // 100B+ class
+  if (parameterCountB < 2) kvPer1KMb = 32;
+  else if (parameterCountB < 4) kvPer1KMb = 112;
+  else if (parameterCountB < 10) kvPer1KMb = 128;
+  else if (parameterCountB < 20) kvPer1KMb = 160;
+  else if (parameterCountB < 40) kvPer1KMb = 256;
+  else if (parameterCountB < 80) kvPer1KMb = 320;
+  else kvPer1KMb = 400;
 
   return Math.round((contextLength / 1024) * kvPer1KMb);
 }

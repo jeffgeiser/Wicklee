@@ -8,7 +8,7 @@ export interface NodeAgent {
   vramUsed: number | null;
   vramTotal: number | null;
   powerUsage: number | null;
-  tdp?: number; // Thermal Design Power in Watts
+  tdp?: number;
   requestsPerSecond: number;
   activeInterceptors: string[];
   uptime: string;
@@ -30,7 +30,6 @@ export interface ModelLiveMetrics {
   wes?: number | null;
 }
 
-// Live telemetry payload — mirrors MetricsPayload in agent/src/main.rs
 export interface SentinelMetrics {
   node_id: string;
   hostname?: string;
@@ -51,7 +50,6 @@ export interface SentinelMetrics {
   available_memory_mb: number;
   cpu_core_count: number;
   timestamp_ms: number;
-  // Apple Silicon deep-metal (null when unavailable)
   cpu_power_w:             number | null;
   ecpu_power_w:            number | null;
   pcpu_power_w:            number | null;
@@ -70,13 +68,11 @@ export interface SentinelMetrics {
    * Use this (not total_memory_mb) as the GPU capacity ceiling on M-series nodes.
    */
   gpu_wired_limit_mb?: number | null;
-  // NVIDIA GPU fields (null on non-NVIDIA)
   nvidia_gpu_utilization_percent: number | null;
   nvidia_vram_used_mb:            number | null;
   nvidia_vram_total_mb:           number | null;
   nvidia_gpu_temp_c:              number | null;
   nvidia_power_draw_w:            number | null;
-  // ── NVIDIA Accelerator Tier stubs (Phase 5) ──────────────────────────────
   /**
    * True when VRAM and system RAM share a unified pool (GB10 Grace Blackwell).
    * False on all discrete GPU nodes (RTX, H100, B200).
@@ -125,7 +121,6 @@ export interface SentinelMetrics {
    * renders as a virtual sub-row in Fleet Status with independent WES and VRAM.
    */
   mig_instances?: MIGInstance[] | null;
-  // Ollama runtime (absent/false when not running)
   ollama_running?:           boolean;
   ollama_active_model?:      string | null;
   ollama_model_size_gb?:     number | null;
@@ -201,7 +196,6 @@ export interface SentinelMetrics {
    * Absent on pre-v0.4.37 agents — frontend falls back to computed logic.
    */
   inference_state?: string;
-  // vLLM runtime (absent/false when not running)
   vllm_running?:          boolean;
   vllm_model_name?:       string | null;
   /**
@@ -237,7 +231,6 @@ export interface SentinelMetrics {
   vllm_prompt_tokens_total?: number | null;
   /** Cumulative generation tokens produced (counter). */
   vllm_generation_tokens_total?: number | null;
-  // llama.cpp / llama-box runtime (absent/false when not running)
   llamacpp_running?:          boolean;
   llamacpp_model_name?:       string | null;
   /** Idle tok/s probe baseline from llama.cpp /v1/completions. Null until first probe. */
@@ -248,7 +241,6 @@ export interface SentinelMetrics {
   os?: string | null;
   /** Compile-time CPU architecture — "x86_64" | "aarch64". Absent on older agents. */
   arch?: string | null;
-  // WES v2 — agent-computed thermal telemetry (absent on older agents)
   /** Average thermal penalty applied over the sample window (e.g. 1.75 for Serious). */
   penalty_avg?:    number | null;
   /** Peak thermal penalty seen in the sample window. */
@@ -353,7 +345,7 @@ interface MIGInstance {
 
 export interface FleetEvent {
   id: string;
-  ts: number; // Date.now() timestamp
+  ts: number;
   type:
     | 'node_online'
     | 'node_offline'
@@ -368,17 +360,14 @@ export interface FleetEvent {
     | 'thermal_degradation_confirmed'
     | 'fit_score_changed'
     | 'idle_resource_warning'
-    // ── Pattern engine lifecycle events (Sprint 4) ─────────────────────────
     /** Pattern crossed moderate/high confidence — suppressed for ONSET_SUPPRESSION_MS (15m). */
     | 'pattern_onset'
     /** Pattern absent for OBS_HOLD_MS (10m) — hardware stress confirmed resolved. */
     | 'pattern_resolved'
     /** Operator dismissed the card (1h resurface). */
     | 'pattern_dismissed'
-    // ── Sprint 6 ──────────────────────────────────────────────────────────
     /** Operator clicked "Never show again" — writes to metrics.db audit trail. */
     | 'pattern_dismissed_permanent'
-    // ── Fleet observations (server-side Phase 4B alerts) ─────────────────
     | 'zombied_engine'
     | 'thermal_redline'
     | 'oom_warning'
@@ -393,7 +382,6 @@ export interface FleetEvent {
   hostname?: string;
   /** Human-readable transition detail, e.g. "Normal → Serious" or "phi3:mini → llama3:8b" */
   detail?: string;
-  // ── Pattern-specific payload (only present on pattern_* event types) ─────
   /** Stable pattern identifier, e.g. 'thermal_drain'. Matches DetectedInsight.patternId. */
   patternId?:   string;
   /** Machine-readable action classification — same value as DetectedInsight.action_id. */
@@ -414,8 +402,8 @@ export interface TraceRecord {
   nodeId: string;
   model: string;
   latency: number;
-  ttft: number; // Time to First Token
-  tpot: number; // Time Per Output Token
+  ttft: number;
+  tpot: number;
   status: number;
 }
 
@@ -430,9 +418,6 @@ export type UserRole = 'Owner' | 'Collaborator' | 'Viewer';
  * in every tier-rank table, or those accounts silently lose access (see the
  * tierRank map in MetricsHistoryChart for the bug this caused).
  */
-// `team_10` and `team` are the two sizes of one plan (10 / 25 nodes) — same
-// features, different node cap. `pro` and `business` are retired but still
-// identify grandfathered subscriptions.
 export type SubscriptionTier = 'community' | 'pro' | 'team_10' | 'team' | 'business' | 'enterprise';
 
 
@@ -526,14 +511,12 @@ export enum DashboardTab {
   SETTINGS = 'settings',
 }
 
-// ── Agent API v1 ──────────────────────────────────────────────────────────────
-
 /** API key metadata returned by GET /api/v1/keys.
  *  The raw key value is never included — it is returned once at creation only. */
 export interface ApiKey {
   key_id:       string;
   name:         string;
-  created_at:   number;        // unix ms
+  created_at:   number;
   last_used_ms: number | null;
   /** "personal" (default) or "org" — org keys see the whole org fleet. */
   scope?:       'personal' | 'org';
@@ -542,15 +525,11 @@ export interface ApiKey {
 /** Response body for POST /api/v1/keys — raw key shown once, then gone. */
 export interface CreateApiKeyResponse {
   key_id:     string;
-  key:        string;          // raw wk_live_... — copy immediately
+  key:        string;
   name:       string;
-  created_at: number;          // unix ms
+  created_at: number;
   scope?:     'personal' | 'org';
 }
-
-// ── Local metric history (agent /api/history) ─────────────────────────────────
-// Mirrors store::HistorySample and store::HistoryResponse in agent/src/store.rs.
-// null values are omitted from the JSON by the agent (serde skip_serializing_if).
 
 /** One time-series sample from the agent DuckDB store. */
 export interface HistorySample {
@@ -590,10 +569,6 @@ export interface HistoryResponse {
   to_ms:      number;
   samples:    HistorySample[];
 }
-
-// ── Tier badge display config ─────────────────────────────────────────────────
-// Used by InsightsLockedCard, UpgradePrompt, and feature-lock overlays.
-// Single source of truth for label text and Tailwind color tokens per tier.
 
 export const TIER_BADGE: Record<SubscriptionTier, { label: string; color: string }> = {
   community:  { label: 'Community',  color: 'text-gray-400  bg-gray-500/10  border-gray-500/20'  },

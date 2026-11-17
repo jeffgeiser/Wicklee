@@ -94,8 +94,6 @@ const FitBars: React.FC<{ nodes: NodeFit[]; getScore: (n: NodeFit) => number }> 
   </span>
 );
 
-// ── Fleet model row ───────────────────────────────────────────────────────────
-
 const FleetModelRow: React.FC<{
   model:          FleetModel;
   getToken:       () => Promise<string | null>;
@@ -116,7 +114,6 @@ const FleetModelRow: React.FC<{
   showCost:       boolean;
 }> = ({ model, focusNodeId, history, hasFleetHistory, contextLength, kwhRate, showCost }) => {
   const [open, setOpen] = useState(false);
-  // Max file size across all nodes' best-quant variants — proxy for model class.
   const maxFileSizeMb = model.nodes.reduce((m, n) => Math.max(m, n.file_size_mb), 0);
   const recQuant = recommendedQuant(maxFileSizeMb);
   const hasRecQuant = model.nodes.some(n => n.best_quant?.toUpperCase() === recQuant.toUpperCase());
@@ -129,21 +126,14 @@ const FleetModelRow: React.FC<{
     return w.reduce((s, r) => s + (r.avg_watts as number), 0) / w.length;
   })();
 
-  // When a node is focused, score and sort from that node's perspective.
   const focusedNode = focusNodeId
     ? model.nodes.find(n => n.node_id === focusNodeId) ?? null
     : null;
 
-  // Recompute each node's fit score at the chosen context length. The
-  // backend's fit_score uses a default context — once the user picks 32K
-  // or 128K, those server-computed scores drift. Recompute client-side
-  // so per-row counts and fit labels actually move with the picker.
   const nodeScoresAtCtx = useMemo<Map<string, { score: number; label: string }>>(() => {
     const map = new Map<string, { score: number; label: string }>();
     for (const n of model.nodes) {
       if (isDefaultCtx) {
-        // At default context, trust the backend's already-computed score
-        // (avoids subtle drift from differing overhead constants).
         map.set(n.node_id, { score: n.fit_score, label: n.fit_label });
       } else {
         const vramReq = vramAtContext(n.file_size_mb, paramsB, contextLength);
@@ -159,7 +149,6 @@ const FleetModelRow: React.FC<{
     : Math.max(...Array.from(nodeScoresAtCtx.values()).map((v: { score: number; label: string }) => v.score), 0);
   const best = fitColors(effectiveScore, 'dim');
 
-  // When a node is focused, report fit status for just that node; otherwise fleet-wide count.
   const fittingNodes = focusNodeId
     ? model.nodes.filter(n => n.node_id === focusNodeId && (nodeScoresAtCtx.get(n.node_id)?.score ?? 0) >= 40)
     : model.nodes.filter(n => (nodeScoresAtCtx.get(n.node_id)?.score ?? 0) >= 40);
@@ -167,11 +156,8 @@ const FleetModelRow: React.FC<{
     ? (fittingNodes.length > 0 ? 'fits this node' : "won't fit")
     : `${fittingNodes.length}/${model.nodes.length} nodes fit`;
 
-  // Best node for the pull command — focused node first, then highest scorer.
   const pullNode = focusedNode ?? model.nodes[0];
 
-  // Find the recommended-quant file size from any node that selected it.
-  // Falls back to the smallest variant across nodes when none have rec.
   const recQuantFileSizeMb = (() => {
     const recNode = model.nodes.find(n => n.best_quant?.toUpperCase() === recQuant.toUpperCase());
     if (recNode) return recNode.file_size_mb;
@@ -183,11 +169,6 @@ const FleetModelRow: React.FC<{
     return recNode ? recNode.best_quant : (pullNode?.best_quant ?? recQuant);
   })();
 
-  // Speed + cost projections — use the best-fitting node's variant.
-  // Pass the node's chip so projectTpsForVariant can fall back to the
-  // theoretical (spec-derived) bandwidth estimate when no telemetry exists
-  // yet for this size class — same Phase 3 behavior the localhost panel
-  // already has.
   const projForRow = pullNode
     ? projectTpsForVariant(history ?? [], pullNode.file_size_mb, pullNode.best_quant, pullNode.chip_name ?? null)
     : null;
@@ -204,34 +185,15 @@ const FleetModelRow: React.FC<{
 
   return (
     <div className="border border-gray-700/60 rounded-xl overflow-hidden">
-      {/* Single-line grid summary — each column has a fixed proportion so the
-          identity / quant / fit / projection / popularity / action columns
-          line up vertically across every row. Truncation + title hover
-          handles long model names without column shift.
-
-          Responsive: at narrow widths popularity hides first (lowest decision
-          value), then projection, then quant. Identity + fit + action always
-          visible. */}
       <button
         onClick={() => setOpen(v => !v)}
         className={[
           'w-full grid gap-2 items-center px-3 py-2 hover:bg-gray-700/20 transition-colors text-left',
-          // Grid template adapts to whether projections are available
-          // fleet-wide. Without history, the speed/cost column would just be
-          // em-dash for every row — so we drop it and let identity/fit/
-          // popularity use the freed width.
-          //
-          // Tuned to give identity ~47% of the row when all columns visible
-          // (was ~33%) — long model names like Gemma-3-1B-it-GLM-4.7-Flash-
-          // Heretic-Uncensored-Thinking truncated too aggressively before.
-          // Right-side columns tightened up so fit/speed/popularity/actions
-          // group visually together rather than spreading across the row.
           hasFleetHistory
             ? 'grid-cols-[minmax(0,3fr)_minmax(0,1.1fr)_auto] lg:grid-cols-[minmax(0,3fr)_minmax(0,0.9fr)_minmax(0,1.1fr)_minmax(0,0.9fr)_auto] xl:grid-cols-[minmax(0,3fr)_minmax(0,0.9fr)_minmax(0,1.1fr)_minmax(0,0.9fr)_minmax(0,0.5fr)_auto]'
             : 'grid-cols-[minmax(0,3fr)_minmax(0,1.1fr)_auto] lg:grid-cols-[minmax(0,3.4fr)_minmax(0,0.9fr)_minmax(0,1.3fr)_minmax(0,0.5fr)_auto] xl:grid-cols-[minmax(0,3.4fr)_minmax(0,0.9fr)_minmax(0,1.3fr)_minmax(0,0.5fr)_auto]',
         ].join(' ')}
       >
-        {/* Col 1 — identity (dot + stacked name/uploader) */}
         <div className="flex items-center gap-2 min-w-0">
           <div className={`w-2 h-2 rounded-full ${best.dot} shrink-0`} />
           <div className="min-w-0 flex-1">
@@ -249,7 +211,6 @@ const FleetModelRow: React.FC<{
           </div>
         </div>
 
-        {/* Col 2 — recommended quant + size (hidden on small screens) */}
         <div
           className="text-[10px] font-mono tabular-nums hidden md:block min-w-0"
           title={quantQualityHint(recQuantToShow)}
@@ -264,7 +225,6 @@ const FleetModelRow: React.FC<{
           )}
         </div>
 
-        {/* Col 3 — fit bars + label + count */}
         <div
           className="flex items-center gap-1.5 text-[10px] min-w-0"
           title={focusNodeId
@@ -285,13 +245,6 @@ const FleetModelRow: React.FC<{
           </span>
         </div>
 
-        {/* Col 4 — speed + (optional) cost projections.
-            Phase 3 contract: tok/s always renders when we can derive any number
-            (telemetry-measured first, theoretical bandwidth fallback last);
-            cost-per-M only renders when the user has set their $/kWh in
-            Settings. The hasFleetHistory grid-omission is preserved for the
-            edge case where the projection is genuinely null (chip not in the
-            bandwidth lookup AND no history). */}
         {(hasFleetHistory || projForRow) && (
           <div className="text-[10px] tabular-nums hidden lg:flex items-center gap-2 min-w-0">
             {projForRow ? (
@@ -331,7 +284,6 @@ const FleetModelRow: React.FC<{
           </div>
         )}
 
-        {/* Col 5 — popularity (hidden on < xl, lowest decision value) */}
         <div className="text-[10px] tabular-nums hidden xl:flex items-center gap-2 min-w-0 justify-end">
           <span className="text-gray-700" title="HuggingFace downloads (all time)">
             {fmtDl(model.downloads)}↓
@@ -343,7 +295,6 @@ const FleetModelRow: React.FC<{
           )}
         </div>
 
-        {/* Col 6 — actions (always visible, right-aligned) */}
         <div className="flex items-center gap-1 shrink-0">
           {bestPullCmd && (effectiveScore >= 40) && (
             <RowCopyButton
@@ -357,10 +308,8 @@ const FleetModelRow: React.FC<{
         </div>
       </button>
 
-      {/* Expanded: per-node breakdown */}
       {open && (
         <div className="px-3 pb-3 border-t border-gray-700/40 space-y-3 pt-3">
-          {/* HF link */}
           <a
             href={`https://huggingface.co/${model.model_id}`}
             target="_blank"
@@ -371,14 +320,12 @@ const FleetModelRow: React.FC<{
             {model.model_id}
           </a>
 
-          {/* Per-node table */}
           <div className="text-[9px] font-semibold uppercase tracking-widest text-gray-600">
             Per-node fit
           </div>
           <div className="space-y-0">
             {model.nodes.map(node => {
-              // Per-node recomputation at chosen context.
-              let vramMb = node.file_size_mb; // not used directly when default
+              let vramMb = node.file_size_mb;
               let displayLabel = node.fit_label;
               let displayScore = node.fit_score;
               if (!isDefaultCtx) {
@@ -453,7 +400,6 @@ const FleetModelRow: React.FC<{
                       ≈ ${costPerM < 0.01 ? costPerM.toFixed(4) : costPerM.toFixed(3)} / M
                     </span>
                   )}
-                  {/* Pull command inline */}
                   {node.pull_cmd && node.fit_score >= 40 && (
                     <div className="flex items-center gap-1 ml-auto">
                       <code className="text-[10px] text-cyan-400/70 font-mono truncate max-w-[200px] hidden lg:inline">
@@ -467,7 +413,6 @@ const FleetModelRow: React.FC<{
             })}
           </div>
 
-          {/* Pull command — focused node or best node */}
           {pullNode && pullNode.pull_cmd && pullNode.fit_score >= 40 && (
             <div className="space-y-1 pt-1">
               <div className="text-[9px] font-semibold uppercase tracking-widest text-gray-600">
@@ -487,8 +432,6 @@ const FleetModelRow: React.FC<{
   );
 };
 
-// ── Main component ────────────────────────────────────────────────────────────
-
 interface Props {
   getToken: () => Promise<string | null>;
 }
@@ -496,22 +439,15 @@ interface Props {
 const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
   const [pendingSearch, setPending]   = useState('');
   const [data, setData]               = useState<FleetDiscoveryResponse | null>(null);
-  // Cache of the "all nodes" baseline so switching back doesn't re-fetch.
   const baseDataRef                   = useRef<FleetDiscoveryResponse | null>(null);
   const [loading, setLoading]         = useState(false);
   const [error, setError]             = useState<string | null>(null);
   const [focusNodeId, setFocusNode]   = useState<string | null>(null);
   const debounceRef                   = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Stable list of online nodes (from most recent all-nodes response).
   const [onlineNodes, setOnlineNodes] = useState<Pick<NodeFit, 'node_id' | 'hostname'>[]>([]);
   const history                       = useModelComparisonHistory(false, getToken);
   const [contextLength, setContextLength] = useState<number>(DEFAULT_CONTEXT_LENGTH);
-  // "any" (default, broader) vs "all" (intersection — every node must fit).
-  // The intersection view punishes heterogeneous fleets — adding a small
-  // node shrinks the catalog. Default to "any" so the model list reflects
-  // the largest box in the fleet, not the smallest.
   const [fitMode, setFitMode] = useState<'any' | 'all'>('any');
-  // Phase 2: category + sort. 'All' shows everything; sort defaults to 'fit'.
   const [category, setCategory] = useState<ModelCategory | 'All'>('All');
   const [sortMode, setSortMode] = useState<SortMode>('fit');
   const { settings, isKwhRateConfigured } = useSettings();
@@ -524,8 +460,6 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
     setLoading(true);
     setError(null);
     try {
-      // Pull a wide catalog so the client-side fit-mode filter and per-node
-      // focus have enough candidates to work with. Backend caps at 200.
       const params = new URLSearchParams({ limit: '200' });
       if (query)  params.set('search', query);
       if (nodeId) params.set('node_id', nodeId);
@@ -535,7 +469,6 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
       if (!resp.ok) throw new Error(`${resp.status}`);
       const json: FleetDiscoveryResponse = await resp.json();
       setData(json);
-      // Keep a stable node list from the all-nodes response (not per-node filtered).
       if (!nodeId) {
         const nodes = json.models[0]?.nodes ?? [];
         setOnlineNodes(nodes);
@@ -548,7 +481,6 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
     }
   }, [getToken]);
 
-  // Load trending on mount — retry up to 5× with 600ms backoff.
   useEffect(() => {
     let cancelled = false;
     let attempt = 0;
@@ -566,10 +498,8 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
     return () => { cancelled = true; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Re-fetch when node focus changes — server ranks results for the selected node.
   useEffect(() => {
     if (focusNodeId === null) {
-      // Restore cached baseline instead of re-fetching.
       if (baseDataRef.current) setData(baseDataRef.current);
       else fetchModels(pendingSearch || undefined, null);
     } else {
@@ -577,7 +507,6 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
     }
   }, [focusNodeId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-retry when catalog is still loading (hf_reachable === false).
   useEffect(() => {
     if (!data || data.hf_reachable !== false || loading) return;
     const id = setTimeout(() => fetchModels(undefined, focusNodeId ?? undefined), 30_000);
@@ -597,18 +526,6 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
     fetchModels(pendingSearch || undefined, focusNodeId ?? undefined);
   };
 
-  // Apply fit-mode filter to the raw catalog. "Any" keeps models where at
-  // least one node has score ≥40 (Tight or better). "All" requires every
-  // node to score ≥40. Per-node focus bypasses the toggle — that view is
-  // already implicitly single-node.
-  //
-  // Context-aware: at non-default context we recompute each node's score
-  // using vramAtContext + fitLabelAtContext so the displayed SET actually
-  // changes when the picker moves. The backend's n.fit_score uses a default
-  // context and would otherwise lock the membership at default-context fit.
-  // Pre-category filter: only fit-mode + context-aware membership. The
-  // category filter is applied after so chip counts can reflect what's
-  // *available* in the current fit view (not what's left after category).
   const fitFilteredModels = useMemo(() => {
     const all = data?.models ?? [];
     if (focusNodeId || onlineNodes.length <= 1) return all;
@@ -627,8 +544,6 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
     });
   }, [data, focusNodeId, onlineNodes.length, fitMode, contextLength]);
 
-  // Per-category counts for the chip badges, evaluated against the
-  // fit-filtered set. 'All' is the total — every model survives.
   const categoryCounts = useMemo<Record<ModelCategory | 'All', number>>(() => {
     const counts: Record<ModelCategory | 'All', number> = {
       All: fitFilteredModels.length,
@@ -641,7 +556,6 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
     return counts;
   }, [fitFilteredModels]);
 
-  // Final displayed list: fit filter + category filter.
   const displayModels = useMemo(() => {
     if (category === 'All') return fitFilteredModels;
     return fitFilteredModels.filter(m => inferCategory(m.model_id) === category);
@@ -651,15 +565,6 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
     ? (onlineNodes.find(n => n.node_id === focusNodeId)?.hostname ?? focusNodeId)
     : null;
 
-  // Count "good fit" models (score ≥60) for the current view, recomputed at
-  // the chosen context length. The backend's fit_score uses a default context
-  // (~8K-ish); once the user picks 32K or 128K, those scores drift. We
-  // recompute per-node-per-model using the same vramAtContext helper as the
-  // per-row fittingNodes calc — same source of truth, consistent badges.
-  // Counts models that are a "good fit" (score ≥60) given the current view's
-  // aggregation rule. Context-aware (recomputes scores at chosen context) and
-  // fit-mode-aware (Any = at least one node ≥60 via Math.max, All = every node
-  // ≥60 via Math.min). Single-node focus collapses both — scores has one entry.
   const fitCount = useMemo(() => {
     return displayModels.filter(m => {
       const paramsB = parseParameterCountB(m.model_id) ?? 7;
@@ -673,9 +578,6 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
         return fitLabelAtContext(vramReq, n.mem_budget_gb * 1024).score;
       });
       if (!scores.length) return false;
-      // Single-node focus: only one score, min == max. Multi-node fleet view
-      // respects the user's chosen aggregation: 'all' = intersection (worst
-      // node must fit), 'any' = union (best node only needs to fit).
       const agg = focusNodeId || fitMode === 'any'
         ? Math.max(...scores)
         : Math.min(...scores);
@@ -685,7 +587,6 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
 
   return (
     <div className="space-y-3">
-      {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-2 flex-wrap">
           <Package className="w-4 h-4 text-cyan-400" />
@@ -712,20 +613,9 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
         )}
       </div>
 
-      {/* Unified view selector — replaces the prior split between a "Filter"
-          pill row (node focus) and a separate "Show models that fit"
-          fit-mode toggle. Those two controls were answering related-but-
-          confusingly-redundant questions; this single row makes every option
-          unambiguous and self-explanatory.
-
-            [Any fleet node]   = focus null + fitMode 'any'   (default)
-            [Every fleet node] = focus null + fitMode 'all'   (intersection)
-            [<hostname>]       = focus that node              (fitMode N/A)
-       */}
       {onlineNodes.length > 1 && (
         <div className="flex items-center gap-1.5 flex-wrap">
           <span className="text-[9px] text-gray-700 uppercase tracking-widest mr-0.5">View:</span>
-          {/* Any fleet node — broadest, default */}
           <button
             onClick={() => { setFocusNode(null); setFitMode('any'); }}
             title="Show models any one of your fleet nodes can run (broadest catalog)."
@@ -737,7 +627,6 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
           >
             Any fleet node {focusNodeId == null && fitMode === 'any' ? '✓' : ''}
           </button>
-          {/* Every fleet node — intersection */}
           <button
             onClick={() => { setFocusNode(null); setFitMode('all'); }}
             title="Show only models EVERY node in your fleet can run (intersection — safe for fleet-wide deployment)."
@@ -749,9 +638,7 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
           >
             Every fleet node {focusNodeId == null && fitMode === 'all' ? '✓' : ''}
           </button>
-          {/* Subtle separator before per-node pills */}
           <span className="text-gray-800">·</span>
-          {/* Per-node pills */}
           {onlineNodes.map(n => (
             <button
               key={n.node_id}
@@ -769,7 +656,6 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
         </div>
       )}
 
-      {/* Search */}
       <form onSubmit={handleSubmit} className="flex gap-2">
         <div className="flex-1 relative">
           {loading
@@ -793,14 +679,6 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
         </button>
       </form>
 
-      {/* Page-level methodology callout removed — per-row hover tooltips now
-          explain how each tok/s projection was derived, and the full
-          methodology lives in docs/docs.md under "Model Discovery Scoring". */}
-
-      {/* Context length + Sort — paired on one row.
-          Both are short pill rows with similar widths so they read as one
-          control bar at desktop widths (≥lg). On narrower viewports the
-          gap-6 collapses naturally via flex-wrap, restacking them. */}
       <div className="flex items-start gap-x-6 gap-y-2 flex-wrap">
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-[10px] text-gray-600 uppercase tracking-widest">Context length:</span>
@@ -820,12 +698,8 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
           ))}
         </div>
 
-        {/* Vertical separator — visual divider between the two paired groups.
-            Hidden when wrapped (the gap-y handles spacing on stacked layout). */}
         <div className="hidden lg:block w-px self-stretch bg-gray-700/40" aria-hidden="true" />
 
-        {/* Sort chip row. 'speed' and 'cost' degrade gracefully — models
-            without a projection sink to the bottom rather than disappearing. */}
         <div className="flex items-center gap-1.5 flex-wrap">
           <span className="text-[10px] text-gray-600 uppercase tracking-widest mr-0.5">Sort:</span>
           {([
@@ -859,10 +733,6 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
         </div>
       </div>
 
-      {/* Category chip row — own row because counts in the chips give it
-          variable width and 7 chips need breathing room. Inferred client-
-          side from model_id (Phase 2); backend-sourced HF pipeline_tag
-          tracked as Phase 2.5 in ROADMAP. */}
       <div className="flex items-center gap-1.5 flex-wrap">
         <span className="text-[10px] text-gray-600 uppercase tracking-widest mr-0.5">Category:</span>
         <button
@@ -899,7 +769,6 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
         })}
       </div>
 
-      {/* Source label */}
       {data && (
         <div className="text-[10px] text-gray-700">
           {data.is_live_search
@@ -915,7 +784,6 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
         </div>
       )}
 
-      {/* No nodes online warning */}
       {data && data.online_nodes === 0 && (
         <div className="flex items-center gap-2 py-3 px-3 bg-yellow-500/5 border border-yellow-500/15 rounded-lg text-xs text-yellow-500/80">
           <AlertCircle className="w-3.5 h-3.5 shrink-0" />
@@ -923,7 +791,6 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
         </div>
       )}
 
-      {/* Model catalog not yet populated */}
       {data && data.hf_reachable === false && !loading && (
         <div className="flex items-start gap-2 py-3 px-3 bg-orange-500/5 border border-orange-500/15 rounded-lg text-xs text-orange-400/80">
           <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-px" />
@@ -934,12 +801,10 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
         </div>
       )}
 
-      {/* Error */}
       {error && (
         <p className="text-xs text-red-400 py-1">Failed to load: {error}</p>
       )}
 
-      {/* Initial loading */}
       {loading && !data && (
         <div className="flex items-center justify-center py-10 gap-2 text-xs text-gray-600">
           <Loader2 className="w-4 h-4 animate-spin text-cyan-500/60" />
@@ -947,7 +812,6 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
         </div>
       )}
 
-      {/* Empty */}
       {data && displayModels.length === 0 && !loading && data.hf_reachable !== false && (
         <p className="text-xs text-gray-600 py-6 text-center">
           {focusNodeId
@@ -956,14 +820,11 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
         </p>
       )}
 
-      {/* Results */}
       {displayModels.length > 0 && (
         <div className="space-y-1">
           {(() => {
             const list = [...displayModels];
             if (!pendingSearch) {
-              // Hoist avgWatts here so 'cost' sort uses the same value the rows
-              // render — fleet-wide average from history, identical for every model.
               const avgWatts = history && history.length
                 ? (() => {
                     const w = history.filter(r => r.avg_watts != null && r.avg_watts > 0);
@@ -973,11 +834,9 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
                   })()
                 : null;
 
-              // Per-model fit score under the current view (focus or fleet aggregate).
               const fitOf = (m: FleetModel) => focusNodeId
                 ? (m.nodes.find(n => n.node_id === focusNodeId)?.fit_score ?? 0)
                 : m.fleet_best_score;
-              // "Pull node" — the row's headline node used for projection + size.
               const pullNodeOf = (m: FleetModel) => focusNodeId
                 ? (m.nodes.find(n => n.node_id === focusNodeId) ?? m.nodes[0])
                 : m.nodes[0];
@@ -987,7 +846,6 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
                 return projectTpsForVariant(history ?? [], n.file_size_mb, n.best_quant, n.chip_name ?? null);
               };
               const sizeOf = (m: FleetModel) => pullNodeOf(m)?.file_size_mb ?? 0;
-              // Compose: primary key by sortMode, tiebreak on fit (or popularity for fit-mode).
               list.sort((a, b) => {
                 switch (sortMode) {
                   case 'popularity':
@@ -998,7 +856,6 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
                     return sizeOf(b) - sizeOf(a);
                   case 'speed': {
                     const pa = projOf(a), pb = projOf(b);
-                    // null projections sink to bottom; among nulls, fall back to fit.
                     const ta = pa ? (pa.min + pa.max) / 2 : -1;
                     const tb = pb ? (pb.min + pb.max) / 2 : -1;
                     if (tb !== ta) return tb - ta;
@@ -1013,7 +870,6 @@ const FleetModelDiscovery: React.FC<Props> = ({ getToken }) => {
                       return (avgWatts / 1000) * (1_000_000 / tps / 3600) * kwhRate;
                     };
                     const ca = costOf(pa), cb = costOf(pb);
-                    // Cheaper wins (asc); Infinity buckets sink. Tiebreak on fit.
                     if (ca !== cb) return ca - cb;
                     return fitOf(b) - fitOf(a);
                   }

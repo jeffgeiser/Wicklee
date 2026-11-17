@@ -1,4 +1,3 @@
-// ── Service Installation ──────────────────────────────────────────────────────
 
 /// C3 — Validates that a binary path is safe to embed in service descriptors.
 ///
@@ -30,14 +29,9 @@ fn validate_binary_path(path: &str) -> Result<(), String> {
     if !path.starts_with('/') {
         return Err("binary path must be absolute (must start with '/')".to_string());
     }
-    // Reject ".." components wherever they appear.
     if path.split('/').any(|component| component == "..") {
         return Err("binary path must not contain path traversal ('..') components".to_string());
     }
-    // Byte-level allowlist: [a-zA-Z0-9/_.-]
-    // '/' is the POSIX path separator; '_', '.', '-' appear in common binary names.
-    // Everything else (spaces, semicolons, shell expansions, XML metacharacters,
-    // newlines, null bytes, …) is rejected.
     for (i, b) in path.bytes().enumerate() {
         match b {
             b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9'
@@ -60,7 +54,6 @@ fn validate_binary_path(path: &str) -> Result<(), String> {
         ));
     }
     let bytes = path.as_bytes();
-    // Must start with <DriveLetter>:\ or <DriveLetter>:/
     if bytes.len() < 3
         || !bytes[0].is_ascii_alphabetic()
         || bytes[1] != b':'
@@ -71,15 +64,11 @@ fn validate_binary_path(path: &str) -> Result<(), String> {
                 .to_string(),
         );
     }
-    // Reject ".." anywhere.
     for component in path.split(['\\', '/']) {
         if component == ".." {
             return Err("binary path must not contain path traversal ('..') components".to_string());
         }
     }
-    // Byte-level allowlist for the rest of the path.
-    // Spaces allowed (common in "Program Files"); colon only as drive separator (already
-    // validated at byte 1).  All shell-significant and XML-significant characters rejected.
     for (i, b) in bytes.iter().enumerate().skip(3) {
         match b {
             b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9'
@@ -99,23 +88,9 @@ pub(crate) async fn install_service() {
         Err(e) => { eprintln!("error: cannot determine executable path: {e}"); return; }
     };
 
-    // ── v0.8.0: Self-copy to canonical /usr/local/bin/wicklee ────────────
-    // Install.sh now drops the binary at ~/.wicklee/bin/wicklee with no
-    // sudo. When the user runs `sudo wicklee --install-service`, we
-    // promote ourselves to /usr/local/bin/wicklee (the canonical service
-    // path) before writing any unit/plist file. Service descriptors
-    // always reference the canonical path so systemd/launchd survive
-    // a future `rm -rf ~/.wicklee/`.
-    //
-    // On macOS and Linux the canonical path is /usr/local/bin/wicklee.
-    // If we're already there (re-running --install-service to refresh
-    // the unit file), skip the copy.
     const CANONICAL_BIN: &str = "/usr/local/bin/wicklee";
     let needs_promote = current_exe.to_string_lossy() != CANONICAL_BIN;
     if needs_promote {
-        // Stop the existing service (if any) so we can replace the file
-        // without "Text file busy" on Linux. launchd holds an open fd
-        // but we can still mv-over on macOS.
         #[cfg(target_os = "linux")]
         {
             let _ = tokio::process::Command::new("systemctl")
@@ -125,14 +100,6 @@ pub(crate) async fn install_service() {
                 .status().await;
         }
 
-        // ── v0.8.1: Kill foreground 7700 holders ────────────────────────
-        // The common Reddit-paste failure mode is:
-        //   curl | bash && ~/.wicklee/bin/wicklee   # foreground holds :7700
-        //   sudo wicklee --install-service          # daemon EADDRINUSEs
-        // Solve it here: any process binding port 7700 that isn't us is a
-        // foreground try-it-out. SIGTERM, wait, then proceed. We use
-        // lsof -ti :7700 so we don't false-positive on unrelated wicklee
-        // procs (e.g. the user's editor named "wicklee.rs").
         #[cfg(unix)]
         {
             let self_pid = std::process::id();
@@ -154,7 +121,6 @@ pub(crate) async fn install_service() {
                             .stderr(std::process::Stdio::null())
                             .status().await;
                     }
-                    // Give them up to 3s to exit cleanly, then SIGKILL stragglers.
                     for _ in 0..6 {
                         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                         let still = tokio::process::Command::new("lsof")
@@ -178,9 +144,6 @@ pub(crate) async fn install_service() {
                 }
             }
         }
-        // Copy the current binary to the canonical location. cp + chmod
-        // rather than mv so the source (which may be in the user's home)
-        // stays intact in case the user re-runs.
         let copy_status = tokio::process::Command::new("cp")
             .arg(&current_exe)
             .arg(CANONICAL_BIN)
@@ -207,15 +170,8 @@ pub(crate) async fn install_service() {
         }
     }
 
-    // From here on, all references to the binary path use the canonical
-    // location — unit/plist files must never point at the user-home
-    // staging path, since the staging copy may be removed.
     let exe_str = CANONICAL_BIN.to_string();
 
-    // C3 — Validate before embedding in any service descriptor.
-    // An attacker who installs the binary at a path with shell metacharacters
-    // could inject commands executed when the service manager reloads the unit.
-    // Abort with a clear error rather than writing a potentially dangerous file.
     if let Err(msg) = validate_binary_path(&exe_str) {
         eprintln!("error: cannot install service — unsafe binary path: {msg}");
         eprintln!("       Move the wicklee binary to a path using only [a-zA-Z0-9/_.-]");
@@ -248,9 +204,6 @@ pub(crate) async fn install_service() {
 </dict>\n\
 </plist>\n"
         );
-        // Migrate old user-level LaunchAgent plist (pre-v0.5.3 installs).
-        // When running as root (sudo), $HOME resolves to /var/root — scan /Users/ instead.
-        // Uses MetadataExt::uid() to get the exact GUI-session UID for bootout.
         #[cfg(target_os = "macos")]
         if let Ok(users_dir) = std::fs::read_dir("/Users") {
             for entry in users_dir.flatten() {
@@ -281,10 +234,6 @@ pub(crate) async fn install_service() {
             eprintln!("       Run with sudo: sudo wicklee --install-service");
             return;
         }
-        // Ensure correct ownership/permissions required by launchd for system daemons.
-        // launchd silently refuses plists not owned root:wheel or writable by group/other.
-        // Belt-and-suspenders: sudo already creates root-owned files, but umask
-        // variations on some systems can leave wrong group ownership.
         let _ = tokio::process::Command::new("chown")
             .args(["root:wheel", plist_path])
             .stdout(std::process::Stdio::null())
@@ -295,19 +244,11 @@ pub(crate) async fn install_service() {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status().await;
-        // Fix ownership of the data directory. When upgrading from a user LaunchAgent,
-        // the database and config files were created by the user account. The root
-        // LaunchDaemon can't reliably write those files until ownership is corrected.
-        // Silently ignore errors (directory may not exist on a fresh install).
         let _ = tokio::process::Command::new("chown")
             .args(["-R", "root:wheel", "/Library/Application Support/Wicklee"])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status().await;
-        // ── Bootout existing registration ─────────────────────────────────────
-        // Check if the label is currently loaded before attempting bootout.
-        // On a fresh install (no prior registration) we skip bootout entirely,
-        // eliminating the async deregistration race that causes exit status 5.
         let label_loaded = tokio::process::Command::new("launchctl")
             .args(["list", "dev.wicklee.agent"])
             .stdout(std::process::Stdio::null())
@@ -323,9 +264,6 @@ pub(crate) async fn install_service() {
                 .stderr(std::process::Stdio::null())
                 .status().await;
 
-            // Poll for label removal instead of a fixed sleep. launchd's internal
-            // deregistration is async — polling avoids both under-waiting (exit 5)
-            // and over-waiting (unnecessary delay on fast systems).
             let poll_start = std::time::Instant::now();
             let poll_timeout = std::time::Duration::from_secs(10);
             loop {
@@ -345,9 +283,6 @@ pub(crate) async fn install_service() {
             }
         }
 
-        // ── Bootstrap with retry ─────────────────────────────────────────────
-        // Even after confirmed deregistration, bootstrap can race on heavily
-        // loaded systems. Retry up to 5 times with 3s backoff.
         let mut bootstrap_ok = false;
         for attempt in 0..5u32 {
             let status = tokio::process::Command::new("launchctl")
@@ -370,9 +305,7 @@ pub(crate) async fn install_service() {
             }
         }
         if bootstrap_ok {
-            // Brief pause so launchd can start the process before we verify.
             tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-            // Confirm the service is actually running (guards against launchd throttle).
             let running = tokio::process::Command::new("launchctl")
                 .args(["list", "dev.wicklee.agent"])
                 .stdout(std::process::Stdio::null())
@@ -395,15 +328,10 @@ pub(crate) async fn install_service() {
 
     #[cfg(target_os = "linux")]
     {
-        // Detect the actual invoking user even when called with sudo.
-        // SUDO_USER is set by sudo to the original login name; fall back to
-        // the process owner if not present (direct root login).
         let svc_user = std::env::var("SUDO_USER")
             .unwrap_or_else(|_| {
                 std::env::var("USER").unwrap_or_else(|_| "root".to_string())
             });
-        // Derive the home directory for that user so the agent reads the
-        // correct config (~/.wicklee/config.toml) rather than /root/.wicklee/.
         let svc_home = if svc_user == "root" {
             "/root".to_string()
         } else {
@@ -435,17 +363,9 @@ WantedBy=multi-user.target\n"
         let _ = tokio::process::Command::new("systemctl")
             .args(["daemon-reload"])
             .status().await;
-        // Enable for boot persistence, then restart so a freshly-installed
-        // binary is picked up immediately — even if the service was already
-        // running with an older version on the same inode.
         let _ = tokio::process::Command::new("systemctl")
             .args(["enable", "wicklee"])
             .status().await;
-        // Transfer binary ownership to the service user so the agent can
-        // self-update without requiring root on every update cycle.
-        // This is safe: the binary is in /usr/local/bin (root-writable by
-        // install.sh) and the service user only gains write access to this
-        // one file, not to the directory itself.
         if svc_user != "root" {
             let owner_arg = format!("{}:{}", svc_user, svc_user);
             let _ = tokio::process::Command::new("chown")
@@ -509,7 +429,6 @@ pub(crate) async fn uninstall_service() {
             eprintln!("Service not installed (plist not found: {plist_path}).");
             return;
         }
-        // Use modern bootout instead of deprecated `unload -w`.
         let _ = tokio::process::Command::new("launchctl")
             .args(["bootout", "system/dev.wicklee.agent"])
             .status().await;

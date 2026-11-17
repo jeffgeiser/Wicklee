@@ -15,9 +15,7 @@ import React from 'react';
 import { Thermometer, Zap, Server, TrendingDown, MemoryStick, Cpu, BarChart2, Wind, Search, Clock, Gauge, Waves, HardDrive } from 'lucide-react';
 import type { DetectedInsight, ActionId } from '../../types/observations';
 
-// ── Dismiss helpers ───────────────────────────────────────────────────────────
-
-const DISMISS_RESURFACE_MS = 60 * 60 * 1000;   // resurface after 1h
+const DISMISS_RESURFACE_MS = 60 * 60 * 1000;
 
 function dismissKey(patternId: string, nodeId: string): string {
   return `obs-dismissed:${patternId}:${nodeId}`;
@@ -40,10 +38,8 @@ export function writeDismissed(patternId: string, nodeId: string): void {
       dismissKey(patternId, nodeId),
       JSON.stringify({ dismissedAt: Date.now() }),
     );
-  } catch { /* storage unavailable — degrade gracefully */ }
+  } catch { }
 }
-
-// ── ActionId badge ────────────────────────────────────────────────────────────
 
 interface ActionBadgeConfig {
   label: string;
@@ -53,7 +49,6 @@ interface ActionBadgeConfig {
 
 function actionBadgeConfig(actionId: ActionId): ActionBadgeConfig {
   switch (actionId) {
-    // 'rebalance_workload' removed — routing not yet actionable
     case 'evict_idle_models':
       return { label: 'Evict Idle Models',  icon: <Cpu       className="w-2.5 h-2.5" />, cls: 'text-amber-400  bg-amber-500/10  border-amber-500/20'  };
     case 'reduce_batch_size':
@@ -80,8 +75,6 @@ export const ActionIdBadge: React.FC<{ actionId: ActionId }> = ({ actionId }) =>
     </span>
   );
 };
-
-// ── Icon + colour mapping by patternId ───────────────────────────────────────
 
 export function patternIcon(patternId: string) {
   switch (patternId) {
@@ -115,8 +108,6 @@ export function hookColor(patternId: string): string {
   }
 }
 
-// ── ConfidenceBar ─────────────────────────────────────────────────────────────
-
 export function ConfidenceBar({ insight }: { insight: DetectedInsight }) {
   const observedMin = Math.round(insight.observedMs / 60000);
   const requiredMin = Math.round(insight.requiredMs / 60000);
@@ -139,5 +130,3 @@ export function ConfidenceBar({ insight }: { insight: DetectedInsight }) {
     </div>
   );
 }
-
-// ── ObservationCard ───────────────────────────────────────────────────────────

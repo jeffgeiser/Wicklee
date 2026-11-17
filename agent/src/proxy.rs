@@ -193,14 +193,6 @@ pub(crate) async fn proxy_ollama_streaming(
                                             let prompt_dur   = v["prompt_eval_duration"].as_u64().unwrap_or(0);
                                             let eval_dur     = v["eval_duration"].as_u64().unwrap_or(0);
                                             let eval_cnt     = v["eval_count"].as_u64().unwrap_or(0);
-                                            // Step 5. These three stay Option
-                                            // rather than defaulting to 0 like
-                                            // the four above: a receipt built
-                                            // from this row has to tell "the
-                                            // runtime did not report it" from
-                                            // "it was zero", and a warm hit
-                                            // legitimately reports no load at
-                                            // all.
                                             #[cfg(not(target_env = "musl"))]
                                             let load_dur     = v["load_duration"].as_u64();
                                             #[cfg(not(target_env = "musl"))]
@@ -215,7 +207,6 @@ pub(crate) async fn proxy_ollama_streaming(
                                             let now = std::time::Instant::now();
                                             *proxy_state.last_done_ts.lock().unwrap() = Some(now);
 
-                                            // Per-model accumulator update
                                             {
                                                 let mut map = proxy_state.per_model.lock().unwrap();
                                                 let entry = map.entry(model.clone()).or_insert(ModelStats {
@@ -229,9 +220,6 @@ pub(crate) async fn proxy_ollama_streaming(
                                                 entry.last_done = now;
                                             }
 
-                                            // Per-request inference trace → DuckDB.
-                                            // Derived for the row alone, so musl
-                                            // skips the arithmetic as well.
                                             #[cfg(not(target_env = "musl"))]
                                             let latency_ms   = (total_dur / 1_000_000) as i64;
                                             #[cfg(not(target_env = "musl"))]
@@ -274,9 +262,8 @@ pub(crate) async fn proxy_ollama_streaming(
                         }
                     }
                 }
-                Ok(None) => break, // stream ended
+                Ok(None) => break,
                 Err(_) => {
-                    // Chunk timeout — notify client and close
                     let _ = tx.send(Err(std::io::Error::new(
                         std::io::ErrorKind::TimedOut,
                         "upstream chunk timeout (60s)",
@@ -314,8 +301,6 @@ pub(crate) async fn proxy_passthrough(
 
     let method  = req.method().clone();
     let headers = req.headers().clone();
-    // Stream the body through unbuffered — /api/blobs/:digest carries whole
-    // GGUF files, far beyond any sane in-memory cap.
     let body = reqwest::Body::wrap_stream(req.into_body().into_data_stream());
 
     let backend_url = format!("http://127.0.0.1:{}{}", state.ollama_port, path);
@@ -396,8 +381,7 @@ mod tests {
 
     #[tokio::test]
     async fn inference_body_over_cap_is_413() {
-        let state = test_state(1); // never contacted
-        // Declared Content-Length over the cap → rejected before buffering.
+        let state = test_state(1);
         let req = axum::http::Request::post("/api/chat")
             .header("content-length", (MAX_INFERENCE_BODY + 1).to_string())
             .body(Body::empty()).unwrap();
@@ -405,7 +389,6 @@ mod tests {
             .await.into_response();
         assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
 
-        // No Content-Length (chunked) → caught by the to_bytes limit.
         let big = vec![b'a'; MAX_INFERENCE_BODY + 1];
         let stream = tokio_stream::once(Ok::<_, std::io::Error>(axum::body::Bytes::from(big)));
         let req = axum::http::Request::post("/api/chat")
@@ -417,7 +400,6 @@ mod tests {
 
     #[tokio::test]
     async fn passthrough_forwards_bodies_over_16mb() {
-        // Mock backend that echoes the received body length.
         let app = axum::Router::new().fallback(|body: axum::body::Bytes| async move {
             body.len().to_string()
         }).layer(axum::extract::DefaultBodyLimit::disable());

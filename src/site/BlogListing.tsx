@@ -31,8 +31,6 @@ const BlogListing: React.FC<BlogListingProps> = ({ onNavigate }) => {
     let cancelled = false;
 
     const fetchAll = async () => {
-      // Fetch the manifest — /blog/index.json is the single source of truth.
-      // To publish a new post: add slug to index.json + drop the .md in /public/blog/.
       let slugs: string[] = [];
       try {
         const idx = await fetch('/blog/index.json');
@@ -53,10 +51,8 @@ const BlogListing: React.FC<BlogListingProps> = ({ onNavigate }) => {
           const raw = await res.text();
           const { frontmatter, content } = parseFrontmatter(raw);
 
-          // Title fallback: de-slug filename
           const title = frontmatter.title?.trim() || slugToTitle(slug);
 
-          // Description fallback: first ~150 chars of body, stripped
           let description = frontmatter.description?.trim() || undefined;
           if (!description) {
             const stripped = stripMarkdown(content);
@@ -71,7 +67,6 @@ const BlogListing: React.FC<BlogListingProps> = ({ onNavigate }) => {
             }
           }
 
-          // Date — parse for sorting; 0 means sort last
           let dateMs = 0;
           if (frontmatter.date) {
             const d = new Date(frontmatter.date);
@@ -87,11 +82,9 @@ const BlogListing: React.FC<BlogListingProps> = ({ onNavigate }) => {
             dateMs,
           });
         } catch {
-          // Skip unreadable posts silently
         }
       }
 
-      // Newest first; missing dates sort last
       results.sort((a, b) => {
         if (!a.dateMs && !b.dateMs) return 0;
         if (!a.dateMs) return 1;
@@ -111,13 +104,11 @@ const BlogListing: React.FC<BlogListingProps> = ({ onNavigate }) => {
 
   return (
     <div className="min-h-screen bg-gray-900 text-gray-100 selection:bg-blue-600 selection:text-white">
-      {/* Background decor */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
         <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-blue-600/10 blur-[120px] rounded-full" />
         <div className="absolute bottom-[-10%] right-[-10%] w-[30%] h-[30%] bg-cyan-400/10 blur-[120px] rounded-full" />
       </div>
 
-      {/* Nav */}
       <nav className="max-w-7xl mx-auto px-4 sm:px-8 py-5 sm:py-8 flex items-center justify-between relative z-10">
         <button onClick={() => onNavigate('/')} className="cursor-pointer">
           <Logo className="text-3xl" connectionState="connected" />
@@ -141,7 +132,6 @@ const BlogListing: React.FC<BlogListingProps> = ({ onNavigate }) => {
         </div>
       </nav>
 
-      {/* Content */}
       <main className="max-w-3xl mx-auto px-4 sm:px-8 py-12 pb-32 relative z-10">
         <div className="mb-12">
           <h1 className="text-4xl sm:text-5xl font-extrabold text-white tracking-tight mb-4">Blog</h1>

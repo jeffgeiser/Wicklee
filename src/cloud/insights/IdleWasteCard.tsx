@@ -54,7 +54,6 @@ const IdleWasteCard: React.FC<Props> = ({ getToken, subscriptionTier, onNavigate
   const [report, setReport] = useState<IdleWasteReport | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Weekly digest settings (footer)
   const [digestEmail, setDigestEmail] = useState('');
   const [digestEnabled, setDigestEnabled] = useState(false);
   const [digestSaving, setDigestSaving] = useState(false);
@@ -87,7 +86,7 @@ const IdleWasteCard: React.FC<Props> = ({ getToken, subscriptionTier, onNavigate
       const d = await res.json();
       setDigestEmail(d.email ?? '');
       setDigestEnabled(d.enabled ?? false);
-    } catch { /* non-fatal */ }
+    } catch { }
   }, [isTeamOrAbove, authHeaders]);
 
   useEffect(() => { fetchReport(); }, [fetchReport]);
@@ -220,7 +219,6 @@ const IdleWasteCard: React.FC<Props> = ({ getToken, subscriptionTier, onNavigate
         </>
       )}
 
-      {/* Weekly digest footer */}
       <div className="border-t border-gray-700 pt-3 space-y-2">
         <div className="flex items-center gap-2 flex-wrap">
           <Mail size={12} className="text-gray-500 shrink-0" />

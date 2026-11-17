@@ -11,8 +11,6 @@
 import type { TpsProjection } from '../../utils/modelHistory';
 import type { DiscoveryHoverRow } from './DiscoveryHoverCard';
 
-// ── Fit score ─────────────────────────────────────────────────────────────────
-
 export interface FitColors { dot: string; badge: string; bar: string; text: string }
 
 export function fitColors(score: number, wontFit: 'dim' | 'red'): FitColors {
@@ -34,8 +32,6 @@ export function fitGradeLabel(score: number): string {
   return "Won't Fit";
 }
 
-// ── Model id formatting ───────────────────────────────────────────────────────
-
 export function fmtDl(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000)     return `${(n / 1_000).toFixed(0)}K`;
@@ -50,8 +46,6 @@ export function uploaderName(model_id: string): string | null {
   const parts = model_id.split('/');
   return parts.length > 1 ? parts[0] : null;
 }
-
-// ── Projection-tier helpers ───────────────────────────────────────────────────
 
 /** Single-word label for a projection's confidence tier. */
 export function projConfidenceLabel(c: TpsProjection['confidence']): string {

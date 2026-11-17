@@ -19,8 +19,6 @@ import { Lock } from 'lucide-react';
 import { SubscriptionTier } from '../../types';
 import { TIER_STYLE } from './tierStyle';
 
-// ── Props ─────────────────────────────────────────────────────────────────────
-
 interface InsightsLockedCardProps {
   title: string;
   icon: React.ReactNode;
@@ -29,8 +27,6 @@ interface InsightsLockedCardProps {
   tierRequired: SubscriptionTier;
   onUpgradeClick?: () => void;
 }
-
-// ── Component ─────────────────────────────────────────────────────────────────
 
 const InsightsLockedCard: React.FC<InsightsLockedCardProps> = ({
   title,
@@ -45,7 +41,6 @@ const InsightsLockedCard: React.FC<InsightsLockedCardProps> = ({
   return (
     <div className="bg-gray-800 border border-gray-700 rounded-2xl p-4 flex flex-col gap-3 relative overflow-hidden">
 
-      {/* Header */}
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
           <span className="text-gray-600 shrink-0">{icon}</span>
@@ -58,7 +53,6 @@ const InsightsLockedCard: React.FC<InsightsLockedCardProps> = ({
         </span>
       </div>
 
-      {/* Blurred placeholder body */}
       <div className="relative py-1">
         <div className="blur-sm select-none pointer-events-none space-y-2" aria-hidden>
           <div className="h-6 bg-gray-700 rounded-lg w-2/3" />
@@ -69,10 +63,8 @@ const InsightsLockedCard: React.FC<InsightsLockedCardProps> = ({
         </div>
       </div>
 
-      {/* Description */}
       <p className="text-[11px] text-gray-600 leading-relaxed">{description}</p>
 
-      {/* Upgrade CTA */}
       <button
         onClick={onUpgradeClick}
         className="text-xs text-indigo-500 hover:text-indigo-400 transition-colors text-left"

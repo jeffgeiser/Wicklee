@@ -1,8 +1,6 @@
 import React from 'react';
 import { ArrowLeft, ExternalLink } from 'lucide-react';
 
-// ── Types ────────────────────────────────────────────────────────────────────
-
 type DotColor = 'blue' | 'green' | 'emerald' | 'amber' | 'yellow' | 'orange' | 'red' | 'gray';
 
 interface RangeEntry {
@@ -23,8 +21,6 @@ interface MetricCardProps {
 interface MetricsPageProps {
   onNavigate?: (path: string) => void;
 }
-
-// ── Internal components ───────────────────────────────────────────────────────
 
 const Dot: React.FC<{ color: DotColor }> = ({ color }) => {
   const cls: Record<DotColor, string> = {
@@ -98,8 +94,6 @@ const SectionHeader: React.FC<{ title: string; description: string }> = ({ title
   </div>
 );
 
-// ── Page ─────────────────────────────────────────────────────────────────────
-
 const MetricsPage: React.FC<MetricsPageProps> = ({ onNavigate }) => {
   const handleBack = () => {
     if (onNavigate) {
@@ -112,7 +106,6 @@ const MetricsPage: React.FC<MetricsPageProps> = ({ onNavigate }) => {
   return (
     <div className="min-h-screen bg-gray-900 text-gray-100">
 
-      {/* ── Top nav ──────────────────────────────────────────────────────────── */}
       <div className="sticky top-0 z-40 bg-gray-900/90 backdrop-blur-sm border-b border-gray-700/50 px-6 py-3 flex items-center gap-4">
         <button
           onClick={handleBack}
@@ -125,7 +118,6 @@ const MetricsPage: React.FC<MetricsPageProps> = ({ onNavigate }) => {
         <span className="text-xs font-semibold text-gray-500 tracking-widest uppercase">wicklee</span>
       </div>
 
-      {/* ── Page header ──────────────────────────────────────────────────────── */}
       <div className="px-6 pt-10 pb-8 max-w-3xl mx-auto">
         <h1 className="text-2xl font-bold text-gray-100 font-sans mb-2">Metrics Reference</h1>
         <p className="text-sm text-gray-400 font-sans leading-relaxed">
@@ -140,10 +132,8 @@ const MetricsPage: React.FC<MetricsPageProps> = ({ onNavigate }) => {
         </a>
       </div>
 
-      {/* ── Content ──────────────────────────────────────────────────────────── */}
       <div className="max-w-3xl mx-auto px-6 pb-20 space-y-14">
 
-        {/* ── How Wicklee Works ────────────────────────────────────────────── */}
         <section>
           <SectionHeader
             title="How Wicklee Works: Synchronous Observation"
@@ -179,7 +169,6 @@ const MetricsPage: React.FC<MetricsPageProps> = ({ onNavigate }) => {
           </div>
         </section>
 
-        {/* ── Throughput Measurement ───────────────────────────────────────── */}
         <section>
           <SectionHeader
             title="Throughput Measurement"
@@ -187,7 +176,6 @@ const MetricsPage: React.FC<MetricsPageProps> = ({ onNavigate }) => {
           />
           <div className="bg-gray-800 border border-indigo-500/20 rounded-2xl p-6 space-y-6">
 
-            {/* Ollama */}
             <div className="flex gap-3">
               <span className="mt-[5px] w-1.5 h-1.5 rounded-full bg-indigo-500 shrink-0" aria-hidden="true" />
               <div>
@@ -208,7 +196,6 @@ const MetricsPage: React.FC<MetricsPageProps> = ({ onNavigate }) => {
 
             <div className="border-t border-gray-700/60" />
 
-            {/* vLLM */}
             <div className="flex gap-3">
               <span className="mt-[5px] w-1.5 h-1.5 rounded-full bg-indigo-500 shrink-0" aria-hidden="true" />
               <div>

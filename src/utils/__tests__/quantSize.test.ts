@@ -49,7 +49,6 @@ describe('bytesPerWeight', () => {
 
   it('matches real GGUF file sizes within ±10% (Llama 3.1 8B, 8.03B params)', () => {
     const params = 8.03e9;
-    // Published GGUF sizes for Llama 3.1 8B Instruct.
     const realSizes: [string, number][] = [
       ['Q2_K',   3.18],
       ['Q4_K_M', 4.92],
@@ -171,8 +170,6 @@ describe('estimateModelSizeGb (node-level)', () => {
 
 describe('resolveModelSizeHints (vllm_dtype capture)', () => {
   it('prefers the cmdline-captured vllm_dtype over name parsing', () => {
-    // Un-tagged vLLM name + FP8 engine: without vllm_dtype this sized as
-    // FP16 (64 GB); the cmdline capture halves it to the true 32 GB.
     const node = makeNode({
       vllm_model_name: 'Qwen/Qwen2.5-32B-Instruct',
       vllm_dtype: 'FP8',
@@ -186,17 +183,16 @@ describe('resolveModelSizeHints (vllm_dtype capture)', () => {
       vllm_model_name: 'Qwen/Qwen2.5-32B-Instruct',
       vllm_dtype: 'AWQ',
     });
-    expect(estimateModelSizeGb(node)).toBeCloseTo(32 * 0.56, 0); // ~17.9 GB (0.56 B/W)
+    expect(estimateModelSizeGb(node)).toBeCloseTo(32 * 0.56, 0);
   });
 
   it('keeps hints matched to the runtime the name came from', () => {
-    // A stale Ollama quant field must not leak onto a vLLM model name.
     const node = makeNode({
       vllm_model_name: 'Qwen/Qwen2.5-32B-Instruct',
       ollama_quantization: 'Q4_K_M',
     });
     expect(resolveModelSizeHints(node).quantHint).toBeNull();
-    expect(estimateModelSizeGb(node)).toBeCloseTo(64, 1); // FP16 fallback
+    expect(estimateModelSizeGb(node)).toBeCloseTo(64, 1);
   });
 
   it('falls back to name parsing when vllm_dtype is absent (--dtype auto)', () => {

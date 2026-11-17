@@ -2,8 +2,6 @@
 
 use crate::*;
 
-// ── Alerting — structs ────────────────────────────────────────────────────────
-
 #[derive(Serialize, Clone)]
 pub(crate) struct AlertChannel {
     pub(crate) id:           String,
@@ -46,8 +44,6 @@ pub(crate) struct CreateRuleRequest {
     #[serde(default)]
     pub(crate) tag:             Option<String>,
 }
-
-// ── Alerting — notification delivery ─────────────────────────────────────────
 
 pub(crate) fn send_slack(webhook_url: &str, blocks_json: &str) -> bool {
     let body = format!(r#"{{"blocks":{blocks_json}}}"#);
@@ -97,7 +93,6 @@ pub(crate) fn send_pagerduty(routing_key: &str, node_id: &str, event_type: &str,
             _ => "warning",
         })
     };
-    // dedup_key ensures PagerDuty links trigger + resolve for the same incident.
     let dedup_key = format!("wicklee-{node_id}-{event_type}");
     let payload = serde_json::json!({
         "routing_key": routing_key,
@@ -156,7 +151,6 @@ pub(crate) fn slack_alert_blocks(node_id: &str, event_type: &str, detail: &str, 
 }
 
 pub(crate) fn email_alert_body(node_id: &str, event_type: &str, detail: &str, resolved: bool) -> (String, String) {
-    // ── Plain text version ────────────────────────────────────────────────
     let status_label = if resolved { "Resolved" } else { "Detected" };
     let text = format!(
         "Wicklee Alert — {status_label}\n\
@@ -167,14 +161,12 @@ pub(crate) fn email_alert_body(node_id: &str, event_type: &str, detail: &str, re
          Manage alerts: https://wicklee.dev (Settings → Alerts)"
     );
 
-    // ── HTML version — matches Wicklee's Hardware-Centric Dark design ────
     let (accent, accent_bg, status_text, status_icon) = if resolved {
         ("#4ade80", "rgba(74,222,128,0.08)", "Resolved", "\u{2705}")
     } else {
         ("#f97316", "rgba(249,115,22,0.08)", "Detected", "\u{26A0}\u{FE0F}")
     };
 
-    // Human-readable pattern name: thermal_drain → Thermal Drain
     let pattern_display: String = event_type.split('_')
         .map(|w| {
             let mut c = w.chars();
@@ -271,15 +263,12 @@ pub(crate) fn email_alert_body(node_id: &str, event_type: &str, detail: &str, re
     (text, html)
 }
 
-// ── Alerting — core evaluation (async) ──────────────────────────────────────
-
 pub(crate) async fn evaluate_alerts(
     user_id:  &str,
     node_id:  &str,
     metrics:  &MetricsPayload,
     pool:     &sqlx::PgPool,
 ) {
-    // Load enabled rules for this user + node.
     let rules: Vec<(String, String, Option<f64>, String, String, String)> = sqlx::query_as(
         "SELECT ar.id, ar.event_type, ar.threshold_value, ar.urgency,
                 nc.channel_type, nc.config_json::text
@@ -307,10 +296,6 @@ pub(crate) async fn evaluate_alerts(
 
     if rules.is_empty() { return; }
 
-    // Newest open event per rule for this node, loaded in ONE query rather
-    // than one per rule on every telemetry push. Same row the old per-rule
-    // `ORDER BY triggered_at DESC LIMIT 1` picked; a failed load reads as "no
-    // open event", exactly as the per-rule query's error did.
     let rule_ids: Vec<&str> = rules.iter().map(|r| r.0.as_str()).collect();
     let mut open_events: HashMap<String, (String, Option<i64>)> =
         sqlx::query_as::<_, (String, String, Option<i64>)>(
@@ -508,7 +493,6 @@ pub(crate) fn deliver_alert(channel_type: &str, config_json: &str, node_id: &str
                 Some(a) => a.to_owned(),
                 None => { eprintln!("[alerts] email channel missing address"); return false; }
             };
-            // Human-readable pattern name for subject line
             let pattern_label: String = event_type.split('_')
                 .map(|w| { let mut c = w.chars(); match c.next() { None => String::new(), Some(f) => f.to_uppercase().collect::<String>() + c.as_str() } })
                 .collect::<Vec<_>>().join(" ");
@@ -531,15 +515,9 @@ pub(crate) fn deliver_alert(channel_type: &str, config_json: &str, node_id: &str
     }
 }
 
-// ── Node offline alert task ──────────────────────────────────────────────────
-
 pub(crate) async fn node_offline_alert_task(state: AppState) {
     let mut known_offline: HashSet<String> = HashSet::new();
 
-    // Pre-populate known_offline from Postgres so a redeploy doesn't fire
-    // "came online" for every node. Any node whose last_seen is already stale
-    // at startup is assumed to be offline — matching the steady-state that
-    // existed before the restart.
     let offline_threshold_ms = 5 * 60_000_u64;
     {
         let boot_now = now_ms();
@@ -562,10 +540,6 @@ pub(crate) async fn node_offline_alert_task(state: AppState) {
         interval.tick().await;
         let now = now_ms();
 
-        // user_id keys the owner's alert rules; tenant keys events and
-        // observations (org_id for org-shared fleets — writing these under
-        // user_id made every cloud-generated observation invisible to
-        // org-scoped reads).
         let nodes: Vec<(String, String, i64, String)> = sqlx::query_as(
             "SELECT user_id, wk_id, last_seen, COALESCE(org_id, user_id)
              FROM nodes WHERE user_id IS NOT NULL"
@@ -586,10 +560,8 @@ pub(crate) async fn node_offline_alert_task(state: AppState) {
             }
         }
 
-        // Fire alerts for nodes that just went offline.
         for (user_id, node_id, tenant, elapsed) in &went_offline {
             println!("[alerts] node_offline: {node_id} went offline (elapsed {elapsed}ms, user_id={user_id})");
-            // Org-aware: org-paired nodes are entitled by the ORG subscription.
             let tier = resolve_node_tier(node_id, &state.pool).await;
             if !is_pro_or_above(&tier) {
                 println!("[alerts] node_offline: skipped — tier={tier} (requires Pro+)");
@@ -630,7 +602,6 @@ pub(crate) async fn node_offline_alert_task(state: AppState) {
                 }
             }
 
-            // Dedup check before writing event.
             let cutoff = (now as i64) - 3_600_000;
             let already_exists: bool = sqlx::query_scalar::<_, bool>(
                 "SELECT EXISTS(SELECT 1 FROM node_events WHERE tenant_id = $1 AND node_id = $2 AND event_type = 'node_offline' AND ts > to_timestamp($3::float8 / 1000.0))"
@@ -644,7 +615,6 @@ pub(crate) async fn node_offline_alert_task(state: AppState) {
                     message: format!("Node offline \u{2014} no telemetry received for {minutes}m"),
                 });
 
-                // Write fleet observation.
                 let obs_id = Uuid::new_v4().to_string();
                 let minutes = elapsed / 60_000;
                 let _ = sqlx::query(
@@ -659,16 +629,10 @@ pub(crate) async fn node_offline_alert_task(state: AppState) {
             }
         }
 
-        // Resolve alerts for nodes that came back online.
         for (_user_id, node_id, tenant) in &came_online {
             let tier = resolve_node_tier(node_id, &state.pool).await;
             if !is_pro_or_above(&tier) { continue; }
 
-            // Deliver resolved notification to the same channels that fired
-            // the offline alert. Scoped to node_offline rules — without the
-            // event_type filter this selected (and below, resolved) EVERY
-            // open alert for the node, e.g. an active thermal_critical, which
-            // then re-fired and re-notified.
             let open_rules: Vec<(String, String, String)> = sqlx::query_as(
                 "SELECT ae.rule_id, nc.channel_type, nc.config_json::text
                  FROM alert_events ae
@@ -707,8 +671,6 @@ pub(crate) async fn node_offline_alert_task(state: AppState) {
         }
     }
 }
-
-// ── Fleet Alert Evaluator (Essential Four + Agent Version Mismatch) ───────────
 
 pub(crate) struct NodeRingBuffer {
     pub(crate) entries: Vec<(u64, Option<String>, Option<String>, Option<f32>, Option<f32>)>,
@@ -770,7 +732,6 @@ pub(crate) async fn wes_long_term_drift_evaluator_task(state: AppState) {
 
         // All Pro+ nodes with telemetry in the last 24h, with the tenant the
         // node's data is stored under (org id for org fleets). Tier comes
-        // from the org subscription when org-paired, else the owner's.
         let nodes: Vec<(String, String)> = sqlx::query_as(
             "SELECT n.wk_id, COALESCE(n.org_id, n.user_id)
              FROM nodes n
@@ -784,7 +745,6 @@ pub(crate) async fn wes_long_term_drift_evaluator_task(state: AppState) {
          .fetch_all(&state.pool).await.unwrap_or_default();
 
         for (node_id, tenant_id) in &nodes {
-            // Baseline: 6-day window ending 24h ago.
             let baseline: Option<(Option<f64>, i64)> = sqlx::query_as(
                 "SELECT AVG(wes_penalized_avg)::DOUBLE PRECISION, COUNT(*)::BIGINT
                  FROM metrics_5min
@@ -795,11 +755,6 @@ pub(crate) async fn wes_long_term_drift_evaluator_task(state: AppState) {
                    AND wes_penalized_avg > 0"
             ).bind(node_id).fetch_one(&state.pool).await.ok();
 
-            // Recent: last 24 hours — from metrics_RAW, bucketed to 5-min
-            // units so the r_n threshold below keeps its meaning. The rollup
-            // only populates metrics_5min for data OLDER than 24h, so the
-            // previous metrics_5min read here always counted ~0 recent
-            // samples and the drift observation could never fire.
             let recent: Option<(Option<f64>, i64)> = sqlx::query_as(
                 "SELECT AVG(bucket_avg)::DOUBLE PRECISION, COUNT(*)::BIGINT
                  FROM (
@@ -815,16 +770,11 @@ pub(crate) async fn wes_long_term_drift_evaluator_task(state: AppState) {
             ).bind(node_id).fetch_one(&state.pool).await.ok();
 
             let (Some((Some(b_avg), b_n)), Some((Some(r_avg), r_n))) = (baseline, recent) else { continue };
-            // Need at least 100 baseline samples (~8h of 5-min buckets) and
-            // 30 recent samples (~2.5h of 5-min buckets) before firing.
-            // Avoids false positives on sparse intermittent fleets.
             if b_n < 100 || r_n < 30 { continue; }
             if b_avg <= 0.0 { continue; }
             let drop_pct = (b_avg - r_avg) / b_avg * 100.0;
             if drop_pct < 15.0 { continue; }
 
-            // 24h cooldown: skip if an open `wes_long_term_drift` already
-            // exists for this node, OR if any was fired+resolved within 24h.
             let recent_open: Option<i64> = sqlx::query_scalar(
                 "SELECT fired_at_ms FROM fleet_observations
                  WHERE tenant_id = $1 AND node_id = $2 AND alert_type = 'wes_long_term_drift'
@@ -879,18 +829,10 @@ pub(crate) async fn fleet_alert_evaluator_task(state: AppState) {
     let mut wes_baselines: HashMap<String, f32> = HashMap::new();
     let mut baseline_refresh_counter: u32 = 0;
 
-    // Hysteresis tick counters — fire only after condition persists for N ticks,
-    // resolve only after condition clears for M ticks. Prevents single-tick noise.
-    //
-    // fleet_load_imbalance: WES-poor condition (no thermal component — that already
-    //   uses consecutive_ticks from the ring buffer). Require 3 ticks firing, 2 clear.
-    //
-    // agent_version_mismatch: Require 5 consecutive mismatch ticks before firing (handles
-    //   rolling updates where each node is briefly the minority version), 2 ticks to resolve.
-    let mut wes_poor_ticks:      HashMap<String, u32> = HashMap::new(); // node_id → consecutive ticks WES-poor
-    let mut ver_mismatch_ticks:  HashMap<String, u32> = HashMap::new(); // node_id → consecutive ticks mismatched
-    let mut wes_poor_clear_ticks: HashMap<String, u32> = HashMap::new(); // node_id → consecutive clear ticks
-    let mut ver_match_ticks:     HashMap<String, u32> = HashMap::new();  // node_id → consecutive match ticks
+    let mut wes_poor_ticks:      HashMap<String, u32> = HashMap::new();
+    let mut ver_mismatch_ticks:  HashMap<String, u32> = HashMap::new();
+    let mut wes_poor_clear_ticks: HashMap<String, u32> = HashMap::new();
+    let mut ver_match_ticks:     HashMap<String, u32> = HashMap::new();
 
     let mut interval = tokio::time::interval(Duration::from_secs(60));
     interval.tick().await;
@@ -900,7 +842,6 @@ pub(crate) async fn fleet_alert_evaluator_task(state: AppState) {
         interval.tick().await;
         let now = now_ms();
 
-        // Refresh 24h WES baselines every 10 min.
         baseline_refresh_counter += 1;
         if baseline_refresh_counter >= 10 || wes_baselines.is_empty() {
             baseline_refresh_counter = 0;
@@ -915,7 +856,6 @@ pub(crate) async fn fleet_alert_evaluator_task(state: AppState) {
             }
         }
 
-        // Snapshot current metrics.
         let snapshot: Vec<(String, MetricsPayload)> = {
             let cache = state.metrics.read().unwrap();
             cache.iter()
@@ -932,7 +872,6 @@ pub(crate) async fn fleet_alert_evaluator_task(state: AppState) {
         }
         let mut to_fire: Vec<PendingObs> = Vec::new();
         let mut to_resolve: Vec<(String, String)> = Vec::new();
-        // (node_id, alert_type, new_detail, new_context_json) — refreshes stale open observations.
         let mut to_update: Vec<(String, String, String, String)> = Vec::new();
 
         for (node_id, m) in &snapshot {
@@ -948,7 +887,6 @@ pub(crate) async fn fleet_alert_evaluator_task(state: AppState) {
             };
             ring.push(now, m.inference_state.clone(), m.thermal_state.clone(), mem_pct, wes);
 
-            // 1. Zombied Engine
             {
                 let alert_type = "zombied_engine";
                 let busy_ticks = ring.consecutive_ticks(|e| e.1.as_deref() == Some("busy"));
@@ -962,7 +900,6 @@ pub(crate) async fn fleet_alert_evaluator_task(state: AppState) {
                     });
                 } else if !is_firing && is_open { to_resolve.push((node_id.clone(), alert_type.into())); }
             }
-            // 2. Thermal Redline
             {
                 let alert_type = "thermal_redline";
                 let critical_ticks = ring.consecutive_ticks(|e| e.2.as_deref() == Some("Critical"));
@@ -976,11 +913,10 @@ pub(crate) async fn fleet_alert_evaluator_task(state: AppState) {
                     });
                 } else if !is_firing && is_open { to_resolve.push((node_id.clone(), alert_type.into())); }
             }
-            // 3. OOM Warning
             {
                 let alert_type = "oom_warning";
                 let oom_ticks = ring.consecutive_ticks(|e| e.3.is_some_and(|p| p > 95.0));
-                let is_firing = oom_ticks >= 2; // require sustained pressure, not single-tick spike
+                let is_firing = oom_ticks >= 2;
                 let is_open = open_observations.contains_key(&(node_id.clone(), alert_type.into()));
                 if is_firing && !is_open {
                     let pct = mem_pct.unwrap_or(0.0);
@@ -991,13 +927,11 @@ pub(crate) async fn fleet_alert_evaluator_task(state: AppState) {
                     });
                 } else if !is_firing && is_open { to_resolve.push((node_id.clone(), alert_type.into())); }
             }
-            // 4. WES Cliff — only fires during active inference, with a minimum floor
-            // to avoid noise from idle-state WES fluctuations.
             {
                 let alert_type = "wes_cliff";
                 if let (Some(current_wes), Some(&baseline)) = (wes, wes_baselines.get(node_id)) {
                     let is_active = matches!(m.inference_state.as_deref(), Some("live") | Some("idle-spd"));
-                    let wes_floor = 3.0_f32; // Don't fire if WES is still in "Good" range
+                    let wes_floor = 3.0_f32;
                     let is_firing = is_active && baseline > 0.0 && current_wes < baseline * 0.35 && current_wes < wes_floor;
                     let is_open = open_observations.contains_key(&(node_id.clone(), alert_type.into()));
                     if is_firing && !is_open {
@@ -1011,12 +945,6 @@ pub(crate) async fn fleet_alert_evaluator_task(state: AppState) {
             }
         }
 
-        // 5. Agent Version Mismatch
-        // Hysteresis: require 5 consecutive mismatch ticks (≈5 min) before firing.
-        // This prevents noise from rolling updates where each node is briefly the
-        // minority version before the rest of the fleet catches up.
-        // Resolution: require 2 consecutive clean ticks so a re-update doesn't flip
-        // the observation immediately.
         {
             let mut version_counts: HashMap<String, u32> = HashMap::new();
             for (_, m) in &snapshot {
@@ -1033,12 +961,10 @@ pub(crate) async fn fleet_alert_evaluator_task(state: AppState) {
                             let is_open = open_observations.contains_key(&(node_id.clone(), alert_type.into()));
 
                             if is_mismatched {
-                                // Increment mismatch tick counter, reset clear counter.
                                 let mm = ver_mismatch_ticks.entry(node_id.clone()).or_insert(0);
                                 *mm += 1;
                                 ver_match_ticks.remove(node_id.as_str());
 
-                                // Fire only after sustained mismatch (5 ticks ≈ 5 min).
                                 if *mm >= 5 && !is_open {
                                     to_fire.push(PendingObs { node_id: node_id.clone(), alert_type: alert_type.into(),
                                         severity: ObsSeverity::Warning, title: "Agent Version Mismatch".into(),
@@ -1047,12 +973,10 @@ pub(crate) async fn fleet_alert_evaluator_task(state: AppState) {
                                     });
                                 }
                             } else {
-                                // Reset mismatch counter, increment clear counter.
                                 ver_mismatch_ticks.remove(node_id.as_str());
                                 let mc = ver_match_ticks.entry(node_id.clone()).or_insert(0);
                                 *mc += 1;
 
-                                // Resolve only after 2 clean ticks.
                                 if is_open && *mc >= 2 {
                                     to_resolve.push((node_id.clone(), alert_type.into()));
                                 }
@@ -1060,7 +984,6 @@ pub(crate) async fn fleet_alert_evaluator_task(state: AppState) {
                         }
                     }
                 } else {
-                    // Fleet dropped to 1 versioned node — clear any open mismatch observations.
                     for (node_id, _) in &snapshot {
                         let alert_type = "agent_version_mismatch";
                         if open_observations.contains_key(&(node_id.clone(), alert_type.into())) {
@@ -1073,17 +996,7 @@ pub(crate) async fn fleet_alert_evaluator_task(state: AppState) {
             }
         }
 
-        // 6. Fleet Load Imbalance (Pattern E)
-        // A node is thermally stressed or significantly WES-poor while at least one
-        // healthier peer with Normal thermal is available — a routing opportunity exists.
-        // Requires ≥2 active nodes. Only fires when the stressed node has active inference.
-        //
-        // Hysteresis (WES-poor leg only):
-        //   Fire:    condition persists for ≥3 consecutive ticks (≈3 min)
-        //   Resolve: condition clear  for ≥2 consecutive ticks (≈2 min)
-        // Thermal-stress leg already requires hot_ticks ≥ 2 from the ring buffer.
         if snapshot.len() >= 2 {
-            // Build a fleet-wide WES map for the current tick (live MetricsPayload values).
             let live_wes: HashMap<&str, f32> = snapshot.iter()
                 .filter_map(|(nid, m)| {
                     let watts = m.nvidia_power_draw_w.or(m.apple_soc_power_w).or(m.cpu_power_w);
@@ -1098,10 +1011,8 @@ pub(crate) async fn fleet_alert_evaluator_task(state: AppState) {
             for (node_id, m) in &snapshot {
                 let alert_type = "fleet_load_imbalance";
 
-                // Inference must be active to be relevant
                 let is_active = matches!(m.inference_state.as_deref(), Some("live") | Some("idle-spd"));
                 if !is_active {
-                    // Clear tick counters and resolve open observation.
                     wes_poor_ticks.remove(node_id.as_str());
                     wes_poor_clear_ticks.remove(node_id.as_str());
                     if open_observations.contains_key(&(node_id.clone(), alert_type.into())) {
@@ -1110,13 +1021,11 @@ pub(crate) async fn fleet_alert_evaluator_task(state: AppState) {
                     continue;
                 }
 
-                // Thermal stress: 2+ consecutive 60s ticks with non-Normal thermal state
                 let hot_ticks = ring_buffers.get(node_id.as_str())
                     .map(|r| r.consecutive_ticks(|e| e.2.as_deref().map(|t| t != "Normal").unwrap_or(false)))
                     .unwrap_or(0);
                 let is_thermally_stressed = hot_ticks >= 2;
 
-                // Best healthy peer: highest WES among Normal-thermal peers
                 let this_wes = live_wes.get(node_id.as_str()).copied();
                 let best_peer = snapshot.iter()
                     .filter(|(pid, pm)| {
@@ -1136,12 +1045,11 @@ pub(crate) async fn fleet_alert_evaluator_task(state: AppState) {
                 };
                 let is_wes_poor_raw = wes_gap_pct >= 20.0;
 
-                // Update WES-poor hysteresis counters.
                 let wes_poor_sustained = if is_wes_poor_raw {
                     let ct = wes_poor_ticks.entry(node_id.clone()).or_insert(0);
                     *ct += 1;
                     wes_poor_clear_ticks.remove(node_id.as_str());
-                    *ct >= 3  // require 3 consecutive ticks before treating as sustained
+                    *ct >= 3
                 } else {
                     wes_poor_ticks.remove(node_id.as_str());
                     false
@@ -1151,18 +1059,15 @@ pub(crate) async fn fleet_alert_evaluator_task(state: AppState) {
                 let is_firing = best_peer.is_some() && (is_thermally_stressed || is_wes_poor);
                 let is_open = open_observations.contains_key(&(node_id.clone(), alert_type.into()));
 
-                // For resolution: require 2 consecutive clean ticks if open (debounce).
                 if !is_firing && is_open {
                     let cc = wes_poor_clear_ticks.entry(node_id.clone()).or_insert(0);
                     *cc += 1;
                     if *cc < 2 {
-                        // Not yet stable — skip this tick, don't resolve yet.
                         continue;
                     }
                     wes_poor_clear_ticks.remove(node_id.as_str());
                 }
 
-                // Build detail + context once, reused for both fire and update paths.
                 let sustained_ticks = wes_poor_ticks.get(node_id.as_str()).copied().unwrap_or(0);
                 let build_detail_ctx = |best_id: &str, best_wes: f32| -> (String, serde_json::Value) {
                     let this_host = m.hostname.as_deref().unwrap_or(node_id.as_str());
@@ -1171,7 +1076,6 @@ pub(crate) async fn fleet_alert_evaluator_task(state: AppState) {
                         .and_then(|(_, bm)| bm.hostname.as_deref().map(|s: &str| s.to_owned()))
                         .unwrap_or_else(|| best_id.to_owned());
 
-                    // Root-cause clause: explain WHY WES is lower, not just that it is.
                     let why = if is_thermally_stressed {
                         format!("thermal state is non-Normal for {} min", hot_ticks)
                     } else if is_wes_poor {
@@ -1214,7 +1118,6 @@ pub(crate) async fn fleet_alert_evaluator_task(state: AppState) {
                         context,
                     });
                 } else if is_firing && is_open {
-                    // Refresh stale detail/context (best peer may have changed since first fire).
                     let (best_id, _) = best_peer.unwrap();
                     let best_wes = live_wes.get(best_id.as_str()).copied().unwrap_or(0.0);
                     let (detail, context) = build_detail_ctx(best_id, best_wes);
@@ -1226,17 +1129,12 @@ pub(crate) async fn fleet_alert_evaluator_task(state: AppState) {
             }
         }
 
-        // Write observations.
         if !to_fire.is_empty() || !to_resolve.is_empty() || !to_update.is_empty() {
             let affected_nodes: HashSet<String> = to_fire.iter().map(|o| o.node_id.clone())
                 .chain(to_resolve.iter().map(|(nid, _)| nid.clone()))
                 .chain(to_update.iter().map(|(nid, _, _, _)| nid.clone()))
                 .collect();
 
-            // node_id → (tenant_id, owner user_id). Observations/events are
-            // stored per-TENANT (org id for org fleets — writing them under
-            // user_id hid them from org-scoped reads); alert rules + tier
-            // delivery are keyed by the owning USER.
             let mut tenant_map: HashMap<String, (String, String)> = HashMap::new();
             for nid in &affected_nodes {
                 if let Ok(row) = sqlx::query_as::<_, (String, String)>(
@@ -1246,16 +1144,12 @@ pub(crate) async fn fleet_alert_evaluator_task(state: AppState) {
                 }
             }
 
-            // Cooldown: skip firing if the same (node, alert_type) was recently
-            // resolved or acknowledged. WES cliff gets a longer cooldown (4h) to
-            // prevent hourly fire/resolve churn from natural WES fluctuations.
-            let default_cooldown_ms: i64 = 3_600_000; // 1 hour
-            let wes_cliff_cooldown_ms: i64 = 14_400_000; // 4 hours
+            let default_cooldown_ms: i64 = 3_600_000;
+            let wes_cliff_cooldown_ms: i64 = 14_400_000;
 
             for obs in &to_fire {
                 let (tenant_id, owner_id) = match tenant_map.get(&obs.node_id) { Some(t) => t.clone(), None => continue };
 
-                // Check cooldown: was this (node, alert_type) recently resolved/acknowledged?
                 let cooldown = if obs.alert_type == "wes_cliff" { wes_cliff_cooldown_ms } else { default_cooldown_ms };
                 let cooldown_cutoff = (now as i64) - cooldown;
                 let recently_settled: bool = sqlx::query_scalar::<_, i64>(
@@ -1290,16 +1184,12 @@ pub(crate) async fn fleet_alert_evaluator_task(state: AppState) {
                     event_type: Some(obs.alert_type.clone()), message: obs.title.clone(),
                 });
 
-                // Deliver to notification channels.
                 let pool2 = state.pool.clone();
                 let node_id3 = obs.node_id.clone();
                 let alert_type3 = obs.alert_type.clone();
                 let detail3 = obs.detail.clone();
                 let owner_id2 = owner_id.clone();
                 tokio::spawn(async move {
-                    // Org-aware tier; rules are matched by the OWNER (rules
-                    // are created per-user — tenant_id is an org id for org
-                    // fleets and matches no rules).
                     let tier = resolve_node_tier(&node_id3, &pool2).await;
                     if !is_team_or_above(&tier) { return; }
 
@@ -1340,8 +1230,6 @@ pub(crate) async fn fleet_alert_evaluator_task(state: AppState) {
                 }
             }
 
-            // Refresh open observations whose detail/context may have gone stale
-            // (e.g. fleet_load_imbalance best-peer changed since the alert first fired).
             for (node_id, alert_type, detail, ctx_str) in &to_update {
                 if let Some(obs_id) = open_observations.get(&(node_id.clone(), alert_type.clone())) {
                     let _ = sqlx::query(
@@ -1351,18 +1239,9 @@ pub(crate) async fn fleet_alert_evaluator_task(state: AppState) {
             }
         }
 
-        // ── Staleness reaper: auto-resolve observations for offline nodes ────
-        // If a node hasn't been seen in 5+ minutes, resolve ALL its open
-        // observations (both agent-pushed and cloud-generated).
-        //
-        // IMPORTANT: also clear these nodes from the in-memory open_observations map.
-        // Without this, if a node goes offline (DB observations resolved by the reaper)
-        // and then comes back online, the evaluator still sees is_open = true from the
-        // stale in-memory entry — so conditions never re-fire on reconnect.
         {
-            let stale_cutoff = (now as i64) - 300_000; // 5 minutes
+            let stale_cutoff = (now as i64) - 300_000;
 
-            // Query stale node IDs first so we can evict them from in-memory tracking.
             let stale_node_ids: Vec<String> = sqlx::query_scalar(
                 "SELECT wk_id FROM nodes WHERE last_seen < $1"
             ).bind(stale_cutoff).fetch_all(&state.pool).await.unwrap_or_default();
@@ -1378,14 +1257,11 @@ pub(crate) async fn fleet_alert_evaluator_task(state: AppState) {
                 .bind(now as i64).bind(stale_cutoff)
                 .execute(&state.pool).await;
 
-                // Remove stale entries from in-memory map so alerts re-fire if the node returns.
                 open_observations.retain(|(nid, _), _| !stale_node_ids.contains(nid));
             }
         }
     }
 }
-
-// ── Alerting — CRUD handlers ──────────────────────────────────────────────────
 
 /// POST /api/alerts/channels
 pub(crate) async fn handle_create_channel(
@@ -1411,7 +1287,6 @@ pub(crate) async fn handle_create_channel(
     };
     if !role.can_mutate() { return role_forbidden("member"); }
 
-    // Org-aware: org members are entitled by the org subscription.
     let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
     if !is_pro_or_above(&tier) {
         return upgrade_required("Alerting", UpgradePlan::Team);
@@ -1537,13 +1412,11 @@ pub(crate) async fn handle_create_rule(
     };
     if !role.can_mutate() { return role_forbidden("member"); }
 
-    // Org-aware: org members are entitled by the org subscription.
     let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
     if !is_pro_or_above(&tier) {
         return upgrade_required("Alerting", UpgradePlan::Team);
     }
 
-    // Verify channel belongs to user.
     let channel_owner: Option<String> = sqlx::query_scalar(
         "SELECT user_id FROM notification_channels WHERE id = $1"
     ).bind(&body.channel_id).fetch_optional(&state.pool).await.ok().flatten();
@@ -1645,8 +1518,6 @@ pub(crate) async fn handle_delete_rule(
     }
 }
 
-// ── Alert silences & maintenance windows ─────────────────────────────────────
-
 /// Event types a silence may target — the union of the alert-rule and
 /// threshold-webhook vocabularies (a silence suppresses both systems).
 pub(crate) const SILENCEABLE_EVENTS: &[&str] = &[
@@ -1712,7 +1583,7 @@ pub(crate) async fn handle_create_silence(
                 Json(serde_json::json!({ "error": format!("event_type must be one of: {}", SILENCEABLE_EVENTS.join(", ")) }))).into_response();
         }
     let now = now_ms() as i64;
-    let starts_at = body.starts_at.unwrap_or(now).max(now - 60_000); // small clock-skew grace
+    let starts_at = body.starts_at.unwrap_or(now).max(now - 60_000);
     if starts_at > now + 90 * 24 * 3_600_000 {
         return (StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": "starts_at must be within 90 days" }))).into_response();

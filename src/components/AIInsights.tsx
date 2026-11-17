@@ -47,21 +47,16 @@ import { computeModelFitScore } from '../utils/modelFit';
 import { useSettings } from '../hooks/useSettings';
 import { useLocalMetricsStream } from '../hooks/useLocalMetricsStream';
 
-// Tier 1 cards
 import ThermalDegradationCard  from './insights/tier1/ThermalDegradationCard';
 import ThermalCostAlertCard    from './insights/tier1/ThermalCostAlertCard';
 import MemoryExhaustionCard    from './insights/tier1/MemoryExhaustionCard';
 import PowerAnomalyCard        from './insights/tier1/PowerAnomalyCard';
 
-// Tier 2 cards
-
 import ModelEvictionCard   from './insights/tier2/ModelEvictionCard';
 import IdleResourceCard    from './insights/tier2/IdleResourceCard';
 
-// Tier 2 cards (cont.)
 import ModelFitAnalysis from './insights/tier2/ModelFitAnalysis';
 
-// Gate & layout components
 import InsightsGlobalStatusRail, { FiringAlert } from './insights/InsightsGlobalStatusRail';
 import InsightsLockedCard from './insights/InsightsLockedCard';
 import InsightsLiteCard   from './insights/InsightsLiteCard';
@@ -91,14 +86,8 @@ import { useLocalObservations } from '../hooks/useLocalObservations';
 import type { DetectedInsight } from '../types/observations';
 import { appendRecentEvent, ONSET_SUPPRESSION_MS } from '../lib/insightLifecycle';
 
-// ── Constants ─────────────────────────────────────────────────────────────────
-
 import { IS_AGENT, IS_LOCAL_HOST as isLocalHost } from '../utils/buildTarget';
 
-// The two fleet hooks are cloud-only. They must still be called on every
-// render (rules of hooks), so the agent build swaps in inert stand-ins at
-// module scope: IS_AGENT folds at build time and the src/cloud imports above
-// drop out of the agent bundle.
 const noFleetObservations: typeof useCloudFleetObservations = () => ({
   observations: [],
   loading: false,
@@ -107,8 +96,6 @@ const noFleetObservations: typeof useCloudFleetObservations = () => ({
 });
 const useFleetObservations = IS_AGENT ? noFleetObservations : useCloudFleetObservations;
 const useFleetDuty: typeof useCloudFleetDuty = IS_AGENT ? () => null : useCloudFleetDuty;
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
 
 /** Simple WES from live telemetry (no history — same formula as Overview). */
 function computeNodeWes(m: SentinelMetrics): number | null {
@@ -134,20 +121,17 @@ function fmtVram(m: SentinelMetrics): string | null {
   return `${((used / total) * 100).toFixed(0)}%`;
 }
 
-// ── Alert statefulness — types & constants ────────────────────────────────────
-
 /** Time the raw condition must be continuously true before the card surfaces. */
-const ALERT_ONSET_MS  = 15_000;         // 15 s
+const ALERT_ONSET_MS  = 15_000;
 /** Minimum time a tier-1 alert card stays visible after condition clears. */
-const ALERT_HOLD_MS   = 5 * 60_000;    // 5 min
+const ALERT_HOLD_MS   = 5 * 60_000;
 /** Minimum time a pattern observation stays visible after condition stops firing. */
-const OBS_HOLD_MS     = 10 * 60_000;   // 10 min
+const OBS_HOLD_MS     = 10 * 60_000;
 /** Maximum entries stored in the Recent Activity log. */
 const MAX_LOG_ENTRIES = 50;
 
 /** Map a cloud FleetObservation to the DetectedInsight shape used by observation cards. */
 function serverObsToInsight(o: FleetObservation, resolvedHostname?: string): DetectedInsight {
-  // Parse context_json for extra fields if available
   let ctx: Record<string, unknown> = {};
   try { if (o.context_json) ctx = JSON.parse(o.context_json); } catch {}
 
@@ -176,8 +160,8 @@ function serverObsToInsight(o: FleetObservation, resolvedHostname?: string): Det
 /** Cached pattern-engine observation with lifecycle timestamps. */
 interface ObsEntry {
   insight:      DetectedInsight;
-  firstFiredMs: number;   // preserved across re-evaluations
-  resolvedMs:   number | null; // null = still actively firing
+  firstFiredMs: number;
+  resolvedMs:   number | null;
 }
 
 /** An entry in the session-scoped Recent Activity log. */
@@ -206,22 +190,10 @@ function fmtLogAge(ms: number): string {
   return `${Math.floor(m / 60)}h ago`;
 }
 
-// ── useAlertLatch — debounce + hold hook for tier-1 alert cards ───────────────
-//
-// Onset gate: condition must be continuously true for ALERT_ONSET_MS before
-// the card renders. Prevents single-frame thermal spikes from flashing on screen.
-//
-// Hold period: once shown, the card stays visible for ALERT_HOLD_MS after the
-// condition clears. During this time a green "✓ Resolved" badge overlays the
-// card so engineers can see what just fired without it vanishing immediately.
-//
-// On expiry: the card disappears and `onClear` fires — used to append to the
-// session alert log.
-
 interface AlertLatchState {
   showing:  boolean;
   resolved: boolean;
-  firedAt:  number | null;  // when the latch first fired (after onset gate)
+  firedAt:  number | null;
 }
 
 function useAlertLatch(
@@ -246,10 +218,8 @@ function useAlertLatch(
 
   useEffect(() => {
     if (condition) {
-      // Re-activated: cancel any pending hold, clear resolved badge
       if (holdTimer.current) { clearTimeout(holdTimer.current); holdTimer.current = null; }
       setResolved(false);
-      // Start onset timer only if not already showing / timing
       if (!onsetTimer.current && firedAtRef.current === null) {
         onsetTimer.current = setTimeout(() => {
           onsetTimer.current = null;
@@ -258,9 +228,7 @@ function useAlertLatch(
         }, onsetMs);
       }
     } else {
-      // Condition gone: cancel onset if it hasn't fired yet
       if (onsetTimer.current) { clearTimeout(onsetTimer.current); onsetTimer.current = null; }
-      // If we were showing, start the hold countdown
       if (firedAtRef.current !== null && !holdTimer.current) {
         const resolvedAt = Date.now();
         setResolved(true);
@@ -276,7 +244,6 @@ function useAlertLatch(
     }
   }, [condition, onsetMs, holdMs]);
 
-  // Cleanup timers on unmount
   useEffect(() => () => {
     if (onsetTimer.current) clearTimeout(onsetTimer.current);
     if (holdTimer.current)  clearTimeout(holdTimer.current);
@@ -284,8 +251,6 @@ function useAlertLatch(
 
   return { showing, resolved, firedAt: firedAtRef.current };
 }
-
-// ── ResolvedBanner — overlays a resolved tier-1 card with a green badge ──────
 
 const ResolvedBanner: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <div className="relative opacity-70">
@@ -298,8 +263,6 @@ const ResolvedBanner: React.FC<{ children: React.ReactNode }> = ({ children }) =
     </div>
   </div>
 );
-
-// ── Sub-components ────────────────────────────────────────────────────────────
 
 const SectionHeader: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-4">
@@ -337,8 +300,6 @@ const Section2NominalRow: React.FC<{
     </div>
   );
 };
-
-// ── WES Leaderboard (lite) ────────────────────────────────────────────────────
 
 const WesLeaderboardLite: React.FC<{ nodes: SentinelMetrics[] }> = ({ nodes }) => {
   const ranked = nodes
@@ -395,8 +356,6 @@ const WesLeaderboardLite: React.FC<{ nodes: SentinelMetrics[] }> = ({ nodes }) =
   );
 };
 
-// ── Tab Types & Tab Bar ───────────────────────────────────────────────────────
-
 type InsightsTab = 'triage' | 'performance' | 'forensics';
 
 const InsightsTabBar: React.FC<{
@@ -433,8 +392,6 @@ const InsightsTabBar: React.FC<{
     </div>
   );
 };
-
-// ── Props ─────────────────────────────────────────────────────────────────────
 
 interface AIInsightsProps {
   nodes: NodeAgent[];
@@ -473,12 +430,6 @@ interface AIInsightsProps {
   onNavigateToPricing?: () => void;
 }
 
-// ── InferenceProfiler — correlated multi-signal timeline (localhost) ────────────
-//
-// Fetches from GET /api/profile?minutes=N and renders a dual-series area chart:
-// Primary series (selectable): TTFT, KV Cache %, Queue Depth, Thermal Penalty
-// Always shows tok/s as a faded reference line for inference activity context.
-
 type ProfileMetric = 'ttft_ms' | 'kv_cache_pct' | 'queue_depth' | 'thermal_penalty' | 'power_w';
 const PROFILE_METRICS: { key: ProfileMetric; label: string; unit: string; color: string }[] = [
   { key: 'ttft_ms',         label: 'TTFT',        unit: 'ms',  color: '#f59e0b' },
@@ -502,7 +453,7 @@ const InferenceProfiler: React.FC = () => {
         const data = await r.json();
         setSamples(data.samples ?? []);
       }
-    } catch { /* agent may not support this endpoint */ }
+    } catch { }
     setLoading(false);
   }, [minutes]);
 
@@ -594,14 +545,6 @@ const InferenceProfiler: React.FC = () => {
   );
 };
 
-// ── SlaMonitor — TTFT/E2E percentiles + compliance vs target (localhost) ──────
-//
-// Fetches GET /api/sla?window_min=N&target_ttft_ms=M and renders p50/p95/p99
-// for TTFT and end-to-end latency, the compliance percentage against a
-// configurable TTFT target, and a per-model breakdown.  Built for the "is my
-// local inference meeting SLA?" question that operators ask before exposing
-// a Wicklee node as an internal API.
-
 type SlaPercentiles = { p50: number; p95: number; p99: number; max: number };
 type SlaModelRow = { model: string; count: number; p95_ttft_ms: number; p95_e2e_ms: number };
 type SlaViolation = { ts_ms: number; model: string; ttft_ms: number; latency_ms: number };
@@ -640,7 +583,7 @@ const SlaMonitor: React.FC = () => {
     try {
       const r = await fetch(`/api/sla?window_min=${windowMin}&target_ttft_ms=${targetTtft}`);
       if (r.ok) setData(await r.json());
-    } catch { /* agent may not support this endpoint */ }
+    } catch { }
     setLoading(false);
   }, [windowMin, targetTtft]);
 
@@ -691,7 +634,6 @@ const SlaMonitor: React.FC = () => {
         </p>
       ) : data && (
         <>
-          {/* Top stats row */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
             <div className="bg-gray-900 border border-gray-700 rounded-lg p-2.5">
               <div className="text-[9px] uppercase tracking-widest text-gray-600">Requests</div>
@@ -727,7 +669,6 @@ const SlaMonitor: React.FC = () => {
             </div>
           </div>
 
-          {/* Per-model breakdown */}
           {data.by_model.length > 1 && (
             <div className="border-t border-gray-700 pt-3">
               <div className="text-[9px] uppercase tracking-widest text-gray-600 mb-1.5">Per-Model p95</div>
@@ -754,7 +695,6 @@ const SlaMonitor: React.FC = () => {
             </div>
           )}
 
-          {/* Recent violations */}
           {data.sla.violations.length > 0 && (
             <div className="border-t border-gray-700 pt-3">
               <div className="text-[9px] uppercase tracking-widest text-gray-600 mb-1.5">
@@ -779,11 +719,6 @@ const SlaMonitor: React.FC = () => {
   );
 };
 
-// ── LocalPerformanceHistory — DuckDB-backed multi-metric chart (localhost) ─────
-//
-// Fetches the last 1 hour of raw samples from GET /api/history and renders a
-// selectable multi-metric area chart (tok/s, power, GPU%, memory%).
-
 type PerfMetric = 'tps' | 'power' | 'gpu' | 'mem';
 const PERF_METRICS: { key: PerfMetric; label: string; unit: string; color: string }[] = [
   { key: 'tps',   label: 'Tok/s',   unit: ' tok/s', color: '#22d3ee' },
@@ -802,18 +737,17 @@ const LocalPerformanceHistory: React.FC<{ nodeId: string }> = ({ nodeId }) => {
     setLoading(true);
     try {
       const to   = Date.now();
-      const from = to - 3_600_000; // 1 hour
+      const from = to - 3_600_000;
       const r = await fetch(`/api/history?node_id=${encodeURIComponent(nodeId)}&from=${from}&to=${to}`);
       if (r.ok) {
         const data = await r.json();
         setSamples(data.samples ?? []);
       }
-    } catch { /* agent unavailable */ }
+    } catch { }
     setLoading(false);
   }, [nodeId]);
 
   React.useEffect(() => { load(); }, [load]);
-  // Auto-refresh every 60s
   React.useEffect(() => {
     const id = setInterval(load, 60_000);
     return () => clearInterval(id);
@@ -910,8 +844,6 @@ const LocalPerformanceHistory: React.FC<{ nodeId: string }> = ({ nodeId }) => {
   );
 };
 
-// ── Main component ─────────────────────────────────────────────────────────────
-
 const AIInsights: React.FC<AIInsightsProps> = ({
   nodes,
   insightsTier,
@@ -926,8 +858,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   onNavigateToModels,
   onNavigateToPricing,
 }) => {
-
-  // ── Hooks — all unconditional ──────────────────────────────────────────────
 
   const [localSentinel, setLocalSentinel] = useState<SentinelMetrics | null>(null);
   const [now, setNow]                     = useState(() => Date.now());
@@ -945,7 +875,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
     setActiveTab(deepLink.tab);
     if (deepLink.scrollTo) {
       const target = deepLink.scrollTo;
-      // Two rAF — one for activeTab to commit, one for the new tab body to mount.
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
           const el = document.getElementById(target);
@@ -960,19 +889,14 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   /** Shared node selection for WES + Metrics history charts */
   const [perfNodeId, setPerfNodeId] = useState<string | null>(null);
 
-  // Power baseline (Cockpit only)
   const wattReadingsRef        = useRef<number[]>([]);
   const [sessionBaselineWatts, setSessionBaselineWatts] = useState<number | null>(null);
 
-  // ── Inference-state idle tracking (replaces session-relative tok/s timing) ──
-  // localIdleStartMs: when the local node's inference_state last became non-live.
-  // null = currently live (actively inferring).  Pre-seeded from /api/history on mount.
   const [localIdleStartMs, setLocalIdleStartMs] = useState<number | null>(null);
   const localInferenceStateRef  = useRef<string | null>(null);
   const localIdlePreseededRef   = useRef(false);
   const firstMessageTsRef       = useRef<number | null>(null);
 
-  // ── Alert log (session-scoped, Recent Activity panel) ─────────────────────
   const [alertLog, setAlertLog] = useState<AlertLogEntry[]>(() => {
     try {
       const raw = sessionStorage.getItem('wicklee-alert-log');
@@ -982,17 +906,14 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   const [logExpanded, setLogExpanded] = useState(false);
   const [showResolved, setShowResolved] = useState(false);
 
-  // ── Server-side fleet observations (Phase 4B — cloud only) ─────────────────
   const { observations: serverObservations, acknowledge: acknowledgeObs } = useFleetObservations({
     getToken,
     state: 'all',
     skip: isLocalHost,
   });
 
-  // ── Fleet duty cycle (cloud only) — 24h historical inference duty per node ──
   const fleetDuty = useFleetDuty(isLocalHost ? null : getToken ?? null);
 
-  // ── Local agent observations (Patterns A/B/J/L — localhost only) ───────────
   const { observations: localAgentObs } = useLocalObservations(!isLocalHost);
 
   const appendToLog = useCallback((entry: AlertLogEntry) => {
@@ -1005,15 +926,10 @@ const AIInsights: React.FC<AIInsightsProps> = ({
 
   const { allNodeMetrics, lastSeenMsMap, addFleetEvent } = useFleetStream();
 
-  // ── Observation cache — sticky firstFiredMs + hold-after-clear ─────────────
   const obsCacheRef  = useRef(new Map<string, ObsEntry>());
   const [obsEntries, setObsEntries] = useState<ObsEntry[]>([]);
   const isProOrAbove = tierIsProOrAbove(subscriptionTier);
 
-  // Seed obsCacheRef from server observations on mount (Pro+ persistent cards)
-  // Server observations often arrive before the first fleet frame, so seeded
-  // cards would keep the raw node_id as their hostname. Re-run on
-  // allNodeMetrics and relabel those entries once a hostname is known.
   const serverSeededRef = useRef(false);
   useEffect(() => {
     if (!isProOrAbove) return;
@@ -1053,15 +969,11 @@ const AIInsights: React.FC<AIInsightsProps> = ({
    * This is intentionally longer than OBS_HOLD_MS (10m) to create a 5-minute quiet
    * gap after resolution — see insightLifecycle.ts for the full rationale.
    */
-  // Persist onset timestamps in localStorage so suppression survives tab switches
-  // and page refreshes. Without this, switching tabs remounts the component and
-  // resets the Map, causing every pattern to re-fire as "new."
   const patternOnsetMapRef = useRef<Map<string, number>>((() => {
     try {
       const stored = localStorage.getItem('wicklee:patternOnsetMap');
       if (stored) {
         const entries: [string, number][] = JSON.parse(stored);
-        // Prune entries older than ONSET_SUPPRESSION_MS (15 min)
         const cutoff = Date.now() - ONSET_SUPPRESSION_MS;
         return new Map(entries.filter(([, ts]) => ts > cutoff));
       }
@@ -1069,11 +981,8 @@ const AIInsights: React.FC<AIInsightsProps> = ({
     return new Map<string, number>();
   })());
 
-  // Thermal Cost % rolling history — 30-frame window per node for rate-of-change detection.
-  // At typical SSE cadence (~1 frame/s), 30 frames ≈ 30 seconds; adjust window as needed.
   const tcPctHistoryRef = useRef<Record<string, number[]>>({});
 
-  // Transition tracking for FleetEvent emissions
   const prevThermalFiringRef  = useRef(false);
   const prevEvictionActiveRef  = useRef(false);
   const lastEvictionFiredRef   = useRef<number | null>(null);
@@ -1083,33 +992,22 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   const lastIdleDetailRef      = useRef<string | null>(null);
   const prevFitModelRef       = useRef<string | null>(null);
 
-  // ── Per-node inference-state idle tracking for fleet ─────────────────────
-  // nodeIdleStartMsRef[nodeId]: timestamp when this node last became idle.
-  // null = currently live.  Updated on every inference_state transition.
   const nodeIdleStartMsRef  = useRef<Record<string, number | null>>({});
   const nodePrevStateRef    = useRef<Record<string, string>>({});
-  // Keep legacy refs for any other consumers (node session start, had-activity)
   const nodeSessionStartRef = useRef<Record<string, number>>({});
   const nodeHadActivityRef  = useRef<Record<string, boolean>>({});
 
-  // Fleet data from SSE context: destructured from useFleetStream() above,
-  // ahead of the observation-cache effect that depends on allNodeMetrics.
-
-  // Merged event emitter — prop takes precedence, falls back to context
   const emitFleetEvent = onFleetEvent ?? addFleetEvent;
 
   const { getNodeSettings } = useSettings();
 
-  // ── Server-side observations (agent + cloud) ────────────────────────────────
   const lastObsEvalRef                              = useRef<number>(0);
 
-  // Tick every 10s to keep elapsed times fresh in the status rail
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 10_000);
     return () => clearInterval(id);
   }, []);
 
-  // Local agent stream (Cockpit only) — shared connection, see useLocalMetricsStream.
   useLocalMetricsStream((data) => {
     setLocalSentinel(data);
 
@@ -1126,25 +1024,18 @@ const AIInsights: React.FC<AIInsightsProps> = ({
       }
     }
 
-    // Track inference_state transitions for eviction / idle-resource cards.
     const state = data.inference_state ?? 'idle';
     const prev  = localInferenceStateRef.current;
     if (state === 'live') {
-      setLocalIdleStartMs(null); // actively inferring — reset idle clock
+      setLocalIdleStartMs(null);
     } else if (prev === 'live' || (prev === null && localIdlePreseededRef.current)) {
-      // Transitioned from live → idle (or first non-live frame after preseed)
       setLocalIdleStartMs(ts => ts ?? Date.now());
     } else if (prev === null && !localIdlePreseededRef.current) {
-      // First frame, preseed not yet done — set idle clock conservatively
       setLocalIdleStartMs(ts => ts ?? Date.now());
     }
     localInferenceStateRef.current = state;
   });
 
-  // ── Localhost: pre-seed idle start from DuckDB history ───────────────────
-  // Fetches the last hour of 1-min aggregates to find when inference was last
-  // active.  This lets eviction and idle-resource cards fire immediately on
-  // page load for nodes that were already idle before the app opened.
   useEffect(() => {
     if (!isLocalHost || localIdlePreseededRef.current) return;
     const nodeId = localSentinel?.node_id;
@@ -1156,40 +1047,30 @@ const AIInsights: React.FC<AIInsightsProps> = ({
       .then(r => r.ok ? r.json() : null)
       .then((data: { samples?: Array<{ ts_ms: number; tps?: number | null }> } | null) => {
         if (!data?.samples?.length) return;
-        // Find the most recent sample with tps > 0
         const activeSamples = data.samples.filter(s => (s.tps ?? 0) > 0);
         if (activeSamples.length > 0) {
-          // Last active sample end time (+60s for 1min resolution) = idle start
           const lastActiveTs = activeSamples[activeSamples.length - 1].ts_ms + 60_000;
           setLocalIdleStartMs(prev => prev ?? lastActiveTs);
         } else {
-          // No activity in the last hour — idle since oldest sample
           setLocalIdleStartMs(prev => prev ?? data.samples![0].ts_ms);
         }
       })
-      .catch(() => {}); // non-fatal; SSE tracking fills in the gap
+      .catch(() => {});
   }, [localSentinel?.node_id]);
 
-  // ── Fleet activity tracking (Mission Control only) ────────────────────────
-  // On every SSE frame, track inference_state transitions per node so eviction
-  // and idle-resource cards can fire based on actual idle duration.
   useEffect(() => {
-    if (isLocalHost) return; // Cockpit tracks via the local SSE effect above
+    if (isLocalHost) return;
     const nowMs = Date.now();
     for (const [nodeId, nm] of Object.entries(allNodeMetrics)) {
-      // Initialize session start on first sight of a node
       if (nodeSessionStartRef.current[nodeId] === undefined) {
         nodeSessionStartRef.current[nodeId] = nowMs;
       }
-      // Track inference_state transitions
       const state = nm.inference_state ?? 'idle';
       const prev  = nodePrevStateRef.current[nodeId];
       if (state === 'live') {
-        nodeIdleStartMsRef.current[nodeId] = null; // actively inferring
+        nodeIdleStartMsRef.current[nodeId] = null;
         nodeHadActivityRef.current[nodeId] = true;
       } else {
-        // Non-live: start the idle clock on first idle observation or live→idle transition.
-        // Don't reset once started — preserves the original idle start time.
         if (nodeIdleStartMsRef.current[nodeId] === undefined ||
             (prev === 'live' && state !== 'live')) {
           nodeIdleStartMsRef.current[nodeId] = nowMs;
@@ -1199,28 +1080,18 @@ const AIInsights: React.FC<AIInsightsProps> = ({
     }
   }, [allNodeMetrics]);
 
-  // ── Server-side observation sync ───────────────────────────────────────────
-  // Observations now come from the server: localAgentObs (localhost, from Rust
-  // agent's DuckDB) or serverObservations (cloud, from fleet_observations table).
-  // The client-side pattern engine has been removed — evaluation happens in Rust.
   useEffect(() => {
-    // Throttle to at most once per 10s (matches agent evaluator cadence)
     const nowMs = Date.now();
     if (nowMs - lastObsEvalRef.current < 10_000) return;
     lastObsEvalRef.current = nowMs;
 
-    // Localhost: use agent observations for the accordion section.
-    // Cloud: serverObservations are rendered directly in the Fleet Alerts section
-    // with acknowledge + timeline nav — don't duplicate them in obsEntries.
     const allObservations: DetectedInsight[] = isLocalHost
       ? [...localAgentObs]
       : [];
 
-    // ── Observation cache: sticky firstFiredMs + hold-after-clear ─────────
     const cache  = obsCacheRef.current;
     const nowMs2 = Date.now();
 
-    // Merge newly-active observations — preserve firstFiredMs across re-evals
     for (const result of allObservations) {
       const key      = `${result.patternId}:${result.nodeId}`;
       const existing = cache.get(key);
@@ -1232,7 +1103,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
         resolvedMs:   isNew ? null : (existing?.resolvedMs ?? null),
       });
 
-      // ── Onset event (Live Activity Feed + localStorage buffer) ────────────
       if (isNew && result.confidence !== 'building') {
         const lastOnsetMs = patternOnsetMapRef.current.get(key) ?? 0;
         const FLEET_COALESCE_MS = 60_000;
@@ -1282,7 +1152,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
       }
     }
 
-    // Mark entries that are no longer firing as resolved; evict after OBS_HOLD_MS
     const pendingLog: AlertLogEntry[] = [];
     for (const [key, entry] of cache.entries()) {
       const stillActive = allObservations.some(r => `${r.patternId}:${r.nodeId}` === key);
@@ -1351,13 +1220,9 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [localAgentObs, serverObservations]);
 
-  // ── Effective node list ────────────────────────────────────────────────────
-
   const effectiveNodes: SentinelMetrics[] = isLocalHost && localSentinel
     ? [localSentinel]
     : Object.values(allNodeMetrics);
-
-  // ── HexHive rows ──────────────────────────────────────────────────────────
 
   const hiveRows: HexHiveRow[] = isLocalHost && localSentinel
     ? [{ nodeId: localSentinel.node_id, hostname: localSentinel.hostname ?? localSentinel.node_id, metrics: localSentinel }]
@@ -1367,8 +1232,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
         metrics,
         lastSeenMs: lastSeenMsMap[nodeId],
       }));
-
-  // ── Tier 1 conditions (fleet-wide) ────────────────────────────────────────
 
   const thermalNodes = effectiveNodes.filter(m => {
     const s = m.thermal_state?.toLowerCase() ?? '';
@@ -1400,7 +1263,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   const memFiring     = memNodes.length > 0;
   const powerFiring   = powerNodes.length > 0;
 
-  // Capture node labels while conditions are active (used by onClear log entries)
   const thermalNodeLabelRef = useRef('');
   const powerNodeLabelRef   = useRef('');
   const memNodeLabelRef     = useRef('');
@@ -1411,26 +1273,19 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   if (memFiring && memNodes.length > 0)
     memNodeLabelRef.current = memNodes.map(n => n.hostname ?? n.node_id ?? '').join(', ');
 
-  // ── Tier 2 conditions ─────────────────────────────────────────────────────
+  const m = localSentinel;
 
-  const m = localSentinel; // convenience alias (Cockpit)
-
-  // Cockpit: single-node eviction — model loaded + idle for ≥ 3 min.
-  // localIdleStartMs is pre-seeded from /api/history so it reflects real idle
-  // duration, not just time-since-page-load.
   const tier2EvictionActive = isLocalHost &&
     m?.ollama_running === true &&
     m?.ollama_active_model != null &&
     localIdleStartMs != null &&
     (now - localIdleStartMs) >= (3 * 60 * 1_000);
 
-  // Cockpit: idle resource — no inference for ≥ 60 min (pre-seeded from history).
   const tier2IdleActive = isLocalHost &&
     m != null &&
     localIdleStartMs != null &&
     (now - localIdleStartMs) >= 60 * 60 * 1_000;
 
-  // Fleet eviction: Ollama model loaded + idle ≥ 3 min per inference_state tracking.
   const fleetEvictionNodes: SentinelMetrics[] = !isLocalHost
     ? effectiveNodes.filter(n => {
         if (!n.ollama_running || !n.ollama_active_model) return false;
@@ -1440,8 +1295,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
       })
     : [];
 
-  // Fleet idle resource: use 24h duty data from DuckDB (cloud path).
-  // Fires for nodes with < 5% inference duty in the last 24 hours.
   const fleetIdleNodes: SentinelMetrics[] = !isLocalHost
     ? effectiveNodes.filter(n => {
         if (getNodePowerW(n) == null) return false;
@@ -1450,10 +1303,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
         return dutyEntry.duty_pct < 5;
       })
     : [];
-
-  // ── Thermal Cost % alerts ─────────────────────────────────────────────────
-  // Fires for nodes in "Fair" thermal state where TC% > 10%.
-  // Nodes already in Serious/Critical are covered by ThermalDegradationCard — excluded here.
 
   const tcPctByNode: Record<string, number>     = {};
   const tcRateByNode: Record<string, number>    = {};
@@ -1466,12 +1315,10 @@ const AIInsights: React.FC<AIInsightsProps> = ({
     const tc     = thermalCostPct(rawWes, penWes);
     tcPctByNode[node.node_id] = tc;
 
-    // Update rolling window (cap at 30 frames)
     const prev    = tcPctHistoryRef.current[node.node_id] ?? [];
     const updated = [...prev.slice(-29), tc];
     tcPctHistoryRef.current[node.node_id] = updated;
 
-    // Rate-of-change: how much TC% rose from the start of the window to now
     if (updated.length >= 2) {
       tcRateByNode[node.node_id] = Math.max(0, tc - updated[0]);
     }
@@ -1488,9 +1335,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   const tcNodeLabelRef = useRef('');
   if (tcFiring && tcAlertNodes.length > 0)
     tcNodeLabelRef.current = tcAlertNodes.map(n => n.hostname ?? n.node_id ?? '').join(', ');
-
-  // ── Tier-1 alert latches — debounce (15 s onset) + hold (5 min after clear) ─
-  // useAlertLatch is a stable custom hook; always called in the same order.
 
   const thermalLatch = useAlertLatch(thermalFiring, {
     onClear: ({ firedAt, resolvedAt }) => appendToLog({
@@ -1517,8 +1361,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
     }),
   });
 
-  // ── Fleet stats for Status Rail ───────────────────────────────────────────
-
   const wesValues = effectiveNodes.map(computeNodeWes).filter((v): v is number => v != null);
   const fleetWes  = wesValues.length > 0
     ? wesValues.reduce((a, b) => a + b, 0) / wesValues.length
@@ -1529,11 +1371,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
     if (t == null) return sum;
     return (sum ?? 0) + t;
   }, null);
-
-  // ── Firing alerts array — fed from latch state (not raw condition) ─────────
-  // Only latched (confirmed + onset-gated) alerts reach the Status Rail.
-  // Resolved alerts (in hold period) still show on the Status Rail so engineers
-  // can track exactly when conditions cleared.
 
   const firingAlerts: FiringAlert[] = [
     ...(thermalLatch.showing ? thermalNodes.map(n => ({
@@ -1566,9 +1403,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
     })) : []),
   ];
 
-  // ── Per-node readings for dormant monitoring rows ─────────────────────────
-
-  // Thermal: peak thermal state label + GPU temp
   const peakThermalNode = effectiveNodes.reduce<SentinelMetrics | null>((best, n) => {
     const order = ['critical', 'serious', 'fair', 'normal'];
     const rank  = (s: SentinelMetrics) => order.indexOf(s.thermal_state?.toLowerCase() ?? 'normal');
@@ -1600,30 +1434,20 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   }, null);
   const memReading = peakVramNode ? fmtVram(peakVramNode) : null;
 
-  // Thermal Cost % dormant reading: peak TC% across non-alerting nodes
   const peakTcPct = effectiveNodes.reduce((max, n) => {
     const tc = tcPctByNode[n.node_id] ?? 0;
     return tc > max ? tc : max;
   }, 0);
   const tcReading = peakTcPct > 0 ? `${peakTcPct}%` : 'Normal';
 
-  // ── Model Fit (Triage tab) ─────────────────────────────────────────────────
-
   const fitNodes = effectiveNodes.filter(n => computeModelFitScore(n) != null);
 
-  // ── Forensics unlock gate ─────────────────────────────────────────────────
-
   const isTeamOrAbove = insightsTier === 'trend' || insightsTier === 'predictive';
-  // Fetched only while the Forensics tab is open, so other tabs don't pay for it.
   const hasCloudHistory = !isLocalHost && !!getToken;
   const forensicsHistory = useForensicsHistory(getToken, hasCloudHistory && isTeamOrAbove && activeTab === 'forensics');
 
-  // ── Cockpit settings ──────────────────────────────────────────────────────
-
   const localNodeId   = m?.node_id ?? 'local';
   const localSettings = getNodeSettings(localNodeId);
-
-  // ── FleetEvent emission — transition-based ────────────────────────────────
 
   useEffect(() => {
     const now = Date.now();
@@ -1706,8 +1530,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fitModelKey]);
 
-  // ── RENDER ────────────────────────────────────────────────────────────────
-
   return (
     <>
     {benchmarkReport && (
@@ -1715,7 +1537,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
     )}
     <div className="flex flex-col min-h-0">
 
-      {/* ── Global Status Rail — always first ───────────────────────────────── */}
       <InsightsGlobalStatusRail
         firingAlerts={firingAlerts}
         fleetWes={fleetWes}
@@ -1728,7 +1549,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
         }
       />
 
-      {/* ── Tab Bar ─────────────────────────────────────────────────────────── */}
       <InsightsTabBar
         active={activeTab}
         onChange={setActiveTab}
@@ -1738,14 +1558,9 @@ const AIInsights: React.FC<AIInsightsProps> = ({
       <div className="flex-1 min-h-0 overflow-y-auto">
         <div className="space-y-6 p-6">
 
-          {/* ═══════════════════════════════════════════════════════════════════
-              TAB: Triage
-          ═══════════════════════════════════════════════════════════════════ */}
           {activeTab === 'triage' && (
             <>
-              {/* ── Fleet Header HUD — pulse stats + health pips ──────────── */}
               {(() => {
-                // Top WES node
                 let topWesNode: SentinelMetrics | null = null;
                 let topWesVal: number | null = null;
                 for (const n of effectiveNodes) {
@@ -1755,13 +1570,11 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                     topWesNode = n;
                   }
                 }
-                // Fleet wattage
                 const fleetWatts = effectiveNodes.reduce<number | null>((sum, n) => {
                   const w = getNodePowerW(n);
                   return w != null ? (sum ?? 0) + w : sum;
                 }, null);
                 const nodesTotal = Math.max(nodes.length, effectiveNodes.length);
-                // Health pips — only dormant (non-latched) dimensions
                 const healthPips = [
                   ...(!thermalLatch.showing ? [{ key: 'thermal', icon: <Thermometer className="w-3 h-3" />, label: 'Thermal',      reading: thermalReading }] : []),
                   ...(!powerLatch.showing   ? [{ key: 'power',   icon: <Zap          className="w-3 h-3" />, label: 'Power',        reading: powerReading   }] : []),
@@ -1782,8 +1595,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 );
               })()}
 
-              {/* Alert Quartet — surfaced only after 15 s sustained onset gate.
-                  Resolved cards stay visible for 5 min with a green "✓ Resolved" overlay. */}
               <div className="space-y-3">
                 {thermalLatch.showing && thermalNodes.map(n => (
                   <div key={n.node_id} id={`insight-thermal-${n.node_id}`}>
@@ -1817,10 +1628,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 ))}
               </div>
 
-              {/* ── Agent Observations (localhost only) ─────────────────────────────
-                  Server-evaluated by the Rust agent against the local DuckDB buffer.
-                  Covers patterns A/B/C/F/H/J/K/L/N/P/Q/R. These take precedence over
-                  client-side evaluations for the same pattern IDs (see visibleObs filter). */}
               {isLocalHost && localAgentObs.length > 0 && (
                 <div className="space-y-2">
                   <SectionHeader>Agent Observations</SectionHeader>
@@ -1834,9 +1641,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 </div>
               )}
 
-              {/* ── Cloud-Only patterns strip (localhost only) ───────────────
-                  Collapsed to one compact row — 3 individual ghost cards consumed
-                  ~240 px of vertical space for essentially the same CTA repeated. */}
               {isLocalHost && (
                 <div className="rounded-2xl border border-gray-700/30 bg-gray-800/20 px-4 py-3 flex items-start gap-3">
                   <Globe className="w-3.5 h-3.5 text-gray-700 shrink-0 mt-0.5" />
@@ -1862,13 +1666,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 </div>
               )}
 
-              {/* ── Observations — pattern engine briefing feed ─────────────
-                  Active observations are shown first; resolved (hold-period) entries
-                  appear dimmed below with a "✓ Resolved" chip.
-                  "Clear All Resolved" removes just the held entries so engineers
-                  can acknowledge them like an inbox. */}
               {obsEntries.length > 0 && (() => {
-                // ── Dedup bidirectional patterns ──────────────────────────
                 const deduped: Array<ObsEntry & { groupedNodes?: Array<{ nodeId: string; hostname: string }> }> = [];
                 const byPattern = new Map<string, ObsEntry[]>();
                 for (const e of obsEntries) {
@@ -1892,9 +1690,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                   }
                 }
 
-                // Filter: hide resolved by default
                 const hasResolved = deduped.some(e => e.resolvedMs !== null);
-                // All observations now come from server (agent or cloud) — no client-side dedup needed.
                 const visibleObs = showResolved ? deduped : deduped.filter(e => e.resolvedMs === null);
 
                 return (
@@ -1948,7 +1744,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                             hook:      entry.insight.hook,
                             detail:    `${entry.insight.title} dismissed (1h) on ${entry.insight.hostname}`,
                           });
-                          // Pro+: acknowledge on cloud so dismiss syncs across devices
                           const matchingObs = serverObservations.find(
                             o => o.alert_type === entry.insight.patternId && o.node_id === entry.insight.nodeId && o.state === 'open'
                           );
@@ -1962,10 +1757,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 );
               })()}
 
-              {/* ── Server-side Fleet Observations (cloud only) ──────────────
-                  Cloud evaluator observations (wes_velocity_drop, fleet_load_imbalance,
-                  wes_cliff, agent_version_mismatch, etc.) with acknowledge + timeline nav.
-                  These are NOT duplicated in the accordion obsEntries above. */}
               {!isLocalHost && serverObservations.length > 0 && (
                 <div className="space-y-2">
                   <SectionHeader>Observations</SectionHeader>
@@ -1990,7 +1781,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 </div>
               )}
 
-              {/* Model Fit — responsive mini tiles (1–4 cols depending on count) */}
               <div>
                 {fitNodes.length > 0
                   ? (
@@ -2020,7 +1810,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 }
               </div>
 
-              {/* Model Eviction + Idle Resource Cost */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {isLocalHost ? (
                   tier2EvictionActive && m ? (
@@ -2081,7 +1870,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 )}
               </div>
 
-              {/* ── Recent Activity — session-scoped alert history ──────────── */}
               {alertLog.length > 0 && (
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
@@ -2142,7 +1930,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 </div>
               )}
 
-              {/* ── Resolved History (Pro+ — server-backed, 24h) ───────────── */}
               {isProOrAbove && !isLocalHost && (() => {
                 const now24h = Date.now() - 24 * 60 * 60 * 1000;
                 const resolved = serverObservations
@@ -2194,13 +1981,8 @@ const AIInsights: React.FC<AIInsightsProps> = ({
             </>
           )}
 
-          {/* ═══════════════════════════════════════════════════════════════════
-              TAB: Performance
-          ═══════════════════════════════════════════════════════════════════ */}
           {activeTab === 'performance' && (
             <>
-              {/* Model Fit Analysis — canonical home (Overview's summary
-                  strip deep-links here via id="model-fit-analysis"). */}
               {canViewInsight(10) && effectiveNodes.length > 0 ? (
                 <div id="model-fit-analysis">
                   <ModelFitAnalysis
@@ -2234,16 +2016,12 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 />
               )}
 
-              {/* Localhost: Performance History from DuckDB (1h window) */}
               {isLocalHost && <LocalPerformanceHistory nodeId={effectiveNodes[0]?.node_id ?? ''} />}
 
-              {/* Localhost: Inference Profiler — correlated TTFT/KV/Queue/Thermal/Power timeline */}
               {isLocalHost && <InferenceProfiler />}
 
-              {/* Localhost: SLA Monitor — TTFT/E2E p50/p95/p99 + compliance vs target */}
               {isLocalHost && <SlaMonitor />}
 
-              {/* WES Trend Chart (cloud only) */}
               {!isLocalHost && getToken && (
                 <WESHistoryChart
                   getToken={getToken}
@@ -2254,7 +2032,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 />
               )}
 
-              {/* Thermal Budget Calculator (Pro+, cloud only — uses 7d Postgres history) */}
               {!isLocalHost && getToken && (
                 <ThermalBudgetCard
                   getToken={getToken}
@@ -2263,7 +2040,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 />
               )}
 
-              {/* Chargeback / Showback (cloud only — watts × tokens attribution) */}
               {!isLocalHost && getToken && (
                 <ChargebackCard
                   getToken={getToken}
@@ -2272,7 +2048,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 />
               )}
 
-              {/* Capacity Planner + Migration Advisor (cloud only — measured-WES fleet planning) */}
               {!isLocalHost && getToken && (
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                   <CapacityPlannerCard getToken={getToken} subscriptionTier={subscriptionTier} onNavigateToPricing={onNavigateToPricing} />
@@ -2280,12 +2055,10 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 </div>
               )}
 
-              {/* Idle Waste & right-sizing (cloud only — phantom-load cost + weekly digest) */}
               {!isLocalHost && getToken && (
                 <IdleWasteCard getToken={getToken} subscriptionTier={subscriptionTier} onNavigateToPricing={onNavigateToPricing} />
               )}
 
-              {/* Performance History — Tok/s · Power · GPU% · Mem% (cloud only) */}
               {!isLocalHost && getToken && (
                 <MetricsHistoryChart
                   getToken={getToken}
@@ -2295,10 +2068,8 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 />
               )}
 
-              {/* Bottom row: Model Efficiency / WES Leaderboard + Fleet Benchmarks */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
 
-                {/* Localhost: Model Efficiency summary (replaces WES Leaderboard) */}
                 {isLocalHost ? (
                   <div className="bg-gray-800 border border-gray-700 rounded-2xl p-4 flex flex-col gap-3">
                     <div className="flex items-center gap-2">
@@ -2312,7 +2083,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                       const idleW = getNodeSettings(n.node_id).systemIdleW;
                       const adjW  = watts != null && idleW > 0 ? Math.max(watts - idleW, 0.1) : watts;
 
-                      // Build model list: prefer active_models, fall back to singular
                       const models = n.active_models && n.active_models.length > 0
                         ? n.active_models.map(am => ({
                             name: am.model,
@@ -2381,7 +2151,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                   </InsightsLiteCard>
                 )}
 
-                {/* Fleet Benchmarks — live HexHive + benchmark trigger */}
                 <div className="bg-gray-800 border border-gray-700 rounded-2xl p-4 flex flex-col gap-3">
                   <div className="flex items-center gap-2">
                     <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 flex-1">
@@ -2393,17 +2162,12 @@ const AIInsights: React.FC<AIInsightsProps> = ({
 
               </div>
 
-              {/* Benchmark Report removed — accessible via Fleet Benchmarks hexagon click */}
             </>
           )}
 
-          {/* ═══════════════════════════════════════════════════════════════════
-              TAB: Forensics
-          ═══════════════════════════════════════════════════════════════════ */}
           {activeTab === 'forensics' && (
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
 
-              {/* Efficiency Regression — Team tease: shows live WES */}
               {canViewInsight(8) ? (
                 <EfficiencyRegressionCard history={forensicsHistory} hasCloud={hasCloudHistory} />
               ) : (
@@ -2433,7 +2197,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 />
               )}
 
-              {/* Memory Forecast — Team tease: shows live memory pressure */}
               {canViewInsight(9) ? (
                 <MemoryForecastCard history={forensicsHistory} hasCloud={hasCloudHistory} />
               ) : (
@@ -2474,7 +2237,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 />
               )}
 
-              {/* Hardware Cold Start — Team tease: shows last known model state */}
               {canViewInsight(11) ? (
                 <ColdStartCard history={forensicsHistory} hasCloud={hasCloudHistory} />
               ) : (
@@ -2507,7 +2269,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 />
               )}
 
-              {/* Fleet Thermal Diversity — Team tease: shows live state counts */}
               {canViewInsight(12) ? (
                 <ThermalDiversityCard history={forensicsHistory} hasCloud={hasCloudHistory} />
               ) : (
@@ -2553,7 +2314,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 />
               )}
 
-              {/* Inference Density (Historical) — Team */}
               {canViewInsight(13) ? (
                 <InferenceDensityCard history={forensicsHistory} hasCloud={hasCloudHistory} />
               ) : (
@@ -2566,7 +2326,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 />
               )}
 
-              {/* Sovereignty Audit — Enterprise */}
               {canViewInsight(14) ? (
                 <SovereigntyAuditCard />
               ) : (

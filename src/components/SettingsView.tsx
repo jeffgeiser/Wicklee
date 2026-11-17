@@ -16,8 +16,6 @@ import {
 import { CLOUD_URL } from '../utils/cloudUrl';
 import { IS_AGENT } from '../utils/buildTarget';
 
-// ── Alert types ────────────────────────────────────────────────────────────────
-
 interface AlertChannel {
   id: string;
   channel_type: 'slack' | 'email';
@@ -54,8 +52,6 @@ const URGENCY_OPTIONS = [
   { value: 'debounce_5m',  label: '5-min debounce' },
   { value: 'debounce_15m', label: '15-min debounce' },
 ];
-
-// ── useAlerts hook ─────────────────────────────────────────────────────────────
 
 interface AlertSilence {
   id:         string;
@@ -161,8 +157,6 @@ function useAlerts(getToken: (() => Promise<string | null>) | undefined, isCloud
   return { channels, rules, silences, loading, error, refresh, createChannel, deleteChannel, testChannel, createRule, deleteRule, createSilence, deleteSilence };
 }
 
-// ── Types ─────────────────────────────────────────────────────────────────────
-
 interface SettingsViewProps {
   nodes: NodeAgent[];
   settings: WickleeSettings;
@@ -180,8 +174,6 @@ interface SettingsViewProps {
   subscriptionTier?: string;
   isLocalHost?: boolean;
 }
-
-// ── Section ───────────────────────────────────────────────────────────────────
 
 const Section: React.FC<{
   id: string;
@@ -201,8 +193,6 @@ const Section: React.FC<{
     {children}
   </div>
 );
-
-// ── RadioGroup ────────────────────────────────────────────────────────────────
 
 const RadioGroup: React.FC<{
   label: string;
@@ -230,8 +220,6 @@ const RadioGroup: React.FC<{
   </div>
 );
 
-// ── Shared input classes ──────────────────────────────────────────────────────
-
 const INPUT_BASE =
   'h-9 bg-gray-50 dark:bg-gray-700 border rounded-lg px-3 text-sm font-telin text-gray-900 dark:text-white focus:outline-none focus:ring-1 transition-colors';
 
@@ -239,8 +227,6 @@ const inputCls = (dirty: boolean) =>
   dirty
     ? `${INPUT_BASE} border-amber-400/60 dark:border-amber-400/50 focus:border-amber-400/60 focus:ring-amber-400/20`
     : `${INPUT_BASE} border-gray-200 dark:border-gray-700 focus:border-indigo-500/60 focus:ring-indigo-500/30`;
-
-// ── Main component ─────────────────────────────────────────────────────────────
 
 const SettingsView: React.FC<SettingsViewProps> = ({
   nodes,
@@ -262,7 +248,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({
   const isCloudMode = !IS_AGENT;
   const { allNodeMetrics } = useFleetStream();
 
-  // ── Fleet defaults drafts (numbers need validation before commit) ───────────
   const [kwhDraft, setKwhDraft] = useState(settings.fleet.kwhRate.toString());
   const [pueDraft, setPueDraft] = useState(settings.fleet.pue.toString());
 
@@ -272,7 +257,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({
   const kwhDirty = kwhDraft !== settings.fleet.kwhRate.toString();
   const pueDirty = pueDraft !== settings.fleet.pue.toString();
 
-  // Save display name to cloud backend (Pro+ only)
   const isProOrAbove = tierIsProOrAbove(subscriptionTier);
   const saveDisplayNameToCloud = React.useCallback(async (nodeId: string, name: string) => {
     if (!isProOrAbove || !isCloudMode || !getToken) return;
@@ -284,12 +268,9 @@ const SettingsView: React.FC<SettingsViewProps> = ({
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ display_name: name.trim() || null }),
       });
-    } catch { /* best-effort sync */ }
+    } catch { }
   }, [isProOrAbove, isCloudMode, getToken]);
 
-  // Set the desired deployment profile on the cloud (fleet config mgmt).
-  // The agent applies it within one telemetry push cycle (~2s) and reports
-  // the actual profile back in every frame. Empty = agent keeps local choice.
   const saveDesiredProfileToCloud = React.useCallback(async (nodeId: string, prof: string) => {
     if (!isProOrAbove || !isCloudMode || !getToken) return;
     try {
@@ -300,12 +281,9 @@ const SettingsView: React.FC<SettingsViewProps> = ({
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ desired_profile: prof }),
       });
-    } catch { /* best-effort sync */ }
+    } catch { }
   }, [isProOrAbove, isCloudMode, getToken]);
 
-  // Save tags to cloud backend (Pro+ only). Comma-separated; `env:` prefix
-  // is the environment convention. Tags scope alert rules, webhooks, and
-  // fleet filtering.
   const saveTagsToCloud = React.useCallback(async (nodeId: string, tags: string) => {
     if (!isProOrAbove || !isCloudMode || !getToken) return;
     try {
@@ -316,7 +294,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ tags: tags.trim() || null }),
       });
-    } catch { /* best-effort sync */ }
+    } catch { }
   }, [isProOrAbove, isCloudMode, getToken]);
 
   const commitKwh = () => {
@@ -331,16 +309,13 @@ const SettingsView: React.FC<SettingsViewProps> = ({
     else setPueDraft(settings.fleet.pue.toString());
   };
 
-  // ── Live cost preview ──────────────────────────────────────────────────────
   const draftKwh = parseFloat(kwhDraft);
   const draftPue = parseFloat(pueDraft);
   const effKwh = !isNaN(draftKwh) && draftKwh >= 0 ? draftKwh : settings.fleet.kwhRate;
   const effPue = !isNaN(draftPue) && draftPue >= 1  ? draftPue : settings.fleet.pue;
   const currSymbol = CURRENCY_OPTIONS.find(c => c.value === settings.fleet.currency)?.symbol ?? '$';
-  // 100W node, 24/7, 30.4 days/month
   const monthlyCost100W = (100 / 1000) * effPue * 24 * 30.4 * effKwh;
 
-  // ── Column clear state ─────────────────────────────────────────────────────
   type ClearableField = 'kwhRate' | 'currency' | 'pue' | 'systemIdleW';
   const [confirmClear, setConfirmClear] = useState<ClearableField | null>(null);
   const [successField, setSuccessField] = useState<ClearableField | null>(null);
@@ -363,7 +338,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({
     return `Reset all PUE overrides? Nodes will use PUE ${settings.fleet.pue.toFixed(1)}.`;
   };
 
-  // ── Apply fleet defaults to all nodes ─────────────────────────────────────
   const [confirmApplyAll, setConfirmApplyAll] = useState(false);
   const [applyAllDone, setApplyAllDone] = useState(false);
   const overrideNodeCount = nodes.filter(n => getNodeSettings(n.id).hasAnyOverride).length;
@@ -379,7 +353,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({
     }
   };
 
-  // ── Danger zone ────────────────────────────────────────────────────────────
   const [confirmReset, setConfirmReset] = useState(false);
   const handleResetAll = () => {
     if (confirmReset) {
@@ -391,7 +364,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({
     }
   };
 
-  // ── Export settings ────────────────────────────────────────────────────────
   const handleExport = () => {
     const blob = new Blob([JSON.stringify(settings, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -405,18 +377,15 @@ const SettingsView: React.FC<SettingsViewProps> = ({
   return (
     <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in duration-300 pb-12">
 
-      {/* Page title */}
       <div className="space-y-1">
         <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Settings</h1>
         <p className="text-sm text-gray-500">Fleet defaults, node configuration, and display preferences.</p>
       </div>
 
-      {/* ── ① COST & ENERGY ─────────────────────────────────────────────── */}
       <Section id="cost-energy" title="Cost & Energy" icon={Zap} iconBg="bg-amber-500/10" iconCls="text-amber-400">
         <div className="px-6 py-5 space-y-5">
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
 
-            {/* Electricity Rate */}
             <div className="space-y-1.5">
               <p className="text-xs font-semibold text-gray-700 dark:text-gray-300">Electricity Rate</p>
               <input
@@ -430,7 +399,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({
               <p className="text-[10px] text-gray-500">$/kWh</p>
             </div>
 
-            {/* Currency */}
             <div className="space-y-1.5">
               <p className="text-xs font-semibold text-gray-700 dark:text-gray-300">Currency</p>
               <div className="relative">
@@ -448,7 +416,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({
               <p className="text-[10px] text-gray-500">Display only — no FX conversion</p>
             </div>
 
-            {/* PUE */}
             <div className="space-y-1.5">
               <p className="text-xs font-semibold text-gray-700 dark:text-gray-300">PUE Multiplier</p>
               <input
@@ -463,7 +430,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           </div>
 
-          {/* Reference cost benchmark */}
           <div className="rounded-xl bg-gray-50 dark:bg-gray-700/60 border border-gray-100 dark:border-gray-700 px-4 py-3">
             <p className="text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">
               Reference Benchmark · 100W node running 24/7
@@ -482,7 +448,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({
             </p>
           </div>
 
-          {/* Localhost: single-node idle power setting (cloud uses per-node table) */}
           {!isCloudMode && nodes.length > 0 && (() => {
             const localNodeId = nodes[0].id;
             const localOv = settings.nodes[localNodeId] ?? {};
@@ -523,7 +488,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({
         </div>
       </Section>
 
-      {/* ── ② NODE CONFIGURATION (Cloud only — per-node overrides) ─────── */}
       {isCloudMode && <Section id="node-configuration" title="Node Configuration" icon={MapPin} iconBg="bg-indigo-500/10" iconCls="text-indigo-400">
         {nodes.length === 0 ? (
           <div className="px-6 py-12 text-center space-y-2">
@@ -537,7 +501,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         ) : (
           <div>
-            {/* Controls bar */}
             <div className="px-5 pt-4 pb-3 flex items-center justify-between gap-4 flex-wrap border-b border-gray-100 dark:border-gray-700">
               <div className="flex items-center gap-1.5">
                 <span className="text-amber-400 text-[9px]">◆</span>
@@ -574,7 +537,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({
               </div>
             </div>
 
-            {/* Table */}
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
@@ -663,7 +625,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({
         )}
       </Section>}
 
-      {/* ── ③ DISPLAY & UNITS ────────────────────────────────────────────── */}
       <Section id="display-units" title="Display & Units" icon={Monitor} iconBg="bg-blue-500/10" iconCls="text-blue-400">
         <div className="px-6 py-5 grid grid-cols-1 sm:grid-cols-2 gap-6">
           <RadioGroup
@@ -696,10 +657,8 @@ const SettingsView: React.FC<SettingsViewProps> = ({
         </div>
       </Section>
 
-      {/* ── ③¾ DEPLOYMENT PROFILE (localhost/agent-only) ─────────────────── */}
       {!isCloudMode && <DeploymentProfileSection />}
 
-      {/* ── ④ ALERTS & NOTIFICATIONS ─────────────────────────────────────── */}
       <AlertsSection
         pairingInfo={pairingInfo}
         subscriptionTier={subscriptionTier}
@@ -708,7 +667,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({
         onNavigateToPricing={onNavigateToPricing}
       />
 
-      {/* ── ④⅝ SLOs & ERROR BUDGETS (cloud) ──────────────────────────────── */}
       {isCloudMode && (
         <SLOSection
           subscriptionTier={subscriptionTier}
@@ -718,7 +676,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({
         />
       )}
 
-      {/* ── ④¾ THRESHOLD WEBHOOKS (Pro+) ─────────────────────────────────── */}
       {isCloudMode && (
         <WebhooksSection
           subscriptionTier={subscriptionTier}
@@ -728,7 +685,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({
         />
       )}
 
-      {/* ── ④½ API KEYS ───────────────────────────────────────────────────── */}
       {isCloudMode && (
         <Section id="api-keys" title="API Keys" icon={Key} iconBg="bg-cyan-500/10" iconCls="text-cyan-400">
           <div className="px-6 py-5 space-y-4">
@@ -756,12 +712,10 @@ const SettingsView: React.FC<SettingsViewProps> = ({
         </Section>
       )}
 
-      {/* ── ④¾ OPENTELEMETRY EXPORT ───────────────────────────────────── */}
       {isCloudMode && tierIsTeamOrAbove(subscriptionTier) && (
         <OtelExportSection getToken={getToken} />
       )}
 
-      {/* ── ④⅞ AUDIT LOG (Business+) ──────────────────────────────────── */}
       {isCloudMode && (
         <AuditLogSection
           subscriptionTier={subscriptionTier}
@@ -770,7 +724,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({
         />
       )}
 
-      {/* ── ④⅞·⑤ SINGLE SIGN-ON (Enterprise) ──────────────────────────── */}
       {isCloudMode && (
         <SsoSection
           subscriptionTier={subscriptionTier}
@@ -778,7 +731,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({
         />
       )}
 
-      {/* ── ④⅞·⑥ MODEL GOVERNANCE (Enterprise) ────────────────────────── */}
       {isCloudMode && (
         <ModelGovernanceSection
           subscriptionTier={subscriptionTier}
@@ -787,13 +739,10 @@ const SettingsView: React.FC<SettingsViewProps> = ({
         />
       )}
 
-      {/* ── ⑤ ACCOUNT & DATA ─────────────────────────────────────────────── */}
       <Section id="account" title="Account & Data" icon={User} iconBg="bg-gray-500/10" iconCls="text-gray-400">
         <div className="px-6 py-5 space-y-5">
 
-          {/* Version & Fleet Status */}
           {(() => {
-            // Compute agent version display from live metrics
             const metricsArr: SentinelMetrics[] = Object.values(allNodeMetrics);
             const versions = metricsArr
               .map(m => m.agent_version)
@@ -811,7 +760,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                   .map(m => m.hostname ?? m.node_id)
               : [];
 
-            // Fleet status
             const onlineCount = nodes.filter(n => n.status === 'online').length;
             const totalCount = nodes.length;
             const isCloud = !isLocalHost && totalCount > 0;
@@ -863,7 +811,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({
             );
           })()}
 
-          {/* Export */}
           <div className="flex items-center justify-between py-4 border-t border-gray-100 dark:border-gray-700">
             <div>
               <p className="text-xs font-semibold text-gray-700 dark:text-gray-300">Export Settings</p>
@@ -877,7 +824,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({
             </button>
           </div>
 
-          {/* Danger zone */}
           <div className="border-t border-gray-100 dark:border-gray-700 pt-4">
             <p className="text-[10px] font-semibold uppercase tracking-wider text-rose-500/70 mb-3">Danger Zone</p>
             <div className="flex items-center justify-between gap-4">
@@ -914,7 +860,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({
         </div>
       </Section>
 
-      {/* Saved toast */}
       {savedToast && (
         <div className="fixed bottom-6 right-6 z-50 flex items-center gap-2 px-4 py-2.5 bg-gray-800 border border-gray-700/80 rounded-xl shadow-xl shadow-black/40 animate-in fade-in slide-in-from-bottom-2 duration-200">
           <Check size={13} className="text-green-400 shrink-0" />
@@ -925,8 +870,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({
   );
 };
 
-// ── Alerts & Notifications section ───────────────────────────────────────────
-
 const AlertsSection: React.FC<{
   pairingInfo: PairingInfo | null;
   subscriptionTier: string;
@@ -934,42 +877,36 @@ const AlertsSection: React.FC<{
   nodes: NodeAgent[];
   onNavigateToPricing?: () => void;
 }> = ({ pairingInfo: _pairingInfo, subscriptionTier, getToken, nodes, onNavigateToPricing }) => {
-  // Cloud mode = any build that isn't the embedded agent binary (localhost:7700).
-  // pairingInfo.status tracks whether a local node is paired — irrelevant here.
-  // On wicklee.dev the user is already in the fleet regardless of local pairing state.
   const isCloudMode    = !IS_AGENT;
   const isProOrAbove   = tierIsProOrAbove(subscriptionTier);
   const isTeam         = tierIsTeamOrAbove(subscriptionTier);
   const { channels, rules, silences, loading, error, createChannel, deleteChannel, testChannel, createRule, deleteRule, createSilence, deleteSilence } =
     useAlerts(getToken, isCloudMode && isProOrAbove);
 
-  // ── Channel form state ────────────────────────────────────────────────────
   const [showChanForm,  setShowChanForm]  = useState(false);
   const [chanType,      setChanType]      = useState<'slack' | 'email' | 'pagerduty'>('slack');
   const [chanName,      setChanName]      = useState('');
-  const [chanValue,     setChanValue]     = useState('');  // webhook URL or email
+  const [chanValue,     setChanValue]     = useState('');
   const [chanSaving,    setChanSaving]    = useState(false);
   const [chanError,     setChanError]     = useState<string | null>(null);
 
-  // ── Rule form state ───────────────────────────────────────────────────────
   const [showRuleForm,  setShowRuleForm]  = useState(false);
   const [ruleEventType, setRuleEventType] = useState(EVENT_TYPES[0].value);
   const [ruleChannelId, setRuleChannelId] = useState('');
-  const [ruleNodeId,    setRuleNodeId]    = useState('');    // '' = fleet-wide
-  const [ruleTag,       setRuleTag]       = useState('');    // '' = no tag scope
+  const [ruleNodeId,    setRuleNodeId]    = useState('');
+  const [ruleTag,       setRuleTag]       = useState('');
   const [ruleUrgency,   setRuleUrgency]   = useState('immediate');
   const [ruleThreshold, setRuleThreshold] = useState('');
   const [ruleSaving,    setRuleSaving]    = useState(false);
   const [ruleError,     setRuleError]     = useState<string | null>(null);
 
-  // ── Silence form state ────────────────────────────────────────────────────
   const [showSilenceForm, setShowSilenceForm] = useState(false);
   const [silNodeId,   setSilNodeId]   = useState('');
   const [silTag,      setSilTag]      = useState('');
   const [silEvent,    setSilEvent]    = useState('');
   const [silReason,   setSilReason]   = useState('');
   const [silDuration, setSilDuration] = useState('60');
-  const [silStartsAt, setSilStartsAt] = useState('');   // datetime-local; '' = now
+  const [silStartsAt, setSilStartsAt] = useState('');
   const [silSaving,   setSilSaving]   = useState(false);
   const [silError,    setSilError]    = useState<string | null>(null);
 
@@ -998,7 +935,6 @@ const AlertsSection: React.FC<{
     }
   };
 
-  // ── Test state per channel ────────────────────────────────────────────────
   const [testState, setTestState] = useState<Record<string, 'idle' | 'sending' | 'ok' | 'fail'>>({});
 
   const selectedEventType = EVENT_TYPES.find(e => e.value === ruleEventType)!;
@@ -1059,7 +995,6 @@ const AlertsSection: React.FC<{
   const eventLabel = (et: string) =>
     EVENT_TYPES.find(e => e.value === et)?.label ?? et;
 
-  // ── Locked — not connected to fleet ───────────────────────────────────────
   if (!isCloudMode) {
     return (
       <Section id="alerts" title="Alerts & Notifications" icon={Bell} iconBg="bg-rose-500/10" iconCls="text-rose-400">
@@ -1077,7 +1012,6 @@ const AlertsSection: React.FC<{
     );
   }
 
-  // ── No outbound alerting on this account ──────────────────────────────────
   if (!isProOrAbove) {
     return (
       <Section id="alerts" title="Alerts & Notifications" icon={Bell} iconBg="bg-rose-500/10" iconCls="text-rose-400">
@@ -1108,11 +1042,9 @@ const AlertsSection: React.FC<{
     );
   }
 
-  // Some accounts are limited to one Slack channel; the cloud enforces it.
   const channelLimit = isTeam ? Infinity : 1;
   const canAddChannel = channels.length < channelLimit;
 
-  // ── Full UI — Pro+ ─────────────────────────────────────────────────────────
   return (
     <Section id="alerts" title="Alerts & Notifications" icon={Bell} iconBg="bg-rose-500/10" iconCls="text-rose-400">
       <div className="divide-y divide-gray-100 dark:divide-gray-800">
@@ -1124,7 +1056,6 @@ const AlertsSection: React.FC<{
           </div>
         )}
 
-        {/* ── Notification Channels ─────────────────────────────────────── */}
         <div className="px-6 py-5 space-y-3">
           <div className="flex items-center justify-between">
             <div>
@@ -1145,10 +1076,8 @@ const AlertsSection: React.FC<{
             </button>
           </div>
 
-          {/* Add channel form */}
           {showChanForm && (
             <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-700/60 p-4 space-y-3">
-              {/* Type toggle */}
               <div className="flex items-center gap-2">
                 {(['slack', 'email', ...(isTeam ? ['pagerduty' as const] : [])] as const).map(t => (
                   <button
@@ -1205,7 +1134,6 @@ const AlertsSection: React.FC<{
             </div>
           )}
 
-          {/* Channel list */}
           {loading && channels.length === 0 ? (
             <p className="text-xs text-gray-500 py-2">Loading…</p>
           ) : channels.length === 0 ? (
@@ -1261,7 +1189,6 @@ const AlertsSection: React.FC<{
           )}
         </div>
 
-        {/* ── Alert Rules ───────────────────────────────────────────────── */}
         <div className="px-6 py-5 space-y-3">
           <div className="flex items-center justify-between">
             <div>
@@ -1277,11 +1204,9 @@ const AlertsSection: React.FC<{
             </button>
           </div>
 
-          {/* Add rule form */}
           {showRuleForm && (
             <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-700/60 p-4 space-y-3">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {/* Event type */}
                 <div className="space-y-1">
                   <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Event</label>
                   <div className="relative">
@@ -1296,7 +1221,6 @@ const AlertsSection: React.FC<{
                   </div>
                 </div>
 
-                {/* Channel */}
                 <div className="space-y-1">
                   <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Send to</label>
                   <div className="relative">
@@ -1311,7 +1235,6 @@ const AlertsSection: React.FC<{
                   </div>
                 </div>
 
-                {/* Node scope */}
                 <div className="space-y-1">
                   <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Node scope</label>
                   <div className="relative">
@@ -1327,7 +1250,6 @@ const AlertsSection: React.FC<{
                   </div>
                 </div>
 
-                {/* Tag scope */}
                 <div className="space-y-1">
                   <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Tag scope (optional)</label>
                   <input
@@ -1340,7 +1262,6 @@ const AlertsSection: React.FC<{
                   />
                 </div>
 
-                {/* Urgency */}
                 <div className="space-y-1">
                   <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Urgency</label>
                   <div className="relative">
@@ -1355,7 +1276,6 @@ const AlertsSection: React.FC<{
                   </div>
                 </div>
 
-                {/* Threshold — only shown when event type uses it */}
                 {selectedEventType.hasThreshold && (
                   <div className="space-y-1">
                     <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">
@@ -1387,7 +1307,6 @@ const AlertsSection: React.FC<{
             </div>
           )}
 
-          {/* Rules list */}
           {rules.length === 0 ? (
             <p className="text-[11px] text-gray-500 py-1">No rules yet. Add a channel first, then create a rule to start receiving alerts.</p>
           ) : (
@@ -1423,7 +1342,6 @@ const AlertsSection: React.FC<{
           )}
         </div>
 
-        {/* ── Silences & maintenance windows ── */}
         <div className="px-6 py-5 border-t border-gray-100 dark:border-gray-700 space-y-3">
           <div className="flex items-center justify-between gap-3">
             <div>
@@ -1598,7 +1516,6 @@ const NodeOverrideRow: React.FC<{
   const [pueDraft,  setPueDraft]  = useState(ov.pue?.toString()  ?? '');
   const [idleDraft, setIdleDraft] = useState(ov.systemIdleW?.toString() ?? '');
   // Tags come from the cloud (via the stream's node payload), not local
-  // overrides — draft locally, sync on blur.
   const [tagsDraft, setTagsDraft] = useState(node.metrics?.tags ?? '');
 
   React.useEffect(() => { setKwhDraft(ov.kwhRate?.toString() ?? ''); }, [ov.kwhRate]);
@@ -1645,7 +1562,6 @@ const NodeOverrideRow: React.FC<{
   return (
     <tr className={`hover:bg-gray-50/50 dark:hover:bg-gray-700/30 transition-colors ${eff.hasAnyOverride ? 'border-l-2 border-amber-400/40' : 'border-l-2 border-transparent'}`}>
 
-      {/* Node ID */}
       <td className="px-4 py-3">
         <div className="flex items-center gap-1.5">
           {eff.hasAnyOverride && (
@@ -1655,12 +1571,10 @@ const NodeOverrideRow: React.FC<{
         </div>
       </td>
 
-      {/* Hostname */}
       <td className="px-3 py-3">
         <span className="text-xs font-telin text-gray-500 truncate block">{node.hostname || '—'}</span>
       </td>
 
-      {/* Display Name */}
       <td className="px-3 py-3 max-w-[180px]">
         <div className="flex items-center gap-1.5">
           <input
@@ -1677,7 +1591,6 @@ const NodeOverrideRow: React.FC<{
         </div>
       </td>
 
-      {/* Tags */}
       <td className="px-3 py-3 max-w-[160px]">
         <div className="flex items-center gap-1.5">
           <input
@@ -1695,7 +1608,6 @@ const NodeOverrideRow: React.FC<{
         </div>
       </td>
 
-      {/* Deployment profile (actual, from the live frame; changing pushes desired) */}
       <td className="px-3 py-3">
         <div className="flex items-center gap-1.5">
           <select
@@ -1713,7 +1625,6 @@ const NodeOverrideRow: React.FC<{
         </div>
       </td>
 
-      {/* kWh Rate */}
       <td className="px-3 py-3 text-right">
         <div className="flex items-center justify-end gap-1.5">
           {savedCell === 'kwh' && <SavedMark />}
@@ -1729,7 +1640,6 @@ const NodeOverrideRow: React.FC<{
         </div>
       </td>
 
-      {/* Currency */}
       <td className="px-3 py-3">
         <div className="flex items-center gap-1.5">
           <div className="relative flex items-center min-w-0 flex-1">
@@ -1749,7 +1659,6 @@ const NodeOverrideRow: React.FC<{
         </div>
       </td>
 
-      {/* PUE */}
       <td className="px-3 py-3 text-right">
         <div className="flex items-center justify-end gap-1.5">
           {savedCell === 'pue' && <SavedMark />}
@@ -1765,7 +1674,6 @@ const NodeOverrideRow: React.FC<{
         </div>
       </td>
 
-      {/* Idle W — system idle power at the wall */}
       <td className="px-3 py-3 text-right">
         <div className="flex items-center justify-end gap-1.5">
           {savedCell === 'idle' && <SavedMark />}
@@ -1782,7 +1690,6 @@ const NodeOverrideRow: React.FC<{
         </div>
       </td>
 
-      {/* Fleet defaults chip */}
       <td className="px-3 py-3 text-right">
         {!eff.hasAnyOverride && (
           <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-medium bg-gray-100 dark:bg-gray-700 text-gray-400 dark:text-gray-500 whitespace-nowrap">
@@ -1794,8 +1701,6 @@ const NodeOverrideRow: React.FC<{
   );
 };
 
-// ── OpenTelemetry Export Section (cloud) ─────────────────────────────────────
-
 const OtelExportSection: React.FC<{
   getToken: () => Promise<string | null>;
 }> = ({ getToken }) => {
@@ -1805,8 +1710,6 @@ const OtelExportSection: React.FC<{
   const [interval, setInterval_] = useState(30);
   const [saving, setSaving] = useState(false);
   const [loaded, setLoaded] = useState(false);
-  // Result of the last save — previously the PUT's status was never checked,
-  // so a rejected save looked identical to a successful one.
   const [saveResult, setSaveResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
   useEffect(() => {
@@ -1825,7 +1728,7 @@ const OtelExportSection: React.FC<{
           setInterval_(data.export_interval_s ?? 30);
           setLoaded(true);
         }
-      } catch { /* ignore */ }
+      } catch { }
     })();
   }, [getToken]);
 

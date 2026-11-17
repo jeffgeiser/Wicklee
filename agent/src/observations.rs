@@ -3,12 +3,6 @@
 
 use super::*;
 
-// ── Local Observations (16 hardware patterns) ────────────────────────────────
-//
-// Server-side evaluation of 16 hardware-focused patterns against the 10-min
-// DuckDB buffer. Returned by GET /api/observations for the localhost frontend
-// and pushed to the cloud for fleet views via the observation cache.
-
 /// Shared cache of the latest evaluated observations.  Written by the 10 s
 /// observation evaluator task; read by cloud_push (embed in telemetry) and
 /// handle_observations (GET /api/observations).
@@ -46,19 +40,14 @@ impl LocalObservation {
 #[cfg(not(target_env = "musl"))]
 pub(crate) fn routing_hint_for(pattern_id: &str, severity: &str) -> &'static str {
     match (pattern_id, severity) {
-        // Critical severity = steer away immediately
         (_, "critical") => "steer_away",
-        // Patterns that indicate the node shouldn't receive new traffic
         ("thermal_drain", _) | ("nvidia_thermal_redline", _) | ("swap_io_pressure", _)
         | ("vram_overcommit", _) | ("bandwidth_saturation", _) => "steer_away",
-        // Patterns that indicate reducing concurrency
         ("vllm_kv_cache_saturation", _) | ("vllm_queue_saturation", _)
         | ("ttft_regression", _) | ("latency_spike", _) | ("power_jitter", _) => "reduce_batch",
-        // Patterns that indicate monitoring but node is still usable
         ("wes_velocity_drop", _) | ("memory_trajectory", _) | ("clock_drift", _)
         | ("efficiency_drag", _) | ("power_gpu_decoupling", _)
         | ("bandwidth_ceiling_reached", _) => "monitor",
-        // Everything else (phantom_load, pcie_lane_degradation)
         _ => "monitor",
     }
 }
@@ -69,10 +58,6 @@ pub(crate) struct PcieSnapshot {
     pub(crate) link_width:     Option<u32>,
     pub(crate) link_max_width: Option<u32>,
 }
-
-// ── Pattern-engine math helpers ──────────────────────────────────────────────
-// Every caller is a pattern evaluated against the DuckDB window, so these
-// compile out with the store rather than riding along unused in a musl binary.
 
 #[cfg(not(target_env = "musl"))]
 pub(crate) fn obs_mean(values: &[f64]) -> f64 {
@@ -144,7 +129,6 @@ impl DeploymentProfile {
         match s {
             Some("sovereign_dev")    => DeploymentProfile::SovereignDev,
             Some("production_fleet") => DeploymentProfile::ProductionFleet,
-            // None or "dedicated_server" or anything unrecognized → the safe default.
             _ => DeploymentProfile::DedicatedServer,
         }
     }
@@ -304,7 +288,6 @@ pub(crate) fn evaluate_local_observations(
                 .sum::<f64>() / phantom_samples.len().max(1) as f64;
             // Cost estimate: $/day at the fleet-wide default rate. Keep in
             // sync with cloud DEFAULT_KWH_RATE_USD and the frontend's
-            // ELECTRICITY_RATE_USD_PER_KWH (utils/efficiency.ts) — all 0.16.
             let kwh_rate = 0.16;
             let cost_per_day = (avg_watts / 1000.0) * 24.0 * kwh_rate;
             let model_name = phantom_samples.last()
@@ -341,8 +324,6 @@ pub(crate) fn evaluate_local_observations(
         }
     }
 
-    // ── Pattern J: Swap I/O Pressure ─────────────────────────────────────
-    // swap_write_mb_s > 2.0 sustained 5 min.
     if window.len() >= min_density_5m {
         let swap_samples: Vec<&store::ObsSample> = window.iter()
             .filter(|s| s.swap_write_mb_s.unwrap_or(0.0) > 2.0)
@@ -400,8 +381,6 @@ pub(crate) fn evaluate_local_observations(
         }
     }
 
-    // ── Pattern L: PCIe Lane Degradation ─────────────────────────────────
-    // Point-in-time: pcie_link_width < pcie_link_max_width (NVIDIA only).
     if let (Some(cur), Some(max)) = (pcie.link_width, pcie.link_max_width)
         && cur < max {
             obs.push(LocalObservation {
@@ -433,12 +412,7 @@ pub(crate) fn evaluate_local_observations(
             });
         }
 
-    // ── Pattern C: WES Velocity Drop ─────────────────────────────────────
-    // Efficiency score declining before thermal state changes — early warning.
-    // Window: 10 min; fires if WES slope < -0.5/min AND total drop > 10%.
-    // Suppressed when thermal is already Serious/Critical (Pattern A covers it).
     if long_window.len() >= min_density_10m {
-        // Compute WES per sample: tps / (power × penalty).  penalty defaults to 1.0.
         let wes_vals: Vec<f64> = long_window.iter()
             .filter_map(|s| {
                 let tps   = s.tps?;
@@ -455,7 +429,6 @@ pub(crate) fn evaluate_local_observations(
         let is_already_hot = matches!(latest_thermal, Some("Serious") | Some("Critical"));
 
         if dense_enough && !is_already_hot {
-            // At 1 Hz, 60 samples = 1 minute
             let slope_per_sample = obs_linear_slope(&wes_vals);
             let slope_per_min    = slope_per_sample * 60.0;
 
@@ -509,10 +482,6 @@ pub(crate) fn evaluate_local_observations(
         }
     }
 
-    // ── Pattern F: Memory Pressure Trajectory ────────────────────────────
-    // Memory pressure climbing — projected to hit critical threshold.
-    // Window: 10 min; fires if rising trend will hit 85% within 30 min.
-    // Apple Silicon only (mem_pressure_pct not available on NVIDIA nodes).
     if long_window.len() >= min_density_10m {
         let mem_vals: Vec<f64> = long_window.iter()
             .filter_map(|s| s.mem_pressure_pct)
@@ -523,7 +492,6 @@ pub(crate) fn evaluate_local_observations(
         if dense_enough {
             let current_mem = *mem_vals.last().unwrap();
 
-            // Suppress if already critical — a separate MemoryExhaustionCard handles that
             if current_mem < 80.0 {
                 let slope_per_sample = obs_linear_slope(&mem_vals);
 
@@ -571,9 +539,6 @@ pub(crate) fn evaluate_local_observations(
         }
     }
 
-    // ── Pattern H: Power Jitter ───────────────────────────────────────────
-    // Power draw CoV > 20% during active inference — PSU/VRM stress or thundering herd.
-    // Window: 5 min; requires mean watts > 30 and mean tok/s > 0.5.
     if window.len() >= min_density_5m {
         let watts_vals: Vec<f64> = window.iter()
             .filter_map(|s| s.gpu_power_w.or(s.cpu_power_w))
@@ -664,9 +629,6 @@ pub(crate) fn evaluate_local_observations(
         }
     }
 
-    // ── Pattern K: Clock Drift ────────────────────────────────────────────
-    // GPU clocks throttled during inference despite Normal thermals — power cap or driver limit.
-    // Window: 5 min; fires if avg throttle > 15% with tps > 0.5 and Normal thermals.
     if window.len() >= min_density_5m {
         let clock_vals: Vec<f64> = window.iter()
             .filter_map(|s| s.clock_throttle_pct)
@@ -685,7 +647,6 @@ pub(crate) fn evaluate_local_observations(
                 let avg_tps = if tps_vals.is_empty() { 0.0 } else { obs_mean(&tps_vals) };
 
                 if avg_tps >= 0.5 {
-                    // Only fire when thermals are Normal — Pattern A covers hot+throttled
                     let hot_count = window.iter()
                         .filter(|s| s.thermal_state.as_deref().is_some_and(|t| t != "Normal"))
                         .count();
@@ -740,21 +701,16 @@ pub(crate) fn evaluate_local_observations(
         }
     }
 
-    // ── Pattern N: NVIDIA Thermal Redline ────────────────────────────────
-    // NVIDIA GPU temperature above safe operating range.
-    // Dual-path: sustained >85°C for 2 min (warning) OR instantaneous >90°C (critical).
     {
-        // Instantaneous path: latest sample > 90°C
         let instant_temp: Option<i32> = window.last()
             .and_then(|s| s.nvidia_gpu_temp_c)
             .filter(|&t| t > 90);
 
-        // Sustained path: >85°C for 2 min (120 samples), 70% density
         let sustained_result: Option<(f64, f64)> = {
             let temp_samples: Vec<i32> = window.iter()
                 .filter_map(|s| s.nvidia_gpu_temp_c)
                 .collect();
-            if temp_samples.len() >= 84 {  // 70% of 120
+            if temp_samples.len() >= 84 {
                 let hot_samples: Vec<f64> = temp_samples.iter()
                     .filter(|&&t| t > 85)
                     .map(|&t| t as f64)
@@ -820,16 +776,11 @@ pub(crate) fn evaluate_local_observations(
         }
     }
 
-    // ── Pattern D: Power-GPU Decoupling ──────────────────────────────────
-    // High watts + active inference + low GPU utilization.
-    // Inference is CPU-bound or memory-bound, not GPU-bound.
-    // Uses 5-min window; requires gpu_util_pct data.
     {
         let min_gpu_density = (min_density_5m as f64 * 0.7) as usize;
         let gpu_count = window.iter().filter(|s| s.gpu_util_pct.is_some()).count();
 
         if gpu_count >= min_gpu_density {
-            // Qualifying samples: high watts + inference active + low GPU util
             let decoupled: Vec<&&store::ObsSample> = window.iter()
                 .filter(|s| {
                     let watts = s.gpu_power_w.unwrap_or(0.0) + s.cpu_power_w.unwrap_or(0.0);
@@ -890,10 +841,6 @@ pub(crate) fn evaluate_local_observations(
         }
     }
 
-    // ── Pattern G: Bandwidth Saturation ──────────────────────────────────
-    // GPU compute utilization is low despite active inference and high memory
-    // pressure — the GPU cores are stalled waiting for weights from VRAM/memory bus.
-    // Uses 5-min window for recent state; 10-min window for WES session peak.
     {
         let min_gpu_density = (min_density_5m as f64 * 0.7) as usize;
         let gpu_samples: Vec<&&store::ObsSample> = window.iter()
@@ -908,16 +855,13 @@ pub(crate) fn evaluate_local_observations(
             let tps_vals: Vec<f64> = window.iter().filter_map(|s| s.tps).collect();
             let avg_tps = if tps_vals.is_empty() { 0.0 } else { obs_mean(&tps_vals) };
 
-            // GPU compute must be low AND inference active
             if avg_gpu_util < 45.0 && avg_tps >= 0.5 {
-                // Thermals must be Normal — not a thermal issue
                 let hot_count = window.iter()
                     .filter(|s| s.thermal_state.as_deref().map(|t| t != "Normal").unwrap_or(false))
                     .count();
                 let hot_limit = (min_density_5m as f64 * 0.3) as usize;
 
                 if hot_count <= hot_limit {
-                    // Memory pressure: VRAM path (NVIDIA) or unified memory (Apple Silicon)
                     let vram_samples: Vec<&&store::ObsSample> = window.iter()
                         .filter(|s| s.vram_used_mb.is_some() && s.vram_total_mb.map(|v| v > 0).unwrap_or(false))
                         .collect();
@@ -945,7 +889,6 @@ pub(crate) fn evaluate_local_observations(
                         };
 
                     if mem_pressure_ok {
-                        // WES drop: compare 10-min session peak vs 5-min recent
                         let compute_wes = |s: &&store::ObsSample| -> Option<f64> {
                             let tps = s.tps.filter(|&t| t > 0.0)?;
                             let watts = s.gpu_power_w.unwrap_or(0.0) + s.cpu_power_w.unwrap_or(0.0);
@@ -1005,21 +948,13 @@ pub(crate) fn evaluate_local_observations(
         }
     }
 
-    // ── Pattern I: Efficiency Penalty Drag ───────────────────────────────
-    // WES penalty_avg is persistently elevated despite Normal thermals and active
-    // GPU — indicates workload configuration overhead (context length, batch
-    // fragmentation, KV cache pressure, MoE routing overhead).
-    // Requires penalty_avg data (written by agent since Phase 2 migration).
     {
         let penalty_vals: Vec<f64> = window.iter().filter_map(|s| s.penalty_avg).collect();
         let min_pen_density = (min_density_5m as f64 * 0.7) as usize;
 
         if penalty_vals.len() >= min_pen_density {
             let avg_multiplier = obs_mean(&penalty_vals);
-            // multiplier 1.0 = no penalty; skip early if no real overhead
             if avg_multiplier > 1.0 {
-                // Efficiency loss fraction: 1 - (1/multiplier)
-                // e.g. multiplier 1.75 → 43% loss
                 let avg_penalty = 1.0 - (1.0 / avg_multiplier);
 
                 if avg_penalty >= 0.30 {
@@ -1027,19 +962,16 @@ pub(crate) fn evaluate_local_observations(
                     let avg_tps = if tps_vals.is_empty() { 0.0 } else { obs_mean(&tps_vals) };
 
                     if avg_tps >= 0.5 {
-                        // Thermals must be Normal
                         let hot_count = window.iter()
                             .filter(|s| s.thermal_state.as_deref().map(|t| t != "Normal").unwrap_or(false))
                             .count();
                         let hot_limit = (min_density_5m as f64 * 0.3) as usize;
 
-                        // GPU must be working (not decoupled — Pattern D territory)
                         let gpu_vals: Vec<f64> = window.iter().filter_map(|s| s.gpu_util_pct).collect();
                         let avg_gpu = if gpu_vals.len() >= (min_density_5m as f64 * 0.5) as usize {
                             obs_mean(&gpu_vals)
-                        } else { 50.0 }; // assume ok if no GPU data
+                        } else { 50.0 };
 
-                        // Not memory-bound (not Pattern F or G territory)
                         let mem_vals: Vec<f64> = window.iter().filter_map(|s| s.mem_pressure_pct).collect();
                         let avg_mem = if mem_vals.is_empty() { 0.0 } else { obs_mean(&mem_vals) };
 
@@ -1057,7 +989,6 @@ pub(crate) fn evaluate_local_observations(
                             let penalty_pct = (avg_penalty * 100.0) as u32;
                             let lost_tok_s  = avg_tps * (avg_multiplier - 1.0);
 
-                            // Implied max WES without penalty
                             let wes_vals: Vec<f64> = window.iter()
                                 .filter_map(|s| {
                                     let tps = s.tps.filter(|&t| t > 0.0)?;
@@ -1113,10 +1044,6 @@ pub(crate) fn evaluate_local_observations(
         }
     }
 
-    // ── Pattern M: vLLM KV Cache Saturation ──────────────────────────────
-    // vLLM's KV cache is persistently full — the scheduler cannot admit new
-    // sequences; requests queue, get preempted, or return 503.
-    // Uses 5-min window; only fires on nodes running vLLM (field is None elsewhere).
     {
         let cache_vals: Vec<f64> = window.iter()
             .filter_map(|s| s.vllm_cache_usage_perc)
@@ -1132,7 +1059,6 @@ pub(crate) fn evaluate_local_observations(
                     .filter(|&&v| v > 90.0)
                     .sum::<f64>() / saturated_count as f64;
 
-                // Check for back-pressure from queue_depth
                 let queue_vals: Vec<f64> = window.iter()
                     .filter_map(|s| s.queue_depth.filter(|&q| q > 0).map(|q| q as f64))
                     .collect();
@@ -1175,10 +1101,6 @@ pub(crate) fn evaluate_local_observations(
         }
     }
 
-    // ── Pattern P: TTFT Regression ───────────────────────────────────────
-    // Time-to-first-token is trending upward, indicating growing inference
-    // latency for users — KV cache thrash, memory pressure, or queue build-up.
-    // Uses 10-min window; requires ≥ 10 samples with valid ttft_ms.
     {
         let ttft_vals: Vec<(usize, f64)> = long_window.iter()
             .enumerate()
@@ -1186,16 +1108,9 @@ pub(crate) fn evaluate_local_observations(
             .collect();
 
         if ttft_vals.len() >= 10 {
-            // Rebuild as sequential values for OLS (use position-in-window, not ts)
             let ttft_seq: Vec<f64> = ttft_vals.iter().map(|(_, v)| *v).collect();
             let mean_ttft = obs_mean(&ttft_seq);
 
-            // OLS slope of TTFT vs. sample index (X = position in the filtered
-            // series, not wall-clock — TTFT samples only exist on inference
-            // events, so spacing is irregular). The * 6.0 below converts the
-            // per-sample slope to an approximate per-minute rate assuming the
-            // typical ~10 s spacing between inference events; treat the ms/min
-            // figure as a trend indicator, not an exact rate.
             let n = ttft_seq.len() as f64;
             let x_mean = (n - 1.0) / 2.0;
             let slope_raw: f64 = {
@@ -1209,7 +1124,6 @@ pub(crate) fn evaluate_local_observations(
             };
             let slope_per_min = slope_raw * 6.0;
 
-            // Recent tail: last 30% of ttft samples vs full mean
             let tail_start = (ttft_seq.len() as f64 * 0.70) as usize;
             let tail_vals: Vec<f64> = ttft_seq[tail_start..].to_vec();
             let tail_mean = if tail_vals.is_empty() { mean_ttft } else { obs_mean(&tail_vals) };
@@ -1225,7 +1139,6 @@ pub(crate) fn evaluate_local_observations(
                     title:            "TTFT Regression".into(),
                     hook:             format!("TTFT +{slope_per_min:.0} ms/min, avg {mean_ttft:.0} ms"),
                     body:             {
-                        // Enrich with contributing hardware factors from the window
                         let kv_vals: Vec<f64> = window.iter().filter_map(|s| s.vllm_cache_usage_perc).collect();
                         let q_vals: Vec<f64> = window.iter().filter_map(|s| s.queue_depth.map(|q| q as f64)).collect();
                         let p_vals: Vec<f64> = window.iter().filter_map(|s| s.penalty_avg).collect();
@@ -1266,10 +1179,6 @@ pub(crate) fn evaluate_local_observations(
         }
     }
 
-    // ── Pattern Q: Latency Spike ─────────────────────────────────────────
-    // E2E inference latency has spiked significantly compared to the window
-    // baseline — indicates sudden degradation (thermal event, preemption, swap).
-    // Uses 10-min window; requires ≥ 10 samples with valid avg_latency_ms.
     {
         let lat_vals: Vec<f64> = long_window.iter()
             .filter_map(|s| s.avg_latency_ms)
@@ -1283,13 +1192,11 @@ pub(crate) fn evaluate_local_observations(
             let baseline_mean = obs_mean(&baseline);
             let recent_mean   = obs_mean(&recent);
 
-            // Spike ratio: how much worse is the recent window vs baseline?
             let spike_ratio = if baseline_mean > 1.0 {
                 recent_mean / baseline_mean
             } else { 1.0 };
 
             let is_critical = spike_ratio > 3.0 || recent_mean > 10_000.0;
-            // Fire if recent is 1.5× baseline AND recent is meaningfully slow
             let fire = spike_ratio >= 1.5 && recent_mean > 500.0;
 
             if fire {
@@ -1339,11 +1246,6 @@ pub(crate) fn evaluate_local_observations(
         }
     }
 
-    // ── Pattern R: vLLM Queue Saturation ────────────────────────────────
-    // vLLM's waiting request queue is persistently backlogged, meaning the
-    // GPU cannot drain requests as fast as they arrive.
-    // Uses 5-min window; requires ≥ 10 samples with valid queue_depth.
-    // Only fires on nodes running vLLM (queue_depth is None for Ollama/llama.cpp).
     {
         let queue_vals: Vec<f64> = window.iter()
             .filter_map(|s| s.queue_depth.map(|q| q as f64))
@@ -1353,8 +1255,7 @@ pub(crate) fn evaluate_local_observations(
             let avg_queue = obs_mean(&queue_vals);
             let max_queue = queue_vals.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
 
-            // OLS slope to detect queue growth vs steady state
-            let slope = obs_linear_slope(&queue_vals); // requests/sample (~1s), so /min = *60
+            let slope = obs_linear_slope(&queue_vals);
             let slope_per_min = slope * 60.0;
 
             let is_critical = max_queue >= 10.0 || (avg_queue >= 5.0 && slope_per_min > 0.5);
@@ -1401,9 +1302,6 @@ pub(crate) fn evaluate_local_observations(
         }
     }
 
-    // Profile-driven emission filter: on stricter profiles (sovereign_dev),
-    // drop observations that haven't cleared the confidence floor — the last
-    // coherent sensitivity lever, applied uniformly across every pattern above.
     if tuning.min_confidence > 0.0 {
         obs.retain(|o| o.confidence_ratio >= tuning.min_confidence);
     }
@@ -1425,9 +1323,8 @@ pub(crate) fn evaluate_vram_overcommit(
     let model_gb = ollama.ollama_model_size_gb?;
     if model_gb <= 0.0 { return None; }
 
-    // Resolve VRAM capacity: NVIDIA total → Apple unified memory budget
     let vram_gb = nvidia.nvidia_vram_total_mb
-        .filter(|&v| v >= 1024) // ≥1 GB = real GPU
+        .filter(|&v| v >= 1024)
         .map(|v| v as f64 / 1024.0)
         .or_else(|| apple.gpu_wired_limit_mb
             .filter(|&v| v > 0)
@@ -1494,23 +1391,12 @@ pub(crate) fn evaluate_vram_overcommit(
     })
 }
 
-// ── Pattern: Bandwidth Ceiling Reached ───────────────────────────────────────
-// Informational pattern that explains low tok/W as physics rather than
-// pathology.  When a node is decoding at ≥65 % of its theoretical
-// memory-bandwidth ceiling for the loaded model + quant, "Low efficiency"
-// is the expected steady state at batch=1 — fire this so the dashboard
-// stops nagging the user to fix something that isn't broken.
-
 /// Memory bandwidth in GB/s for known hardware.
 /// System (unified) memory bandwidth for Apple Silicon and DGX Spark;
 /// VRAM bandwidth for discrete GPUs.  Returns None on unknown hardware
 /// so the pattern never fires with a guessed ceiling.
 #[cfg(not(target_env = "musl"))]
 pub(crate) fn hardware_bandwidth_gbps(gpu_name: Option<&str>, chip_name: Option<&str>) -> Option<f32> {
-    // Chip-identifier match at word boundaries. Plain `contains` mis-binds
-    // short Apple tokens inside NVML form-factor codes: "A100-SXM4-80GB"
-    // contains "m4" and was resolved as a base Apple M4 (120 GB/s instead
-    // of 2039); "V100-SXM2" likewise contains "m2".
     fn word(key: &str, pat: &str) -> bool {
         key.match_indices(pat).any(|(i, _)| {
             let b = key.as_bytes();
@@ -1520,7 +1406,6 @@ pub(crate) fn hardware_bandwidth_gbps(gpu_name: Option<&str>, chip_name: Option<
             before_ok && after_ok
         })
     }
-    // Dash-normalize so NVML names like "A100-SXM4-80GB" match keyword checks.
     let key = format!(
         "{} {}",
         gpu_name.unwrap_or(""),
@@ -1528,7 +1413,6 @@ pub(crate) fn hardware_bandwidth_gbps(gpu_name: Option<&str>, chip_name: Option<
     ).to_lowercase().replace('-', " ");
     let key = key.trim();
     if key.is_empty() { return None; }
-    // Match longest names first to avoid e.g. "m4 max" being shadowed by "m4".
     if word(key, "m3 ultra")  { return Some(819.0); }
     if word(key, "m2 ultra")  { return Some(800.0); }
     if word(key, "m4 max")    { return Some(546.0); }
@@ -1539,20 +1423,17 @@ pub(crate) fn hardware_bandwidth_gbps(gpu_name: Option<&str>, chip_name: Option<
     if word(key, "m3 pro")    { return Some(150.0); }
     if word(key, "m2 pro")    { return Some(200.0); }
     if word(key, "m1 pro")    { return Some(200.0); }
-    if word(key, "m4")        { return Some(120.0); }   // base M4
-    if word(key, "m3")        { return Some(100.0); }   // base M3
-    if word(key, "m2")        { return Some(100.0); }   // base M2
-    if word(key, "m1")        { return Some(68.0); }    // base M1
-    if word(key, "gb10") || word(key, "spark") { return Some(273.0); } // DGX Spark
+    if word(key, "m4")        { return Some(120.0); }
+    if word(key, "m3")        { return Some(100.0); }
+    if word(key, "m2")        { return Some(100.0); }
+    if word(key, "m1")        { return Some(68.0); }
+    if word(key, "gb10") || word(key, "spark") { return Some(273.0); }
     if word(key, "h200")      { return Some(4800.0); }
-    // H100 variants: NVML reports "H100 PCIe", "H100 NVL", or "H100 80GB HBM3" (SXM).
     if word(key, "h100") {
         if word(key, "pcie") { return Some(2000.0); }
         if word(key, "nvl")  { return Some(3938.0); }
         return Some(3350.0);
     }
-    // A100: 80GB parts (SXM4 2039 / PCIe 1935 — close enough); 40GB parts 1555.
-    // Capacity check is a plain substring ("80gb" must match "80").
     if word(key, "a100") {
         return Some(if key.contains("80") { 2039.0 } else { 1555.0 });
     }
@@ -1585,10 +1466,6 @@ pub(crate) fn bytes_per_weight(quant: &str) -> f32 {
     if q == "fp8" || q == "int8" { return 1.0; }
     if q.starts_with("f16") || q.starts_with("fp16") { return 2.0; }
     if q.starts_with("f32") || q.starts_with("fp32") { return 4.0; }
-    // Production vLLM/HF quant tags — mirror src/utils/quantSize.ts.
-    // AWQ / GPTQ-int4 / NF4 / FP4: 4-bit weights + group scales ≈ 0.56 B/W.
-    // GPTQ-int8 / BNB-8bit: 8-bit weights ≈ 1.0 B/W like FP8.
-    // AQLM / HQQ-2bit: 2-bit aggressive quants ≈ 0.34 B/W.
     if q == "awq" || q.starts_with("awq-int4") || q == "awq-4bit"     { return 0.56; }
     if q == "gptq" || q.starts_with("gptq-int4") || q == "gptq-4bit"  { return 0.56; }
     if q == "gptq-int8" || q == "gptq-8bit"                            { return 1.0; }
@@ -1597,7 +1474,7 @@ pub(crate) fn bytes_per_weight(quant: &str) -> f32 {
     if q == "hqq-2bit"                                                 { return 0.34; }
     if q == "bnb-4bit" || q == "nf4" || q == "fp4"                     { return 0.56; }
     if q == "bnb-8bit"                                                 { return 1.0; }
-    1.0  // conservative default — same as Q8/FP8
+    1.0
 }
 
 /// How a measured rate reads against an estimated ceiling.
@@ -1630,17 +1507,13 @@ pub(crate) fn evaluate_bandwidth_ceiling(
     node_id:   &str,
     hostname:  &str,
 ) -> Option<LocalObservation> {
-    // Need the model context: parameter count + quant (from Ollama enrichment).
-    // vLLM models don't yet carry param_count in payload, so this fires for
-    // Ollama runs today.  Phase 2: extend to vLLM via runtime probe.
     let param_count = ollama.ollama_parameter_count? as f32;
-    if param_count < 1e9 { return None; }   // tiny models aren't bandwidth-bound on any GPU
+    if param_count < 1e9 { return None; }
     let quant = ollama.ollama_quantization.as_deref().unwrap_or("q4_k_m");
     let bpw = bytes_per_weight(quant);
     let model_size_gb = param_count * bpw / 1e9;
     if model_size_gb < 0.5 { return None; }
 
-    // Hardware bandwidth.
     let gpu_name_owned: Option<String> = nvidia
         .nvidia_gpu_name.clone()
         .or_else(|| apple.gpu_name.clone());
@@ -1648,30 +1521,17 @@ pub(crate) fn evaluate_bandwidth_ceiling(
         gpu_name_owned.as_deref(),
         chip_name,
     )?;
-    // Raw ceiling = every weight streamed once per token at full rated
-    // bandwidth. Real batch=1 GGUF decode tops out at ~30–45% of that
-    // (activation traffic, KV reads, framework overhead) — the frontend's
-    // INFERENCE_EFFICIENCY constant (chipBandwidth.ts) uses 0.40 for the
-    // same physics. The achievable ceiling is what utilization must be
-    // measured against: the previous code compared observed tok/s to the
-    // RAW ceiling with a 0.65 trigger, a level real hardware can't reach,
-    // so this pattern never fired.
     const INFERENCE_EFFICIENCY: f32 = 0.40;
     let theoretical_max_tps = bandwidth_gbps / model_size_gb;
     if theoretical_max_tps <= 0.0 { return None; }
     let achievable_ceiling_tps = theoretical_max_tps * INFERENCE_EFFICIENCY;
 
-    // Need at least 5 minutes of sustained inference samples to fire confidently.
     let now_ms = now_ms() as i64;
     let cutoff = now_ms - 300_000_i64;
     let live_samples: Vec<&store::ObsSample> = samples.iter()
         .filter(|s| s.ts_ms >= cutoff)
         .filter(|s| s.tps.is_some_and(|t| t > 0.5))
         .collect();
-    // metrics_raw is written once a second, so five minutes is 300 samples.
-    // This read 30 behind a comment claiming ten seconds a sample, which made
-    // the "sustained" guard thirty seconds. The first live run with a store
-    // (2026-11-14) fired it on two minutes of test traffic.
     if live_samples.len() < 300 { return None; }
 
     let tps_vals:  Vec<f64> = live_samples.iter().filter_map(|s| s.tps).collect();
@@ -1679,27 +1539,16 @@ pub(crate) fn evaluate_bandwidth_ceiling(
     if observed_tps_p50 <= 0.0 { return None; }
 
     let utilization = observed_tps_p50 / achievable_ceiling_tps as f64;
-    if utilization < 0.65 { return None; }   // not bandwidth-bound — something else limits
+    if utilization < 0.65 { return None; }
 
-    // Above the ceiling means the 40% figure underestimates this hardware and
-    // quant pair, not that the node beat physics. The first live run measured
-    // 29.3 tok/s against a 17.2 tok/s ceiling on an M4 at Q4_K_M and reported
-    // "171% of achievable ceiling", which cannot be true of a ceiling. Say
-    // which side of the estimate the measurement falls on instead; the ratio
-    // is still printed when there is a ratio worth printing.
-    // 4-bit GGUF lands at 0.5-0.6 bytes per weight; anything at or below that
-    // has no smaller quant worth recommending.
     let already_small_quant = bpw <= 0.65;
 
     let against_ceiling = ceiling_phrase(utilization, achievable_ceiling_tps);
 
-    // Confirmation: GPU not pegged at 100% (compute-bound is a different story —
-    // the bandwidth_saturation pattern handles compute-stalled-on-memory cases).
     let gpu_vals: Vec<f64> = live_samples.iter().filter_map(|s| s.gpu_util_pct).collect();
     let gpu_p50 = if gpu_vals.is_empty() { 0.0 } else { obs_mean(&gpu_vals) };
     if gpu_p50 > 95.0 { return None; }
 
-    // Build human-readable strings.
     let confidence = if utilization >= 0.75 { "high" } else { "moderate" };
     let confidence_ratio: f64 = utilization.min(1.0);
     let model_name = ollama.ollama_active_model.clone()
@@ -1733,9 +1582,6 @@ pub(crate) fn evaluate_bandwidth_ceiling(
              batch size — fixed power baseline amortises across requests.".into()
         },
         resolution_steps: {
-            // Telling a Q4_K_M run to switch to Q4_K_M is how this read on the
-            // first live run. Offer the quant step only when there is a smaller
-            // quant to go to.
             let mut steps = Vec::new();
             if !already_small_quant {
                 steps.push("If interactive latency matters: switch to a Q4_K_M GGUF (~2× tok/s, modest quality cost)".into());
@@ -1761,7 +1607,6 @@ pub(crate) struct NodeId(pub(crate) Arc<String>);
 pub(crate) async fn handle_observations(
     axum::extract::Extension(obs_cache): axum::extract::Extension<ObservationCache>,
 ) -> impl IntoResponse {
-    // Return observations with per-observation + node-level routing hints.
     let observations = obs_cache.lock().map(|c| c.clone()).unwrap_or_default();
     let enriched: Vec<serde_json::Value> = observations.iter().map(|o| {
         let mut v = serde_json::to_value(o).unwrap_or_default();
@@ -1771,8 +1616,6 @@ pub(crate) async fn handle_observations(
         v
     }).collect();
 
-    // Node-level aggregate: worst routing_hint across all active observations.
-    // Priority: steer_away > reduce_batch > monitor > clear
     let (node_hint, node_hint_source) = observations.iter()
         .map(|o| (o.routing_hint(), o.pattern_id))
         .min_by_key(|(hint, _)| match *hint {
@@ -1796,18 +1639,14 @@ mod bandwidth_tests {
 
     #[test]
     fn resolves_dashed_nvml_names_and_variants() {
-        // NVML reports dashed names — the A100 80GB entry never matched before
-        // dash normalization was added.
         assert_eq!(hardware_bandwidth_gbps(Some("NVIDIA A100-SXM4-80GB"), None), Some(2039.0));
         assert_eq!(hardware_bandwidth_gbps(Some("NVIDIA A100-PCIE-40GB"), None), Some(1555.0));
         assert_eq!(hardware_bandwidth_gbps(Some("NVIDIA H100 PCIe"), None), Some(2000.0));
         assert_eq!(hardware_bandwidth_gbps(Some("NVIDIA H100 80GB HBM3"), None), Some(3350.0));
         assert_eq!(hardware_bandwidth_gbps(Some("NVIDIA GeForce RTX 4080 SUPER"), None), Some(736.0));
         assert_eq!(hardware_bandwidth_gbps(Some("NVIDIA GeForce RTX 3090 Ti"), None), Some(1008.0));
-        // Bare L40 must not fall through to the L4 entry (864 vs 300).
         assert_eq!(hardware_bandwidth_gbps(Some("NVIDIA L40"), None), Some(864.0));
         assert_eq!(hardware_bandwidth_gbps(Some("NVIDIA L4"), None), Some(300.0));
-        // "V100-SXM2" contains "m2" — must not resolve as a base Apple M2.
         assert_eq!(hardware_bandwidth_gbps(Some("Tesla V100-SXM2-16GB"), None), Some(900.0));
     }
 
@@ -1830,7 +1669,6 @@ mod bytes_per_weight_tests {
             let stripped = stripped.strip_prefix("ud-").unwrap_or(&stripped).to_string();
             assert_eq!(Some(bytes_per_weight(q)), scoring::bytes_per_param_for_quant(&stripped), "{q}");
         }
-        // Calibrated values, matching src/utils/quantSize.ts.
         assert_eq!(bytes_per_weight("Q4_K_M"), 0.60);
         assert_eq!(bytes_per_weight("Q8_0"), 1.0);
         assert_eq!(bytes_per_weight("IQ2_XS"), 0.34);
@@ -1865,7 +1703,6 @@ mod ceiling_phrase_tests {
 
     #[test]
     fn over_the_ceiling_never_claims_a_percentage_of_it() {
-        // The live-run case: 29.3 tok/s measured, 17.2 tok/s estimated.
         let phrase = ceiling_phrase(29.3 / 17.2, 17.2);
         assert_eq!(phrase, "above the 17.2 tok/s estimated ceiling");
         assert!(!phrase.contains('%'));
@@ -1878,7 +1715,6 @@ mod deployment_profile_tests {
 
     #[test]
     fn from_config_defaults_to_dedicated_server() {
-        // None, empty, and unrecognized all fall back to the safe standard.
         assert_eq!(DeploymentProfile::from_config(None), DeploymentProfile::DedicatedServer);
         assert_eq!(DeploymentProfile::from_config(Some("bogus")), DeploymentProfile::DedicatedServer);
         assert_eq!(DeploymentProfile::from_config(Some("dedicated_server")), DeploymentProfile::DedicatedServer);
@@ -1895,13 +1731,10 @@ mod deployment_profile_tests {
 
     #[test]
     fn dedicated_server_preserves_the_original_baseline() {
-        // The standard profile must not change the pre-profile behavior:
-        // 0.70 gate, unscaled density, no confidence floor.
         let t = DeploymentProfile::DedicatedServer.tuning();
         assert_eq!(t.density_scale, 1.0);
         assert_eq!(t.evidence_ratio, 0.70);
         assert_eq!(t.min_confidence, 0.0);
-        // Baseline densities are unchanged from the original constants.
         assert_eq!((210.0 * t.density_scale) as usize, 210);
         assert_eq!((420.0 * t.density_scale) as usize, 420);
     }
@@ -1911,11 +1744,9 @@ mod deployment_profile_tests {
         let dev  = DeploymentProfile::SovereignDev.tuning();
         let std  = DeploymentProfile::DedicatedServer.tuning();
         let prod = DeploymentProfile::ProductionFleet.tuning();
-        // Dev demands more evidence and more confidence than standard; production less.
         assert!(dev.evidence_ratio > std.evidence_ratio && std.evidence_ratio > prod.evidence_ratio);
         assert!(dev.density_scale  > std.density_scale  && std.density_scale  > prod.density_scale);
         assert!(dev.min_confidence > std.min_confidence);
-        // Scaled dev densities stay within their windows (5min=300, 10min=600 samples @1Hz).
         assert!((210.0 * dev.density_scale) as usize <= 300);
         assert!((420.0 * dev.density_scale) as usize <= 600);
     }

@@ -267,8 +267,6 @@ pub(crate) fn footprint(state: &ModelState, cal: Option<&Calibration>) -> Option
         });
     }
     if let Some(m) = state.measured.as_ref()
-        // A model rebuilt under the same tag is a different model, so a
-        // measurement taken under another digest does not transfer.
         && (m.digest.is_none() || state.digest.is_none() || m.digest == state.digest)
     {
         return Some(Footprint {
@@ -286,8 +284,6 @@ pub(crate) fn footprint(state: &ModelState, cal: Option<&Calibration>) -> Option
     Some(Footprint {
         bytes,
         basis: FitBasis::EstimatedWeightsOnly,
-        // Unknown: the file size is not tied to any context, and the runtime
-        // will pick one when it loads. V3 measured that default as 4096.
         context_length: None,
         calibrated,
     })
@@ -365,7 +361,6 @@ fn assess_state(
     let mut displacement = None;
     let mut coexistence = None;
 
-    // The most recent transition about this model, for statements to cite.
     let own: Option<&Transition> = inputs
         .transitions
         .iter()
@@ -398,16 +393,8 @@ fn assess_state(
             (None, _) | (_, None) => Readiness::CannotDetermine,
             (Some(f), Some(h)) => {
                 let fits = f.bytes.saturating_add(SAFETY_MARGIN_BYTES) <= h.free_bytes;
-                // An uncalibrated weights-only estimate must not be the sole
-                // basis for the optimistic answer: its error is two-sided and
-                // its direction is not knowable (V7).
                 let trustworthy = f.basis == FitBasis::Measured || f.calibrated;
                 if fits && trustworthy {
-                    // Fits by accounting. On the one host that was measured
-                    // that was not enough, so when anything else is resident
-                    // the answer carries that rather than implying safety.
-                    // The classification does not change and no threshold
-                    // moves: see `Coexistence`.
                     let resident = resident_others(inputs, state);
                     if !resident.is_empty() {
                         coexistence = Some(Coexistence::Unverified);
@@ -415,24 +402,6 @@ fn assess_state(
                     }
                     Readiness::RequiresLoading
                 } else if fits {
-                    // It appears to fit, on a number nothing has calibrated.
-                    // The spec forbids the optimistic answer here — but the
-                    // conservative one is `MayRequireEviction`, whose every
-                    // condition begins "the footprint does not fit", and this
-                    // footprint has not been shown not to fit. Claiming
-                    // eviction would state something about resident models
-                    // that is not true, and on a host with nothing resident
-                    // there is nothing to evict at all. So: the footprint
-                    // cannot be established to a usable standard, which is
-                    // what `CannotDetermine` means.
-                    //
-                    // No statement is attached. There is no observed
-                    // transition under this — the model has never been loaded
-                    // here — so the evidence rules forbid an inferred one, and
-                    // they are right to: the reason is a property of the
-                    // footprint, not a finding about the host. `fit_basis` and
-                    // `footprint.calibrated` carry it, and the renderer reads
-                    // them.
                     Readiness::CannotDetermine
                 } else {
                     let resident = resident_others(inputs, state);
@@ -445,8 +414,6 @@ fn assess_state(
         }
     };
 
-    // Evidence for the displacement, in the order the spec's example shows:
-    // what is resident, then the history, then the prediction built on both.
     if readiness == Readiness::MayRequireEviction {
         describe_displacement(
             state,
@@ -571,8 +538,6 @@ fn displace(
     if resident.is_empty() {
         return (None, Vec::new());
     }
-    // Several models and no pattern to go on. Nothing is named, and
-    // `would_displace` stays empty.
     (Some(Displacement::UnknownVictim), Vec::new())
 }
 
@@ -587,7 +552,6 @@ fn describe_displacement(
 ) {
     let rule = "readiness.displacement";
 
-    // What is resident, cited from the transitions that put it there.
     let names: Vec<String> = victims.iter().map(|v| v.model.clone()).collect();
     let basis: Vec<&Transition> = names
         .iter()
@@ -618,7 +582,6 @@ fn describe_displacement(
         }
     }
 
-    // The history, worded as history and never as a prediction.
     let mut history_stmt = None;
     if level == Some(Displacement::LikelyAll) && !clearouts.is_empty() {
         let n = clearouts.len();
@@ -634,8 +597,6 @@ fn describe_displacement(
         }
     }
 
-    // The prediction. Hedged, because the runtime is non-deterministic: a
-    // non-fitting load may still clear only a subset.
     let supports: Vec<&Statement> = resident_stmt
         .iter()
         .chain(history_stmt.iter())
@@ -951,8 +912,6 @@ mod tests {
         assert!(calibrate(&[&no_pair]).is_none());
     }
 
-    // ── Displacement ────────────────────────────────────────────────────────
-
     #[test]
     fn likely_all_names_every_resident_model_and_cites_the_history() {
         let coder = loaded("coder:14b", 10 * GB, 10 * GB);
@@ -977,7 +936,6 @@ mod tests {
             assert_eq!(v.basis, VictimBasis::AllResident { occurrences: 2 });
         }
 
-        // History is worded as history, and the prediction stays hedged.
         let history = r
             .statements
             .iter()
@@ -1019,7 +977,6 @@ mod tests {
 
     #[test]
     fn unknown_victim_names_nothing() {
-        // Several resident, and the clear-out pattern has not been seen here.
         let a = loaded("a", 4 * GB, 4 * GB);
         let b = loaded("b", 4 * GB, 4 * GB);
         let c = loaded("c", 4 * GB, 4 * GB);
@@ -1037,10 +994,6 @@ mod tests {
         assert_eq!(r.displacement, Some(Displacement::UnknownVictim));
         assert!(r.would_displace.is_empty(), "nothing may be named on a guess");
 
-        // Nothing resident at all. It still does not fit — 40 GB against 1 GB
-        // free, far outside anything the estimate's error could close — so the
-        // state stands, but there is no displacement level that is true: every
-        // one of the three names resident models, and there are none.
         let mut target = blank("reasoner:14b");
         target.installed_size_bytes = Some(40 * GB);
         let r = assess_one(
@@ -1054,7 +1007,6 @@ mod tests {
             "UnknownVictim would imply victims that do not exist"
         );
         assert!(r.would_displace.is_empty());
-        // Nothing is asserted about resident models in the statements either.
         let said = serde_json::to_string(&r.statements).unwrap();
         assert!(!said.contains("resident."), "got: {said}");
     }
@@ -1082,7 +1034,7 @@ mod tests {
     #[test]
     fn one_clearout_is_an_event_and_not_a_pattern() {
         let mut log = two_clearouts();
-        log.truncate(3); // just the first occurrence
+        log.truncate(3);
         assert_eq!(clearouts(&log).len(), 1);
 
         let coder = loaded("coder:14b", 10 * GB, 10 * GB);
@@ -1103,9 +1055,6 @@ mod tests {
 
     #[test]
     fn a_single_unload_beside_a_load_is_not_a_clearout() {
-        // One model going as another arrives is an ordinary swap. Reading it as
-        // a clear-out would manufacture the all-resident pattern on any host
-        // that simply alternates between two models.
         let log = vec![
             tr(1, T0, "a", TransitionKind::Unloaded, &[]),
             tr(2, T0, "b", TransitionKind::Loaded, &[]),
@@ -1113,29 +1062,25 @@ mod tests {
         assert!(clearouts(&log).is_empty());
     }
 
-    // ── In use, and headroom ────────────────────────────────────────────────
-
     #[test]
     fn in_use_is_unknown_without_an_activity_signal() {
         let log = vec![tr(1, T0, "coder:14b", TransitionKind::Loaded, &[])];
         let head = Some(Headroom { free_bytes: GB, source: "t" });
 
         let mut recent = loaded("coder:14b", GB, GB);
-        recent.last_activity_ms = Some(T0 + 119_000); // 1 s ago
+        recent.last_activity_ms = Some(T0 + 119_000);
         let states = [&recent];
         assert_eq!(
             assess_one(&inputs(&states, &log, head), "coder:14b").unwrap().in_use,
             Some(true)
         );
 
-        // No signal on this runtime: unknown, not false. "We looked and saw
-        // nothing" and "we have no way to look" are different answers.
         let mut blind = inputs(&states, &log, head);
         blind.activity_signal = false;
         assert_eq!(assess_one(&blind, "coder:14b").unwrap().in_use, None);
 
         let mut stale = loaded("coder:14b", GB, GB);
-        stale.last_activity_ms = Some(T0); // 120 s ago, outside the window
+        stale.last_activity_ms = Some(T0);
         let stale_states = [&stale];
         assert_eq!(
             assess_one(&inputs(&stale_states, &log, head), "coder:14b").unwrap().in_use,
@@ -1152,17 +1097,14 @@ mod tests {
         };
         let resident = loaded("a", 8 * GB, 8 * GB);
 
-        // NVML wins: it reports real free memory, other processes included.
         let h = headroom(&apple(65_536), &nv, &[&resident]).unwrap();
         assert_eq!(h.source, "nvml");
         assert_eq!(h.free_bytes, 20_480 * 1024 * 1024);
 
-        // Apple: the unified-memory budget less what the runtime holds.
         let h = headroom(&apple(16_384), &NvidiaMetrics::default(), &[&resident]).unwrap();
         assert_eq!(h.source, "apple_wired_limit");
         assert_eq!(h.free_bytes, 16_384 * 1024 * 1024 - 8 * GB);
 
-        // Neither: every answer becomes CannotDetermine.
         assert!(
             headroom(
                 &AppleSiliconMetrics::default(),

@@ -147,8 +147,8 @@ export function thermalSourceLabel(source: string | null | undefined): string {
  */
 export function wesColorClass(score: number | null): string {
   if (score == null) return 'text-gray-400 dark:text-gray-600';
-  if (score > 10)    return 'text-emerald-500 dark:text-emerald-400';  // Excellent — bright emerald
-  if (score >= 3)    return 'text-green-400 dark:text-green-300';      // Good — lighter green
-  if (score >= 1)    return 'text-yellow-500 dark:text-yellow-400';    // Acceptable — yellow
-  return 'text-red-500 dark:text-red-400';                              // Low — red
+  if (score > 10)    return 'text-emerald-500 dark:text-emerald-400';
+  if (score >= 3)    return 'text-green-400 dark:text-green-300';
+  if (score >= 1)    return 'text-yellow-500 dark:text-yellow-400';
+  return 'text-red-500 dark:text-red-400';
 }

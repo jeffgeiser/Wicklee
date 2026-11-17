@@ -71,7 +71,6 @@ export function useFleetObservations({
     }
   }, [getToken, state, nodeId, skip, limit]);
 
-  // Poll every 60s.
   useEffect(() => {
     mountedRef.current = true;
     fetchObservations();
@@ -91,7 +90,6 @@ export function useFleetObservations({
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
-        // Optimistic update.
         setObservations(prev =>
           prev.map(o => o.id === obsId ? { ...o, state: 'acknowledged' as const, ack_at_ms: Date.now() } : o)
         );

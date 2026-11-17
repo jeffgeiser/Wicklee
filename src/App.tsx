@@ -1,8 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { version } from '../package.json';
 import { WifiOff, RefreshCw } from 'lucide-react';
-// NOTE: @clerk/clerk-react is NOT imported here. It's lazy-loaded via
-// CloudApp.tsx to prevent Clerk's module init from running in agent builds.
 import { DashboardTab, FleetNode, NodeAgent, PairingInfo, Tenant, User as UserType, SubscriptionTier, ObservabilityNavParams } from './types';
 import { NODE_REACHABLE_MS, fmtAgo } from './utils/time';
 import { FleetStreamProvider, useFleetStream } from './contexts/FleetStreamContext';
@@ -15,25 +13,6 @@ import { isProOrAbove } from './utils/tier';
 import Sidebar from './components/Sidebar';
 import MobileTabBar from './components/MobileTabBar';
 import Header from './components/Header';
-// ── Dashboard code-split ─────────────────────────────────────────────────
-// Every component below is only reachable after sign-in (or on localhost),
-// yet they were statically imported, which hoisted the entire dashboard —
-// recharts included — into the same chunk as the landing page. The
-// LazyCloudApp boundary further down never helped: CloudApp is a 19-line
-// Clerk wrapper that receives AppCore as a prop, so the split was defeated
-// before it began. A first-time visitor to / was downloading ~1.6 MB to
-// read marketing copy — and that is what made the prerender block flash.
-//
-// Marketing pages (LandingPage, PricingPage, DocsPage, …) stay static: they
-// ARE the entry. renderContent() is wrapped in Suspense below.
-//
-// ── Agent build: cloud and site pages are absent ─────────────────────────
-// src/cloud (paid fleet UI, Clerk, Paddle) and src/site (marketing) must not
-// ship in the agent binary. A bare React.lazy(() => import(...)) is not
-// enough — Rollup keeps the import() as a possible side effect even when the
-// component is never rendered — so each one is written as a ternary on
-// IS_AGENT, which folds at build time and removes the import() with it.
-// `Absent` only satisfies the type; every render site is behind !IS_AGENT.
 const Absent = (() => null) as never;
 const Overview = React.lazy(() => import('./components/Overview'));
 const ModelsPage = React.lazy(() => import('./components/ModelsPage'));
@@ -42,24 +21,11 @@ const TracesView = React.lazy(() => import('./components/TracesView'));
 const AIInsights = React.lazy(() => import('./components/AIInsights'));
 const TeamManagement = IS_AGENT ? Absent : React.lazy(() => import('./cloud/TeamManagement'));
 import LandingPage from './site/LandingPage';
-// SignInPage/SignUpPage import @clerk/clerk-react — lazy-load to keep Clerk
-// out of the agent bundle.
 const SignInPage = IS_AGENT ? Absent : React.lazy(() => import('./cloud/SignInPage'));
 const SignUpPage = IS_AGENT ? Absent : React.lazy(() => import('./cloud/SignUpPage'));
 const APIKeysView = IS_AGENT ? Absent : React.lazy(() => import('./cloud/APIKeysView'));
 const SettingsView = React.lazy(() => import('./components/SettingsView'));
 import { useSettings } from './hooks/useSettings';
-// ── Marketing-route code split ───────────────────────────────────────────
-// Measured on a simulated slow-4G phone: the entry chunk took 1.3 s to
-// download and ~1 s to parse before /pricing could paint, and 55% of it was
-// pages the visitor was not on — DocsPage alone was 28% (181 kB raw), with
-// marked + DOMPurify (64 kB) that only the docs and blog use. Each of these
-// is now its own chunk, fetched on first visit.
-//
-// LandingPage and PricingPage stay in the entry on purpose: they are the two
-// most-visited pages (62 kB raw together), so they pay no extra round-trip —
-// and on / the prerendered block is replaced the moment React mounts, so a
-// lazy LandingPage would reintroduce a blank gap there.
 const MetricsPage        = React.lazy(() => import('./pages/MetricsPage'));
 const DocsPage           = IS_AGENT ? Absent : React.lazy(() => import('./site/DocsPage'));
 const LegalPage          = IS_AGENT ? Absent : React.lazy(() => import('./site/LegalPage'));
@@ -89,7 +55,6 @@ const MOCK_TENANTS: Tenant[] = [
   { id: 'tnt-02', name: 'Acme AI Research' }
 ];
 
-// Localhost uses an anonymous user — no account required.
 const LOCAL_USER: UserType = {
   id: 'local',
   email: '',
@@ -98,12 +63,6 @@ const LOCAL_USER: UserType = {
   isPro: false,
 };
 
-
-// Cloud backend URL — env var takes precedence; falls back to the known Railway service.
-// Resolution rules + rationale documented in src/utils/cloudUrl.ts (single source of truth).
-
-// IS_AGENT / IS_DEMO / isLocalHost come from src/utils/buildTarget (imported
-// above) — module scope, so they reach both AppCore and the export shim.
 
 interface AppCoreProps {
   isSignedIn: boolean | undefined;
@@ -124,7 +83,6 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
 
   const [currentPath, setCurrentPath] = useState(() => window.location.pathname);
   const [activeTab, setActiveTab] = useState<DashboardTab>(DashboardTab.OVERVIEW);
-  // First commit of the app tree — React is on screen from here.
   useEffect(() => { perfMark('wk:app-mounted'); }, []);
   const [observabilityNav, setObservabilityNav] = useState<ObservabilityNavParams | undefined>(undefined);
   /**
@@ -137,14 +95,8 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
    */
   const [insightsDeepLink, setInsightsDeepLink] = useState<{ tab: 'triage' | 'performance' | 'forensics'; scrollTo?: string } | undefined>(undefined);
   const [nodes, setNodes] = useState<NodeAgent[]>([]);
-  // True until the first /api/fleet fetch settles (or Clerk hasn't loaded yet).
-  // Prevents EmptyFleetState from flashing on page refresh while auth resolves.
   const [nodesLoading, setNodesLoading] = useState(!isLocalHost);
   const [currentTenant, setCurrentTenant] = useState<Tenant>(MOCK_TENANTS[0]);
-  // Build currentUser from Clerk user data (or LOCAL_USER for localhost).
-  // tier is read from Clerk publicMetadata.tier — set this in the Clerk
-  // Dashboard (Users → select user → Metadata → Public) to gate features.
-  // Valid values: the SubscriptionTier union (community | pro | team_10 | team | business | enterprise).
   const clerkTier = (user?.publicMetadata?.tier as SubscriptionTier | undefined) ?? 'community';
   const currentUser: UserType = isLocalHost
     ? LOCAL_USER
@@ -159,23 +111,15 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
   const [pairingInfo, setPairingInfo] = useState<PairingInfo | null>(null);
   const [isPairingModalOpen, setIsPairingModalOpen] = useState(false);
   const [isAddNodeModalOpen, setIsAddNodeModalOpen] = useState(false);
-  // Dark mode only — "Hardware-Centric Dark" design language.
   const theme = 'dark' as const;
   const { settings, savedToast, getNodeSettings, updateFleet, setNodeOverride, clearAllOverridesForField, clearAllNodeOverrides } = useSettings();
 
   const navigate = useCallback((path: string) => {
-    // The agent build ships only the dashboard and the metrics reference.
-    // Everything else (pricing, docs, blog, sign-in, legal) lives on the
-    // public site, so open it there instead of routing to a page that is
-    // not in this bundle.
     if (IS_AGENT && path !== '/' && !path.startsWith('/metrics')) {
       window.open(`${SITE_URL}${path}`, '_blank', 'noopener');
       return;
     }
     window.history.pushState(null, '', path);
-    // Route on the pathname only — `path` may carry a query string
-    // (/sign-up?redirect_url=…, /pricing?plan=…), which must not break the
-    // exact-match route checks below.
     setCurrentPath(window.location.pathname);
   }, []);
 
@@ -185,34 +129,21 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
 
-  // Per-route SEO metadata — title/description/canonical/OG swap on every
-  // navigation. Blog posts resolve theirs from frontmatter (BlogPost.tsx);
-  // routes without an entry (e.g. /blog/:slug mid-load) are left alone.
   useEffect(() => {
     const meta = STATIC_PAGE_META[normalizePath(currentPath)];
     if (meta) setPageMeta(meta);
   }, [currentPath]);
 
-  // Warm the Perplexity Tax baseline cache for the dashboard. Failure is
-  // non-fatal — tiles fall back to the existing heuristic copy. Skipped on
-  // the marketing routes: it was two extra requests on every visit to
-  // /pricing for data only the fleet tiles read.
   useEffect(() => {
     if (!isSignedIn && !isLocalHost) return;
     void import('./utils/perplexity').then(m => m.loadPerplexityBaseline());
   }, [isSignedIn]);
 
 
-  // Latest getToken without making it a dependency: the demo build passes an
-  // inline arrow (new identity every render), which would re-run the fetch
-  // effect below on every render.
   const getTokenRef = useRef(getToken);
   getTokenRef.current = getToken;
-  // Each fetch takes a sequence number; only the newest may write, so a slow
-  // response for the previous org can't overwrite the new org's list.
   const fleetFetchSeqRef = useRef(0);
 
-  // Called after a node is successfully paired via AddNodeModal; fetch updated fleet list.
   const handleNodeAdded = useCallback(async () => {
     const seq = ++fleetFetchSeqRef.current;
     try {
@@ -222,7 +153,6 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
       });
       if (r.ok) {
         const data = await r.json();
-        // Map cloud NodeSummary → frontend NodeAgent shape
         const mappedNodes = (data.nodes ?? []).map((n: any) => ({
           id: n.node_id as string,
           hostname: n.metrics?.hostname ?? n.node_id,
@@ -241,22 +171,18 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
         if (seq === fleetFetchSeqRef.current) setNodes(mappedNodes);
       }
     } catch {
-      // Fetch failed — still mark loading done so empty state can render if truly zero nodes.
     } finally {
       if (seq === fleetFetchSeqRef.current) setNodesLoading(false);
     }
   }, []);
 
-  // Fetch paired nodes from cloud on sign-in and on org switch (hosted only).
-  // The previous fleet's list is cleared first so it never shows under the
-  // new org (or after sign-out) while the fetch is in flight.
   const prevFleetScopeRef = useRef(`${isSignedIn}:${orgId}`);
   useEffect(() => {
     if (isLocalHost) return;
     const scope = `${isSignedIn}:${orgId}`;
     if (prevFleetScopeRef.current !== scope) {
       prevFleetScopeRef.current = scope;
-      fleetFetchSeqRef.current++; // invalidate any in-flight fetch for the old scope
+      fleetFetchSeqRef.current++;
       setNodes([]);
       setNodesLoading(isSignedIn);
     }
@@ -264,13 +190,9 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
     handleNodeAdded();
   }, [isSignedIn, orgId, handleNodeAdded]);
 
-  // Bootstrap local node on localhost — pairingInfo provides the node_id, and
-  // /api/metrics provides hostname + hardware data.  Without this, nodes[] stays
-  // empty and per-node Settings (idle watts, overrides) are never shown.
   useEffect(() => {
     if (!isLocalHost || !pairingInfo?.node_id) return;
     const nid = pairingInfo.node_id;
-    // Avoid duplicate if already populated (e.g. from a subsequent WS frame).
     setNodes(prev => {
       if (prev.some(n => n.id === nid)) return prev;
       return [{
@@ -291,9 +213,6 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
     });
   }, [pairingInfo?.node_id]);
 
-  // Callback for FleetStreamProvider — patches node hostnames and restricted flag when real metrics arrive.
-  // Runs on every SSE frame, so it returns `prev` itself when nothing changed —
-  // a fresh array each frame re-rendered AppCore and every tab that takes `nodes`.
   const handleNodesSnapshot = useCallback((snapshot: FleetNode[]) => {
     setNodes(prev => {
       const byId = new Map(snapshot.map(n => [n.node_id, n]));
@@ -302,7 +221,6 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
         const match = byId.get(node.id);
         if (!match) return node;
         const updates: Partial<typeof node> = {};
-        // Prefer display_name (Pro+ custom name) > metrics.hostname > node_id
         const resolvedHostname = match.display_name ?? match.metrics?.hostname ?? node.id;
         if (resolvedHostname !== node.hostname) {
           updates.hostname = resolvedHostname;
@@ -320,8 +238,6 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
 
   const permissions = usePermissions(currentUser);
   const fetchPairingStatus = useCallback(async () => {
-    // /api/pair/status only exists on the agent (localhost:7700).
-    // On wicklee.dev this endpoint 404s — skip entirely.
     if (!isLocalHost) return;
     try {
       const r = await fetch('/api/pair/status');
@@ -353,7 +269,6 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
   }, [pairingInfo?.status, fetchPairingStatus]);
 
 
-  // Always force dark mode class on the document
   useEffect(() => {
     document.documentElement.classList.add('dark');
   }, []);
@@ -365,14 +280,8 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
     setActiveTab(tab);
   };
 
-  const toggleTheme = () => {}; // Dark mode only — no-op
+  const toggleTheme = () => {};
 
-  // Metrics reference route — public, no auth required
-  // Metrics reference lives at /metrics-reference: on wicklee.dev, nginx
-  // exact-matches /metrics to the cloud's Prometheus scrape endpoint, so a
-  // hard refresh on the old path returned scrape text instead of this page.
-  // /metrics stays as a client-side alias for old bookmarks (SPA navigation
-  // and localhost agents still resolve it).
   if (
     currentPath === '/metrics-reference' || currentPath === '/metrics-reference/' ||
     currentPath === '/metrics' || currentPath === '/metrics/'
@@ -380,10 +289,7 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
     return lazyPage(<MetricsPage onNavigate={navigate} />);
   }
 
-  // Site and sign-in routes — absent from the agent build (see the Absent
-  // note at the top of this file); IS_AGENT folds this whole block away.
   if (!IS_AGENT) {
-    // Clerk sign-in / sign-up routes
     if (currentPath === '/sign-in' || currentPath.startsWith('/sign-in/')) {
       return <React.Suspense fallback={null}><SignInPage onNavigate={navigate} /></React.Suspense>;
     }
@@ -391,17 +297,14 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
       return <React.Suspense fallback={null}><SignUpPage onNavigate={navigate} /></React.Suspense>;
     }
 
-    // Documentation route — public, no auth required (trailing slash tolerant)
     if (currentPath === '/docs' || currentPath === '/docs/') {
       return lazyPage(<DocsPage onNavigate={navigate} />);
     }
 
-    // Trust & design-partner routes — public, no auth required
     if (currentPath === '/trust' || currentPath === '/trust/') {
       return lazyPage(<TrustPage onNavigate={navigate} />);
     }
 
-    // Legal routes — public, no auth required
     if (currentPath === '/terms' || currentPath === '/terms/') {
       return lazyPage(<LegalPage onNavigate={navigate} initialTab="terms" />);
     }
@@ -412,14 +315,11 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
       return lazyPage(<LegalPage onNavigate={navigate} initialTab="refund" />);
     }
 
-    // Blog routes — public, no auth required
     if (currentPath === '/blog' || currentPath === '/blog/') {
       return lazyPage(
         <BlogListing onNavigate={navigate} />,
       );
     }
-    // Trailing-slash tolerant — the prerendered static pages live at
-    // /blog/{slug}/index.html, so links may carry a trailing slash.
     const blogPostMatch = currentPath.match(/^\/blog\/([^/]+?)\/?$/);
     if (blogPostMatch) {
       return lazyPage(
@@ -428,16 +328,6 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
     }
   }
 
-  // Wait for Clerk before choosing landing-vs-dashboard — but only when there
-  // is evidence of a session to protect. This gate exists so a signed-in user
-  // never sees the landing page flash before the dashboard. It also made every
-  // signed-OUT visitor to / wait for ClerkJS to download from clerk.wicklee.dev
-  // and round-trip to Clerk's API to learn there is no session — a blank
-  // screen for the length of that on a phone, since React mounting has
-  // already replaced the prerendered block. Clerk leaves cookies on the app
-  // domain when a session exists; with none present, render the landing page
-  // now. If the hint is ever wrong, the failure mode is the old brief flash,
-  // not a broken page. See cloud/utils/clerkHint.ts.
   if (!isLocalHost && !isLoaded && hasClerkSessionHint(document.cookie)) return null;
 
   if (!IS_AGENT && !isLoggedIn) {
@@ -542,16 +432,6 @@ const AppCore: React.FC<AppCoreProps> = ({ isSignedIn, isLoaded, getToken, user,
   );
 };
 
-// Exported root component.
-// Agent builds: skip Clerk hooks entirely and render with local-mode defaults.
-// Cloud builds: index.tsx imports CloudApp (the Clerk-hooks bridge) alongside
-// @clerk/clerk-react and passes it in, so this file never references the Clerk
-// package and the agent bundle stays free of it. It is passed as a prop rather
-// than React.lazy'd here because a lazy boundary commits a null fallback and
-// React then throttles the reveal by ~300 ms on every cold load (see index.tsx).
-// Demo build: signed-in Team-tier user, no Clerk anywhere. The object only
-// needs the fields AppCore reads off the Clerk user (id, publicMetadata.tier,
-// primaryEmailAddress, fullName).
 const DEMO_USER = {
   id: 'demo-user',
   publicMetadata: { tier: 'team' },
@@ -573,10 +453,6 @@ const App: React.FC<AppProps> = ({ cloudApp: CloudApp }) => {
   }
   return <CloudApp AppCore={AppCore} />;
 };
-
-// ── DashboardShell ────────────────────────────────────────────────────────────
-// Inner component that lives inside FleetStreamProvider so it can call useFleetStream().
-// Renders the sidebar, header, content area (with stale-node banner), and footer.
 
 interface DashboardShellProps {
   nodes: NodeAgent[];
@@ -611,12 +487,9 @@ interface DashboardShellProps {
 const DashboardShell: React.FC<DashboardShellProps> = (props) => {
   const { connectionState, lastTelemetryMs, lastSeenMsMap, allNodeMetrics } = useFleetStream();
 
-  // On localhost, FleetStreamContext doesn't populate allNodeMetrics (the WS
-  // lives in Overview.tsx). Fetch agent_version directly via a one-shot API call.
   const [localAgentVersionDirect, setLocalAgentVersionDirect] = useState<string | undefined>();
   useEffect(() => {
     if (!isLocalHost) return;
-    // /api/metrics is an SSE stream; the snapshot is its latest frame as JSON.
     fetch('/api/metrics/snapshot')
       .then(r => r.ok ? r.json() : null)
       .then((d: Record<string, unknown> | null) => {
@@ -675,7 +548,6 @@ const DashboardShell: React.FC<DashboardShellProps> = (props) => {
       />
 
       <MobileTabBar activeTab={activeTab} setActiveTab={handleTabChange} />
-      {/* md:ml-16 — offset for collapsed sidebar rail (w-16 = 64px, fixed position) */}
       <main className="flex-1 flex flex-col overflow-hidden md:ml-16">
         <Header
           activeTab={activeTab}
@@ -693,7 +565,6 @@ const DashboardShell: React.FC<DashboardShellProps> = (props) => {
           isLocalHost={isLocalHost}
         />
 
-        {/* Version mismatch banner — appears when browser has a cached UI older than the running agent */}
         {showVersionBanner && (
           <div className="flex items-center gap-3 px-4 py-2.5 bg-amber-500/10 border-b border-amber-500/25 text-amber-300 text-xs">
             <RefreshCw className="w-3.5 h-3.5 shrink-0 text-amber-400" />
@@ -715,7 +586,6 @@ const DashboardShell: React.FC<DashboardShellProps> = (props) => {
         <div className="flex-1 overflow-y-auto p-4 md:p-6 pb-20 md:pb-6 scroll-smooth">
           <div className="max-w-7xl mx-auto space-y-6">
 
-            {/* Hosted: show stale-node warning if paired node hasn't sent telemetry in >30s */}
             {!isLocalHost && nodes.length > 0 && lastTelemetryMs !== null && (Date.now() - lastTelemetryMs > 30_000) && (
               <div className="w-full bg-amber-500/10 border border-amber-500/20 rounded-xl p-4 flex items-center gap-3 mb-6">
                 <WifiOff className="w-5 h-5 text-amber-500 shrink-0" />
@@ -781,7 +651,6 @@ const DashboardShell: React.FC<DashboardShellProps> = (props) => {
             )}
           </div>
           <div className="flex items-center gap-4">
-            {/* Version display removed — was unreliable across cloud/agent builds */}
           </div>
         </footer>
       </main>

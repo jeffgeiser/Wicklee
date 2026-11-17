@@ -2,18 +2,6 @@
 
 use crate::*;
 
-// ── Fleet model aggregation endpoints (v0.9.0+) ─────────────────────────────
-//
-// These mirror the localhost `/api/model-comparison`, `/api/model-switches`,
-// and `/api/cost-by-model` endpoints but aggregate across every node owned
-// by the authenticated tenant. Response shapes match the localhost shape
-// exactly so the frontend can re-use rendering logic verbatim.
-//
-// All three filter on `ollama_active_model IS NOT NULL`, so they will return
-// empty arrays until new telemetry has been ingested under the new schema.
-
-// Keep in sync with the frontend's ELECTRICITY_RATE_USD_PER_KWH
-// (src/utils/efficiency.ts) and the agent's kwh_rate defaults — all 0.16.
 pub(crate) const DEFAULT_KWH_RATE_USD: f32 = 0.16;
 
 /// GET /api/v1/fleet/model-comparison?hours=168
@@ -35,17 +23,14 @@ pub(crate) async fn handle_fleet_model_comparison(
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
-    // metrics rows are keyed by tenant (org id for org fleets) — binding the
-    // bare user_id returned permanently-empty responses for org users.
     let tenant_id = tenant_scope(&user_id, &org_id).1.to_string();
 
     let hours: i32 = params.get("hours")
         .and_then(|v| v.parse().ok())
         .unwrap_or(168)
-        .clamp(1, 720); // 30 days max
+        .clamp(1, 720);
     let kwh_rate = DEFAULT_KWH_RATE_USD;
 
-    // Each 5-min bucket = 5/60 hours. Cost = avg_watts * hours_active * kwh_rate / 1000.
     let interval = format!("{hours} hours");
     let rows: Vec<(String, Option<f32>, Option<f32>, Option<f32>, Option<f64>, i64)> = sqlx::query_as(
         "SELECT
@@ -65,8 +50,6 @@ pub(crate) async fn handle_fleet_model_comparison(
     .bind(&tenant_id).bind(&interval)
     .fetch_all(&state.pool).await.unwrap_or_default();
 
-    // TTFT lives in metrics_raw only; pull a side query for the rolling window
-    // we still have raw data for (last 24h). For older windows TTFT will be null.
     let ttft_rows: Vec<(String, Option<f32>)> = sqlx::query_as(
         "SELECT ollama_active_model, AVG(ttft_ms)::REAL
          FROM metrics_raw
@@ -125,8 +108,6 @@ pub(crate) async fn handle_fleet_model_switches(
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
-    // metrics rows are keyed by tenant (org id for org fleets) — binding the
-    // bare user_id returned permanently-empty responses for org users.
     let tenant_id = tenant_scope(&user_id, &org_id).1.to_string();
 
     let hours: i32 = params.get("hours")
@@ -135,13 +116,6 @@ pub(crate) async fn handle_fleet_model_switches(
         .clamp(1, 168);
     let interval = format!("{hours} hours");
 
-    // NOTE on typing: `to_model` is the un-cast `ollama_active_model` column
-    // which Postgres considers nullable TEXT, so sqlx will refuse to decode
-    // it into `String` even though the CTE filter guarantees NOT NULL at runtime.
-    // We type it as Option<String> to satisfy sqlx, then unwrap unconditionally
-    // at the json! step since the filter still applies. The prior version
-    // failed silently because .unwrap_or_default() swallowed the decode error
-    // and returned an empty Vec.
     let rows_result = sqlx::query_as::<_, (i64, String, Option<String>, Option<String>, Option<f64>)>(
         "WITH model_changes AS (
             SELECT
@@ -244,8 +218,6 @@ pub(crate) async fn handle_fleet_cost_by_model(
         None => return (StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
-    // metrics rows are keyed by tenant (org id for org fleets) — binding the
-    // bare user_id returned permanently-empty responses for org users.
     let tenant_id = tenant_scope(&user_id, &org_id).1.to_string();
 
     let hours: i32 = params.get("hours")
@@ -300,8 +272,6 @@ pub(crate) async fn handle_fleet_export(
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
 
-    // Export is Team+ only
-    // Org-aware: org members are entitled by the org subscription.
     let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
     if !is_team_or_above(&tier) {
         return upgrade_required("CSV/JSON export", UpgradePlan::Team);
@@ -366,17 +336,12 @@ pub(crate) async fn handle_fleet_export(
 
 /// Helper for converting range to epoch-based bucket seconds (stock Postgres compatible).
 pub(crate) fn time_bucket_for_range(range: &str) -> (i64, &str, bool) {
-    // Returns (bucket_seconds, lookback_interval, use_raw)
-    // Using epoch-based bucketing instead of TimescaleDB time_bucket()
-    // so it works on stock Postgres without TimescaleDB extension.
     match range {
         "1h"  => (60,     "1 hour",   true),
         "24h" => (300,    "24 hours",  true),
         "7d"  => (1800,   "7 days",   false),
         "30d" => (7200,   "30 days",  false),
         "90d" => (21600,  "90 days",  false),
-        // Daily buckets over the full metrics_5min retention (nightly prune
-        // keeps 365 days) — 365 points per node.
         "1y"  => (86400,  "365 days", false),
         _     => (300,    "24 hours",  true),
     }
@@ -390,7 +355,6 @@ pub(crate) fn range_upgrade_plan(tier: &str, range: &str) -> Option<UpgradePlan>
         "1y" if !is_business_or_above(tier) => Some(UpgradePlan::Enterprise),
         "30d" | "90d" if !is_team_or_above(tier) => Some(UpgradePlan::Team),
         "7d" if !is_pro_or_above(tier) => Some(UpgradePlan::Team),
-        // Unknown ranges fall back to 24h in time_bucket_for_range.
         _ => None,
     }
 }
@@ -418,17 +382,12 @@ pub(crate) async fn handle_wes_history(
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
 
-    // Tier enforcement
-    // Org-aware: org members are entitled by the org subscription.
     let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
 
-    // Was `match tier { "team" | "enterprise" => true, .. }`, which left
-    // Business out of 30d/90d and would have left team_10 out too.
     if let Some(plan) = range_upgrade_plan(&tier, &range) {
         return upgrade_required(&format!("Range '{range}'"), plan);
     }
 
-    // Enumerate user's nodes
     let (tcol, tval) = tenant_scope(&user_id, &org_id);
     let node_rows: Vec<(String, Option<String>)> = sqlx::query_as(
         &format!("SELECT wk_id, hostname FROM nodes WHERE {tcol} = $1 ORDER BY last_seen DESC")
@@ -438,7 +397,6 @@ pub(crate) async fn handle_wes_history(
         return Json(serde_json::json!({ "range": range, "nodes": [] })).into_response();
     }
 
-    // Enrich hostnames from live cache
     let node_rows: Vec<(String, Option<String>)> = {
         let metrics_map = state.metrics.read().unwrap();
         node_rows.into_iter().map(|(nid, stored_hostname)| {
@@ -487,12 +445,6 @@ pub(crate) async fn handle_wes_history(
                     serde_json::json!({ "ts_ms": ts, "raw_wes": rw, "penalized_wes": pw, "thermal_state": thermal })
                 }).collect()
         } else {
-            // metrics_5min only holds buckets older than 24h (run_rollup's
-            // cutoff), so reading it alone left a permanent 24-hour hole at
-            // the right edge of every 7d/30d/90d chart. UNION the raw tail
-            // for the trailing day. Only the boundary bucket can mix
-            // pre-averaged 5-min rows with raw rows (slight weighting skew
-            // there — accepted vs. a missing day).
             let sql = format!(
                 "SELECT (floor(EXTRACT(EPOCH FROM ts) / {bucket_secs}) * {bucket_secs} * 1000)::bigint AS bucket_ms,
                         AVG(raw)  AS raw_wes,
@@ -577,28 +529,20 @@ pub(crate) async fn handle_thermal_budget(
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
 
-    // Pro+ tier gate (uses 7-day Postgres history Pro tier buys).
-    // Org-aware: org members are entitled by the org subscription.
     let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
     if !is_pro_or_above(&tier) {
         return upgrade_required("Thermal Budget", UpgradePlan::Team);
     }
 
-    // Verify ownership.
     let owns = node_in_tenant(&node_id, &user_id, &org_id, &state.pool).await;
     if !owns {
         return (StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": "Node not found" }))).into_response();
     }
 
-    // Tenant scope from the NODE row — the same rule telemetry writes with.
-    // (The previous query selected org_id from `users`, a column that table
-    // doesn't have; it errored on every call and fell back to user_id,
-    // returning empty windows for org-paired nodes.)
     let tenant_id: String = node_tenant_id(&node_id, &state.pool).await
         .unwrap_or_else(|| user_id.clone());
 
-    // Pull last 7 days of 5-min rollups in chronological order.
     let rows: Vec<(i64, Option<f32>, Option<f32>, Option<String>)> = sqlx::query_as(
         "SELECT (EXTRACT(EPOCH FROM ts) * 1000)::bigint AS ts_ms,
                 tok_s_avg, watts_avg, thermal_state_worst
@@ -610,7 +554,6 @@ pub(crate) async fn handle_thermal_budget(
       .fetch_all(&state.pool).await.unwrap_or_default();
 
     if rows.len() < 12 {
-        // Need at least ~1 hour of data to compute anything useful.
         return Json(serde_json::json!({
             "node_id": node_id,
             "samples_analyzed": rows.len(),
@@ -619,13 +562,6 @@ pub(crate) async fn handle_thermal_budget(
         })).into_response();
     }
 
-    // Walk the samples to identify:
-    //   - Sustained Normal blocks (≥6 consecutive samples = 30 min)
-    //   - Normal→Fair/Serious/Critical transitions
-    //
-    // For each Normal block that ended in a transition, capture the median
-    // tok/s of the trailing 2 samples (10 min) — that's the load level that
-    // pushed the node into thermal trouble.
     #[derive(Default)]
     struct Block {
         end_idx: usize,
@@ -634,7 +570,7 @@ pub(crate) async fn handle_thermal_budget(
 
     let mut sustained_normal_max_tps: f32 = 0.0;
     let mut sustained_normal_max_watts: f32 = 0.0;
-    let mut transitions: Vec<(f32, f32, usize)> = Vec::new(); // (push_tps, push_watts, block_len_samples)
+    let mut transitions: Vec<(f32, f32, usize)> = Vec::new();
     let mut cur = Block::default();
     let mut in_normal = false;
 
@@ -648,16 +584,12 @@ pub(crate) async fn handle_thermal_budget(
                 cur.end_idx = i;
                 cur.len += 1;
             }
-            // Track sustainable_tps over Normal blocks ≥ 30 min.
             if cur.len >= 6 {
                 if let Some(t) = tps && *t > sustained_normal_max_tps { sustained_normal_max_tps = *t; }
                 if let Some(w) = watts && *w > sustained_normal_max_watts { sustained_normal_max_watts = *w; }
             }
         } else {
-            // Non-Normal sample. If we were in a Normal block, this is a
-            // transition. Capture the load level that pushed us out.
             if in_normal && cur.len >= 2 {
-                // Median tok/s of the trailing 2 samples (10 min before transition).
                 let tail_start = cur.end_idx.saturating_sub(1);
                 let tail: Vec<f32> = rows[tail_start..=cur.end_idx]
                     .iter()
@@ -686,7 +618,6 @@ pub(crate) async fn handle_thermal_budget(
         let sum: f32 = transitions.iter().map(|(_, w, _)| *w).sum();
         Some(sum / transitions.len() as f32)
     } else { None };
-    // Block length is in 5-min samples; convert to minutes.
     let time_to_fair_min: Option<f32> = if !transitions.is_empty() {
         let sum: usize = transitions.iter().map(|(_, _, l)| *l).sum();
         Some((sum as f32 / transitions.len() as f32) * 5.0)
@@ -694,19 +625,14 @@ pub(crate) async fn handle_thermal_budget(
 
     let fair_penalized_tps: Option<f32> = push_threshold_tps.map(|t| t / 1.25);
 
-    // Confidence — heuristic based on transitions observed and samples.
     let confidence = if transitions_n >= 4 && rows.len() >= 200 { "high" }
                      else if transitions_n >= 2 && rows.len() >= 100 { "medium" }
                      else if rows.len() >= 50 { "low" }
                      else { "insufficient" };
 
-    // Generate advice. Compares 1-hour token output of "stay sustainable"
-    // vs "push then drop to penalized" once a transition happens.
     let advice: String = match (push_threshold_tps, fair_penalized_tps, time_to_fair_min, sustained_normal_max_tps > 0.0) {
         (Some(push), Some(fair), Some(ttf), true) if ttf < 60.0 => {
-            // Tokens over 1 hour at sustainable rate.
             let sustained_tokens = sustained_normal_max_tps as f64 * 3600.0;
-            // Tokens over 1 hour pushing: push_tps for ttf min, then fair_penalized for remainder.
             let push_seconds = (ttf as f64 * 60.0).min(3600.0);
             let fair_seconds = (3600.0 - push_seconds).max(0.0);
             let push_tokens = push as f64 * push_seconds + fair as f64 * fair_seconds;
@@ -769,12 +695,8 @@ pub(crate) async fn handle_metrics_history(
             Json(serde_json::json!({ "error": "Invalid or expired session" }))).into_response(),
     };
 
-    // Tier enforcement
-    // Org-aware: org members are entitled by the org subscription.
     let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
 
-    // Was `match tier { "team" | "enterprise" => true, .. }`, which left
-    // Business out of 30d/90d and would have left team_10 out too.
     if let Some(plan) = range_upgrade_plan(&tier, &range) {
         return upgrade_required(&format!("Range '{range}'"), plan);
     }
@@ -839,10 +761,6 @@ pub(crate) async fn handle_metrics_history(
                     serde_json::json!({ "ts_ms": ts, "tok_s": toks, "tok_s_p95": toksp95, "watts": w, "gpu_pct": gpu, "mem_pct": mem, "duty_pct": duty, "cpu_pct": cpu, "swap_write": swap, "ttft_ms": ttft, "e2e_latency_ms": e2e, "wes_score": wes })
                 }).collect()
         } else {
-            // metrics_5min only holds buckets older than 24h (run_rollup's
-            // cutoff) — UNION the raw tail so 7d/30d/90d charts don't have a
-            // permanent 24-hour hole at the right edge. See handle_wes_history
-            // for the boundary-bucket weighting caveat.
             let sql = format!(
                 "SELECT (floor(EXTRACT(EPOCH FROM ts) / {bucket_secs}) * {bucket_secs} * 1000)::bigint AS bucket_ms,
                         AVG(tok_s)      AS tok_s,
@@ -969,8 +887,6 @@ pub(crate) async fn handle_fleet_duty(
     })).into_response()
 }
 
-// ── Node naming (Pro+) ───────────────────────────────────────────────────────
-
 #[derive(Deserialize)]
 pub(crate) struct UpdateNodeRequest {
     pub(crate) display_name: Option<String>,
@@ -1067,13 +983,11 @@ pub(crate) async fn handle_update_node(
     };
     if !role.can_mutate() { return role_forbidden("member"); }
 
-    // Org-aware: org members are entitled by the org subscription.
     let tier = resolve_tier(&user_id, &org_id, &state.pool).await;
     if !is_pro_or_above(&tier) {
         return upgrade_required("Node naming", UpgradePlan::Team);
     }
 
-    // Verify the node belongs to this user
     let owns = node_in_tenant(&node_id, &user_id, &org_id, &state.pool).await;
     if !owns {
         return (StatusCode::NOT_FOUND,
@@ -1108,7 +1022,6 @@ pub(crate) async fn handle_update_node(
             .bind(&val).bind(&node_id).execute(&state.pool).await;
     }
 
-    // Return updated node info
     let row: Option<(String, Option<String>, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
         "SELECT wk_id, hostname, display_name, tags, desired_profile FROM nodes WHERE wk_id = $1"
     ).bind(&node_id).fetch_optional(&state.pool).await.ok().flatten();
@@ -1141,13 +1054,11 @@ mod range_gate_tests {
         }
         assert!(range_upgrade_plan("business", "1y").is_none());
         assert!(range_upgrade_plan("enterprise", "1y").is_none());
-        // Existing ladder is unchanged.
         assert!(range_upgrade_plan("community", "24h").is_none());
         assert!(matches!(range_upgrade_plan("community", "7d"), Some(UpgradePlan::Team)));
         assert!(range_upgrade_plan("pro", "7d").is_none());
         assert!(matches!(range_upgrade_plan("pro", "90d"), Some(UpgradePlan::Team)));
         assert!(range_upgrade_plan("team_10", "90d").is_none());
-        // Daily buckets across the full 365-day metrics_5min retention.
         assert_eq!(time_bucket_for_range("1y"), (86400, "365 days", false));
     }
 }

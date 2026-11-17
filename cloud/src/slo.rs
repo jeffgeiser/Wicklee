@@ -2,8 +2,6 @@
 
 use crate::*;
 
-// ── SLOs with error budgets (Team+) ──────────────────────────────────────────
-
 /// The three SLIs computable from cloud-side metrics_raw samples — latency,
 /// throughput, efficiency. (Per-request percentiles live agent-side in
 /// inference_traces; these are sampled-telemetry SLIs, documented as such.)
@@ -246,7 +244,6 @@ pub(crate) async fn slo_evaluator_task(pool: sqlx::PgPool) {
             let tier = resolve_tier(&user_id, &org_id, &pool).await;
             if !is_team_or_above(&tier) { continue; }
 
-            // ── Compute the SLI for the just-completed window ──
             let (agg, filter) = slo_metric_sql(&metric);
             let sql = format!(
                 "SELECT ({agg})::float8 FROM metrics_raw m
@@ -271,7 +268,6 @@ pub(crate) async fn slo_evaluator_task(pool: sqlx::PgPool) {
             ).bind(&id).bind(window_end).bind(sli).bind(ok)
             .execute(&pool).await;
 
-            // ── Error-budget burn check (rolling 30d) ──
             let (total, bad): (i64, i64) = sqlx::query_as(
                 "SELECT COUNT(*) FILTER (WHERE ok IS NOT NULL), COUNT(*) FILTER (WHERE ok = false)
                  FROM slo_windows WHERE slo_id = $1 AND ts > $2"
@@ -296,8 +292,6 @@ pub(crate) async fn slo_evaluator_task(pool: sqlx::PgPool) {
                 }
                 eprintln!("[slo] budget burn {burn:.0}% on \"{name}\" (level {level})");
             }
-            // Persist the level (also resets to 0 once burn recovers below 25%
-            // as the rolling window ages bad slices out).
             let new_level: i16 = if burn < 25.0 { 0 } else { level.max(last_notified) };
             if new_level != last_notified {
                 let _ = sqlx::query("UPDATE slo_definitions SET last_burn_notified = $1 WHERE id = $2")
@@ -313,11 +307,9 @@ mod slo_tests {
 
     #[test]
     fn sli_direction_per_metric() {
-        // TTFT: lower is better — at or under threshold passes.
         assert!(sli_ok("ttft_p95_ms", 450.0, 500.0));
         assert!(sli_ok("ttft_p95_ms", 500.0, 500.0));
         assert!(!sli_ok("ttft_p95_ms", 501.0, 500.0));
-        // Throughput / efficiency: higher is better.
         assert!(sli_ok("tok_s_p50", 25.0, 20.0));
         assert!(!sli_ok("tok_s_p50", 19.9, 20.0));
         assert!(sli_ok("wes_p50", 8.0, 8.0));
@@ -331,8 +323,6 @@ mod slo_tests {
             assert!(agg.contains("percentile_cont"), "{m} aggregate");
             assert!(filter.contains("IS NOT NULL"), "{m} filter");
         }
-        // Creation validates membership, so unknown metric strings can't
-        // reach slo_metric_sql's fallback arm at runtime.
         assert_eq!(SLO_METRICS.len(), 3);
     }
 }

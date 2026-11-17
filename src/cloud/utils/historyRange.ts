@@ -12,7 +12,7 @@ export type TimeRange = '1h' | '24h' | '7d' | '30d' | '90d' | '1y';
 export const RANGE_CONFIG: Record<TimeRange, {
   label:      string;
   minTier:    SubscriptionTier;
-  historyMin: number;    // historyDays required
+  historyMin: number;
   fmtTs:      (ms: number) => string;
 }> = {
   '1h':  { label: '1H',  minTier: 'community', historyMin: 1,  fmtTs: (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) },
@@ -20,9 +20,6 @@ export const RANGE_CONFIG: Record<TimeRange, {
   '7d':  { label: '7D',  minTier: 'pro',       historyMin: 7,  fmtTs: (ms) => new Date(ms).toLocaleDateString([], { month: 'numeric', day: 'numeric' }) },
   '30d': { label: '30D', minTier: 'team',      historyMin: 30, fmtTs: (ms) => new Date(ms).toLocaleDateString([], { month: 'numeric', day: 'numeric' }) },
   '90d': { label: '90D', minTier: 'team',      historyMin: 90, fmtTs: (ms) => new Date(ms).toLocaleDateString([], { month: 'short', day: 'numeric' }) },
-  // Full metrics_5min retention (365-day nightly prune), daily buckets.
-  // minTier is 'business' so grandfathered Business keeps it; the upgrade
-  // label below names Enterprise, the plan actually sold.
   '1y':  { label: '1Y',  minTier: 'business',  historyMin: 365, fmtTs: (ms) => new Date(ms).toLocaleDateString([], { month: 'short', day: 'numeric' }) },
 };
 
@@ -31,9 +28,6 @@ export const RANGES: TimeRange[] = ['1h', '24h', '7d', '30d', '90d', '1y'];
 /** "Requires <tier>" label for a locked range; empty for Community ranges. */
 export function tierUpgradeLabel(minTier: SubscriptionTier): string {
   if (minTier === 'community') return '';
-  // Pro and Business are retired (kept only for grandfathered accounts), so a
-  // locked range sells the plan on /pricing: Pro-level → Team, Business-level
-  // → Enterprise.
   if (minTier === 'pro') return tierLabel('team');
   return tierLabel(minTier === 'business' ? 'enterprise' : minTier);
 }

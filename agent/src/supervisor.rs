@@ -62,19 +62,15 @@ where
         let mut backoff = BACKOFF_START;
         loop {
             let started = std::time::Instant::now();
-            // Run the task as its own child so a panic surfaces as a JoinError
-            // here instead of unwinding the supervisor.
             let outcome = tokio::spawn(make()).await;
             let ran_for = started.elapsed();
 
             match outcome {
                 Ok(ControlFlow::Break(())) => {
-                    // Deliberate permanent stop — done supervising.
                     eprintln!("[supervisor] task '{name}' stopped intentionally; not restarting");
                     break;
                 }
                 Err(e) if e.is_cancelled() => {
-                    // Runtime is shutting down — stop supervising.
                     break;
                 }
                 Err(_) => {
@@ -84,8 +80,6 @@ where
                     );
                 }
                 Ok(ControlFlow::Continue(())) => {
-                    // Infinite loops shouldn't return; if one does, treat it as
-                    // a fault and restart so the subsystem doesn't go dark.
                     eprintln!(
                         "[supervisor] task '{name}' exited after {:?}; restarting in {:?}",
                         ran_for, backoff,
@@ -95,9 +89,9 @@ where
 
             tokio::time::sleep(backoff).await;
             backoff = if ran_for >= HEALTHY_RUN {
-                BACKOFF_START // was healthy; isolated failure
+                BACKOFF_START
             } else {
-                (backoff * 2).min(BACKOFF_MAX) // fast failure; escalate
+                (backoff * 2).min(BACKOFF_MAX)
             };
         }
     });
@@ -120,11 +114,9 @@ mod tests {
                 if n == 0 {
                     panic!("first run panics");
                 }
-                // Second run: sleep long enough to be observed as alive.
                 tokio::time::sleep(Duration::from_secs(10)).await;
             }
         });
-        // Backoff after the first failure is 1s; wait well past it (CI slack).
         tokio::time::sleep(Duration::from_millis(2_500)).await;
         assert!(
             runs.load(Ordering::SeqCst) >= 2,
@@ -140,7 +132,7 @@ mod tests {
             let r = r.clone();
             async move {
                 r.fetch_add(1, Ordering::SeqCst);
-                ControlFlow::Break(()) // deliberate permanent stop
+                ControlFlow::Break(())
             }
         });
         tokio::time::sleep(Duration::from_millis(1_500)).await;
@@ -158,7 +150,6 @@ mod tests {
             let r = r.clone();
             async move {
                 r.fetch_add(1, Ordering::SeqCst);
-                // Returns immediately — supervisor must restart it.
             }
         });
         tokio::time::sleep(Duration::from_millis(2_500)).await;

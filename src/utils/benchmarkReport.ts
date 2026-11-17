@@ -15,49 +15,36 @@ import { computeRawWES, computeWES, thermalCostPct, thermalSourceLabel } from '.
 import type { SentinelMetrics } from '../types';
 import { getNodePowerW } from './power';
 
-// ── Constants ─────────────────────────────────────────────────────────────────
-
 /** Fallback version when node.agent_version is unavailable (legacy agents). */
 const WICKLEE_VERSION_FALLBACK = 'v0.6.0';
 
-// ── Report type ───────────────────────────────────────────────────────────────
-
 export interface BenchmarkReport {
-  // Provenance
-  generatedAt:    string;   // ISO 8601
+  generatedAt:    string;
   wickleeVersion: string;
 
-  // Node identity
   nodeId:   string;
   hostname: string | null;
-  hardware: string | null;  // gpu_name → chip_name → null
+  hardware: string | null;
   os:       string | null;
 
-  // Inference runtime
   runtime:      'ollama' | 'vllm' | 'unknown';
   model:        string | null;
   quantization: string | null;
 
-  // Raw performance readings
   tokensPerSec: number | null;
   watts:        number | null;
 
-  // WES computed values
   rawWes:         number | null;
   penalizedWes:   number | null;
-  thermalCostPct: number;   // 0 when no thermal gap
+  thermalCostPct: number;
 
-  // Thermal metadata
   thermalState:  string | null;
   thermalSource: string | null;
   wesVersion:    number;
 
-  // Optional: which history window this came from (history-path only)
   historyRange?: string;
   historyTsMs?:  number;
 }
-
-// ── Factory: live SentinelMetrics ─────────────────────────────────────────────
 
 export function buildReportFromLive(node: SentinelMetrics): BenchmarkReport {
   const tps    = node.ollama_tokens_per_second ?? node.vllm_tokens_per_sec ?? null;
@@ -93,8 +80,6 @@ export function buildReportFromLive(node: SentinelMetrics): BenchmarkReport {
   };
 }
 
-
-// ── Formatters ────────────────────────────────────────────────────────────────
 
 function fmt(v: number | null, decimals = 3, unit = ''): string {
   if (v == null) return '—';
@@ -159,8 +144,6 @@ export function formatReportMarkdown(r: BenchmarkReport): string {
 export function formatReportJSON(r: BenchmarkReport): string {
   return JSON.stringify(r, null, 2);
 }
-
-// ── Download helper ───────────────────────────────────────────────────────────
 
 export function downloadReport(content: string, filename: string): void {
   const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });

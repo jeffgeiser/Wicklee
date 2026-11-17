@@ -7,9 +7,6 @@ interface LandingPageProps {
   onNavigate?: (path: string) => void;
 }
 
-/* The three evidence labels, which are the page's actual argument: a tool that
-   tells you what it saw, what it is guessing, and what it measured is worth
-   more than one that reports everything in the same confident voice. */
 const labels = [
   {
     icon: Eye,
@@ -39,10 +36,6 @@ const commands = [
   { cmd: 'wicklee verify F-xxxxxx', what: "Re-run a finding's own test and compare against the last run" },
 ];
 
-/* Real output, from the fault-injection run on a 16 GB M4 Mac mini. Two of
-   that run's five findings. The whole transcript is in the repository at
-   docs/bench-fault-inject-m4-2026-11-15.json — if this block is ever edited,
-   edit it to match a run, not to read better. */
 const inspectOutput = `WHAT IS HAPPENING
   F-7fff93  OBSERVED  qwen3.5:4b was reloaded at the default 4096-token context 4
                       times in the last 5 minutes, dropping from as high as 8192
@@ -77,13 +70,11 @@ const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
 
   return (
     <div className="min-h-screen bg-gray-900 text-gray-100 selection:bg-blue-600 selection:text-white">
-      {/* Background Decor */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
         <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-blue-600/10 blur-[120px] rounded-full"></div>
         <div className="absolute bottom-[-10%] right-[-10%] w-[30%] h-[30%] bg-cyan-400/10 blur-[120px] rounded-full"></div>
       </div>
 
-      {/* Navigation */}
       <nav className="max-w-7xl mx-auto px-4 sm:px-8 py-5 sm:py-8 flex items-center justify-between relative z-10">
         <Logo className="text-3xl" connectionState="connected" />
         <div className="flex items-center gap-4 sm:gap-8">
@@ -100,11 +91,6 @@ const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
         </div>
       </nav>
 
-      {/* ── Hero ─────────────────────────────────────────────────────────────
-          Eyebrow is the category, headline is the developer-facing message
-          from docs/STRATEGY.md §2. One CTA, and it goes to the install block:
-          there is no account to create and nothing to buy.
-      ──────────────────────────────────────────────────────────────────────── */}
       <section className="max-w-5xl mx-auto px-4 sm:px-8 pt-12 sm:pt-20 pb-14 sm:pb-24 text-center relative z-10">
         <p className="text-[11px] sm:text-xs font-bold uppercase tracking-[0.2em] text-cyan-400/80 mb-5">
           Inference evidence and readiness intelligence
@@ -134,12 +120,10 @@ const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
         </p>
       </section>
 
-      {/* Install Command Section */}
       <section id="install-snippet" className="max-w-3xl mx-auto px-4 sm:px-8 pb-16 sm:pb-28 relative z-10 scroll-mt-20">
         <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 sm:p-6 shadow-2xl relative overflow-hidden">
           <div className="absolute inset-0 bg-blue-500/5 pointer-events-none"></div>
           <div className="relative z-10 space-y-4">
-            {/* macOS / Linux */}
             <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
               <div className="font-mono text-sm overflow-x-auto w-full space-y-2 min-w-0">
                 <p className="text-zinc-500 whitespace-nowrap"># macOS &amp; Linux &nbsp;<span className="text-green-500/70">— no sudo, installs to ~/.wicklee/bin/</span></p>
@@ -160,7 +144,6 @@ const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
                 }
               </button>
             </div>
-            {/* Windows */}
             <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 pt-3 border-t border-zinc-800">
               <div className="font-mono text-sm overflow-x-auto w-full space-y-2 min-w-0">
                 <p className="text-zinc-500 whitespace-nowrap"># Windows (PowerShell, Admin)</p>
@@ -185,7 +168,6 @@ const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
         </div>
       </section>
 
-      {/* ── Find, fix, verify ────────────────────────────────────────────── */}
       <section className="max-w-7xl mx-auto px-4 sm:px-8 py-16 sm:py-24 border-t border-gray-800 relative z-10">
         <h2 className="text-3xl sm:text-4xl font-bold text-white tracking-tight text-center mb-4">
           Find it, fix it, prove the fix worked.
@@ -226,7 +208,6 @@ const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
         </div>
       </section>
 
-      {/* ── Real output ──────────────────────────────────────────────────── */}
       <section className="max-w-5xl mx-auto px-4 sm:px-8 pb-16 sm:pb-28 relative z-10">
         <div className="flex items-center gap-3 mb-5">
           <Terminal className="w-4 h-4 text-gray-500" />
@@ -251,7 +232,6 @@ const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
         </p>
       </section>
 
-      {/* ── Evidence labels ─────────────────────────────────────────────── */}
       <section className="max-w-7xl mx-auto px-4 sm:px-8 py-16 sm:py-24 border-t border-gray-800 relative z-10">
         <h2 className="text-3xl sm:text-4xl font-bold text-white tracking-tight text-center mb-4">
           Every line says what kind of claim it is.
@@ -279,7 +259,6 @@ const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
         </div>
       </section>
 
-      {/* ── The command surface ─────────────────────────────────────────── */}
       <section className="max-w-5xl mx-auto px-4 sm:px-8 pb-16 sm:pb-28 relative z-10">
         <h2 className="text-2xl sm:text-3xl font-bold text-white tracking-tight mb-3">
           Five commands
@@ -312,7 +291,6 @@ const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
         </div>
       </section>
 
-      {/* ── What it will not do ─────────────────────────────────────────── */}
       <section className="max-w-7xl mx-auto px-4 sm:px-8 py-16 sm:py-24 border-t border-gray-800 relative z-10">
         <div className="flex items-center gap-3 mb-5 justify-center">
           <ShieldCheck className="w-5 h-5 text-emerald-400" />
@@ -351,11 +329,6 @@ const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
         </div>
       </section>
 
-      {/* ── What is known wrong ─────────────────────────────────────────────
-          On the landing page on purpose. The displacement result is the most
-          interesting thing measurement turned up, and a tool whose pitch is
-          evidence cannot bury its own negative result three clicks deep.
-      ──────────────────────────────────────────────────────────────────────── */}
       <section className="max-w-4xl mx-auto px-4 sm:px-8 pb-20 sm:pb-32 relative z-10">
         <div className="rounded-[32px] border border-yellow-500/25 bg-yellow-500/[0.03] p-7 sm:p-10">
           <p className="text-xs font-bold text-yellow-400 uppercase tracking-widest mb-4">
@@ -392,7 +365,6 @@ const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
         </div>
       </section>
 
-      {/* Footer */}
       <footer className="border-t border-gray-800 py-16 text-center text-sm text-gray-500">
         <p>&copy; 2026 Wicklee OSS Project. Apache 2.0.</p>
         <div className="flex flex-wrap items-center justify-center gap-6 mt-4">

@@ -1,11 +1,4 @@
-// `type_complexity` is allowed crate-wide: the flagged sites are sqlx row
-// tuples and axum handler signatures, where a named alias per call site adds
-// indirection without adding meaning. Every other clippy lint is enforced
-// (-D warnings in CI).
 #![allow(clippy::type_complexity)]
-// `result_large_err`: auth helpers return Err(axum Response) as an early
-// return — the idiom throughout this file. Boxing the Response would ripple
-// into every caller for no benefit on a cold path. (Fires on clippy ≥1.98.)
 #![allow(clippy::result_large_err)]
 
 use axum::{
@@ -30,9 +23,6 @@ use uuid::Uuid;
 
 mod scoring;
 
-// Feature modules. Each does `use crate::*;`, so crate-root items (payload
-// types, AppState, tier helpers) and every module's pub(crate) items are in
-// scope everywhere through these glob imports.
 mod migrations;
 use migrations::*;
 mod auth;
@@ -75,14 +65,6 @@ mod tests;
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use tokio::sync::mpsc;
 
-// ── Shared payload shape — must stay in sync with the agent ──────────────────
-//
-// IMPORTANT: Every field the agent's MetricsPayload serializes must appear here.
-// Serde silently drops unknown fields during deserialization — any field missing
-// from this struct is lost before it reaches the in-memory cache and SSE stream.
-// The SSE stream serves `entry.metrics` verbatim; the fleet frontend depends on
-// receiving every field the agent sends.
-
 /// Per-model live metrics — mirrors agent's ModelLiveMetrics.
 #[derive(Deserialize, Serialize, Clone, Default, Debug)]
 struct CloudModelLiveMetrics {
@@ -116,7 +98,6 @@ struct MetricsPayload {
     available_memory_mb:            u64,
     cpu_core_count:                 usize,
     timestamp_ms:                   u64,
-    // Apple Silicon deep-metal
     #[serde(default)]
     gpu_wired_limit_mb:             Option<u64>,
     cpu_power_w:                    Option<f32>,
@@ -131,13 +112,11 @@ struct MetricsPayload {
     gpu_utilization_percent:        Option<f32>,
     memory_pressure_percent:        Option<f32>,
     thermal_state:                  Option<String>,
-    // NVIDIA
     nvidia_gpu_utilization_percent: Option<f32>,
     nvidia_vram_used_mb:            Option<u64>,
     nvidia_vram_total_mb:           Option<u64>,
     nvidia_gpu_temp_c:              Option<u32>,
     nvidia_power_draw_w:            Option<f32>,
-    // Ollama runtime
     #[serde(default)]
     ollama_running:       bool,
     #[serde(default)]
@@ -183,8 +162,6 @@ struct MetricsPayload {
     /// True during probe and 40s afterward — frontend uses for IDLE-SPD display.
     #[serde(default)]
     ollama_is_probing: Option<bool>,
-    // Ollama model architecture (from /api/show) — used for KV cache / context runway math.
-    // These were previously dropped on cloud ingestion, causing Max CTX to always show —.
     #[serde(default)]
     ollama_context_length:  Option<u64>,
     #[serde(default)]
@@ -202,7 +179,6 @@ struct MetricsPayload {
     /// CPU architecture: "x86_64" | "aarch64".
     #[serde(default)]
     arch: Option<String>,
-    // vLLM runtime
     #[serde(default)]
     vllm_running:          bool,
     #[serde(default)]
@@ -234,7 +210,6 @@ struct MetricsPayload {
     vllm_prompt_tokens_total: Option<u64>,
     #[serde(default)]
     vllm_generation_tokens_total: Option<u64>,
-    // llama.cpp / llama-box runtime
     #[serde(default)]
     llamacpp_running:          bool,
     #[serde(default)]
@@ -243,7 +218,6 @@ struct MetricsPayload {
     llamacpp_tokens_per_sec:   Option<f32>,
     #[serde(default)]
     llamacpp_slots_processing: Option<u32>,
-    // ── WES v2 thermal-penalty window ─────────────────────────────────────────
     #[serde(default)]
     penalty_avg:    Option<f32>,
     #[serde(default)]
@@ -254,7 +228,6 @@ struct MetricsPayload {
     sample_count:   Option<u32>,
     #[serde(default)]
     wes_version:    Option<u8>,
-    // ── Deep Metal expansion (v0.4.30+) ───────────────────────────────────────
     #[serde(default)]
     swap_write_mb_s:     Option<f32>,
     #[serde(default)]
@@ -263,14 +236,12 @@ struct MetricsPayload {
     pcie_link_width:     Option<u32>,
     #[serde(default)]
     pcie_link_max_width: Option<u32>,
-    // ── Per-model WES baseline (v0.7.8+) ───────────────────────────────────────
     #[serde(default)]
     model_baseline_tps:     Option<f32>,
     #[serde(default)]
     model_baseline_wes:     Option<f32>,
     #[serde(default)]
     model_baseline_samples: Option<u32>,
-    // ── Agent identity + state (v0.5.10+) ─────────────────────────────────────
     /// Compile-time agent version from Cargo.toml.
     #[serde(default)]
     agent_version:   Option<String>,
@@ -278,12 +249,10 @@ struct MetricsPayload {
     /// SSOT — fleet frontend must display this directly, never re-derive.
     #[serde(default)]
     inference_state: Option<String>,
-    // ── Live Activity events (v0.5.16+) ──────────────────────────────────────
     /// Ephemeral lifecycle events drained from the agent on each broadcast tick.
     /// Persisted to cloud `node_events` for fleet event history.
     #[serde(default)]
     live_activities: Vec<LiveActivityEventPayload>,
-    // ── Agent-evaluated observations (v0.7.11+, Phase 7) ────────────────────
     /// Pattern observations evaluated by the agent against its local DuckDB buffer.
     /// Pushed to cloud for fleet dashboard rendering.  Empty for old agents.
     #[serde(default)]
@@ -324,8 +293,6 @@ struct LiveActivityEventPayload {
     event_type:   Option<String>,
 }
 
-// ── Auth request / response types ────────────────────────────────────────────
-
 #[derive(Deserialize)]
 struct SignupRequest {
     email:     String,
@@ -356,8 +323,6 @@ struct AuthResponse {
     token: String,
     user:  UserResponse,
 }
-
-// ── Fleet request / response types ───────────────────────────────────────────
 
 #[derive(Deserialize)]
 struct ClaimRequest {
@@ -391,26 +356,26 @@ struct MetricsEntry {
 struct MetricsRow {
     node_id:          String,
     ts_ms:            i64,
-    tenant_id:        String,           // user_id; set after node lookup
+    tenant_id:        String,
     tok_s:            Option<f32>,
     watts:            Option<f32>,
-    wes_raw:          Option<f32>,      // tok_s / watts, no penalty
-    wes_penalized:    Option<f32>,      // tok_s / (watts × penalty)
+    wes_raw:          Option<f32>,
+    wes_penalized:    Option<f32>,
     thermal_cost_pct: Option<f32>,
-    thermal_penalty:  Option<f32>,      // 1.0 / 1.25 / 1.75 / 2.0
+    thermal_penalty:  Option<f32>,
     thermal_state:    Option<String>,
     vram_used_mb:     Option<i32>,
     vram_total_mb:    Option<i32>,
     mem_pressure_pct: Option<f32>,
     gpu_pct:          Option<f32>,
     cpu_pct:          Option<f32>,
-    inference_state:  Option<String>,    // "live" | "idle-spd" | "busy" | "idle"
-    wes_version:      u8,               // incremented when WES formula changes
-    swap_write:       Option<f32>,      // swap write MB/s — SSD degradation indicator
-    ttft_ms:          Option<f32>,      // best-available TTFT (vLLM > proxy > Ollama probe)
-    avg_latency_ms:   Option<f32>,      // best-available E2E latency (vLLM > proxy)
-    queue_depth:      Option<i32>,      // vLLM requests_waiting
-    ollama_active_model: Option<String>, // model name at the moment this row was captured
+    inference_state:  Option<String>,
+    wes_version:      u8,
+    swap_write:       Option<f32>,
+    ttft_ms:          Option<f32>,
+    avg_latency_ms:   Option<f32>,
+    queue_depth:      Option<i32>,
+    ollama_active_model: Option<String>,
 }
 
 /// A Live Activity event destined for the `node_events` table.
@@ -438,22 +403,18 @@ struct FleetResponse {
     nodes: Vec<NodeSummary>,
 }
 
-// ── Clerk JWKS types ──────────────────────────────────────────────────────────
-
 /// A single RSA public key from the Clerk JWKS endpoint.
 #[derive(Deserialize, Clone)]
 struct JwkKey {
     kid: String,
-    n:   String,   // base64url modulus
-    e:   String,   // base64url exponent
+    n:   String,
+    e:   String,
 }
 
 #[derive(Deserialize)]
 struct JwksResponse {
     keys: Vec<JwkKey>,
 }
-
-// ── App state ─────────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
 struct AppState {
@@ -476,8 +437,6 @@ struct AppState {
     /// for the fleet event history endpoint.
     events_tx:        mpsc::Sender<EventRow>,
 }
-
-// ── Tier constants ────────────────────────────────────────────────────────────
 
 /// Maximum nodes per tier.
 ///
@@ -648,8 +607,6 @@ fn extract_bearer(headers: &HeaderMap) -> Option<String> {
         .map(|s| s.to_owned())
 }
 
-// ── Agent API v1 helpers ──────────────────────────────────────────────────────
-
 fn sha256_hex(s: &str) -> String {
     let mut h = Sha256::new();
     h.update(s.as_bytes());
@@ -672,16 +629,11 @@ fn wes_for_payload(m: &MetricsPayload) -> Option<f32> {
         m.ollama_tokens_per_second?
     };
     if tok_s <= 0.0 { return None; }
-    // Same power-resolution order as the persistence path
-    // (metrics_row_from_payload): NVIDIA → Apple SoC → CPU. Skipping
-    // apple_soc_power_w fell back to the CPU-cluster reading on Apple
-    // Silicon, inflating live WES (and the wes_drop/thermal alerts built on
-    // it) versus the wes_penalized stored for history charts.
     let watts = m.nvidia_power_draw_w.or(m.apple_soc_power_w).or(m.cpu_power_w)?;
     if watts <= 0.0 { return None; }
     let penalty = thermal_penalty_for(m.thermal_state.as_deref());
     let raw = tok_s / (watts * penalty);
-    Some((raw * 10.0).round() / 10.0)  // round to 1 decimal place
+    Some((raw * 10.0).round() / 10.0)
 }
 
 /// Validate a raw API key, enforce the per-key rate limit, and return
@@ -724,7 +676,7 @@ async fn validate_api_key(
     Some((key_id, user_id, org_id, tier))
 }
 
-const AUTH_RATE_LIMIT: usize = 10; // max attempts per 60s per IP
+const AUTH_RATE_LIMIT: usize = 10;
 
 /// How long a 6-digit pairing code stays redeemable after the agent claims it.
 /// The agent UI shows a 5-minute countdown; the cloud allows 10 so a code
@@ -821,22 +773,16 @@ fn client_ip_from_xff(xff: Option<&str>, hops: usize) -> String {
     if entries.is_empty() {
         return "unknown".to_string();
     }
-    // Fewer entries than hops: the leftmost is still proxy-written.
     entries[entries.len().saturating_sub(hops)].to_string()
 }
 
 /// GET /health
 async fn handle_health(State(state): State<AppState>) -> impl IntoResponse {
-    // Unauthenticated liveness probe (Railway healthcheckPath = /health).
-    // Verifies DB connectivity but deliberately exposes NO platform stats —
-    // an earlier version returned fleet-wide metrics_raw row counts and the
-    // open-observation count, leaking total fleet size and activity to anyone.
     let db_ok = sqlx::query_scalar::<_, i32>("SELECT 1")
         .fetch_one(&state.pool).await.is_ok();
 
     let status = if db_ok { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE };
     if is_self_hosted() {
-        // Deployment config only — still no platform stats.
         return (status, Json(serde_json::json!({
             "status": if db_ok { "ok" } else { "degraded" },
             "self_hosted": true,
@@ -858,18 +804,6 @@ async fn handle_agent_version(
         "darwin-aarch64"      => "wicklee-agent-darwin-aarch64",
         "linux-x86_64"        => "wicklee-agent-linux-x86_64",
         "linux-aarch64"       => "wicklee-agent-linux-aarch64",
-        // Mirrors agent/src/update.rs `update_asset_name`, including its
-        // retired names. Releases up to v0.14.0 shipped a second Linux asset
-        // per arch under a `-nvidia` name, built from the same source with a
-        // cfg that stripped nothing; one asset per arch ships now, so both
-        // names map to it.
-        //
-        // What this does and does not do: an agent from one of those releases
-        // gets 200 here instead of 400, so the endpoint stays truthful about
-        // names it published. It does not get that agent updated — the agent
-        // ignores our `download_url` and builds its own from its own map, so
-        // it will still ask for the `-nvidia` asset and fail the SHA256SUMS
-        // check. Such a binary needs a reinstall, not a better response here.
         "linux-x86_64-nvidia"  => "wicklee-agent-linux-x86_64",
         "linux-aarch64-nvidia" => "wicklee-agent-linux-aarch64",
         "windows-x86_64"      => "wicklee-agent-windows-x86_64.exe",
@@ -906,8 +840,6 @@ async fn handle_agent_version(
         }
     }
 }
-
-// ── CORS middleware ───────────────────────────────────────────────────────────
 
 /// Restrictive CORS for dashboard routes — only wicklee.dev and localhost dev server.
 async fn cors_dashboard(req: Request<Body>, next: Next) -> Response {
@@ -958,11 +890,8 @@ async fn cors_open(req: Request<Body>, next: Next) -> Response {
     res
 }
 
-// ── Bootstrap ─────────────────────────────────────────────────────────────────
-
 #[tokio::main]
 async fn main() {
-    // Connect to Postgres. DATABASE_URL must be set.
     let database_url = std::env::var("DATABASE_URL")
         .expect("DATABASE_URL env var must be set (e.g. postgres://user:pass@host/db)");
 
@@ -976,13 +905,10 @@ async fn main() {
 
     run_pg_migrations(&pool).await;
 
-    // RESET_NODES (a "one-shot" DELETE FROM nodes that in fact ran on every
-    // boot while the variable stayed set) was removed. Purge by hand in SQL.
     if std::env::var("RESET_NODES").is_ok() {
         eprintln!("  RESET_NODES is set but no longer does anything \u{2014} unset it.");
     }
 
-    // Pre-load known nodes. If last_telemetry_json is available, seed the in-memory cache.
     let seed_metrics: HashMap<String, MetricsEntry> = {
         let rows: Vec<(String, i64, Option<serde_json::Value>)> = sqlx::query_as(
             "SELECT wk_id, last_seen, last_telemetry_json FROM nodes"
@@ -995,7 +921,6 @@ async fn main() {
             .collect()
     };
 
-    // Fetch Clerk JWKS on startup.
     let jwks_url = std::env::var("CLERK_JWKS_URL").ok();
     let initial_keys = if let Some(ref url) = jwks_url {
         let url2 = url.clone();
@@ -1022,25 +947,18 @@ async fn main() {
         events_tx,
     };
 
-    // Spawn background tasks.
     tokio::spawn(metrics_writer_task(metrics_rx, pool.clone()));
     tokio::spawn(events_writer_task(events_rx, pool.clone()));
     tokio::spawn(rollup_task(pool.clone()));
     tokio::spawn(nightly_task(pool.clone()));
-    // Populate model_catalog on startup so fleet discovery works immediately
-    // after a fresh Railway deploy (nightly task only runs at 3 AM UTC).
-    // Always runs — schema/aggregation logic can change between deploys, and the
-    // refresh loop wipes per-repo rows before re-inserting (DELETE + INSERT).
     tokio::spawn({
         let pool2 = pool.clone();
         async move {
-            // Short delay so the server is fully up before hitting HF.
             tokio::time::sleep(Duration::from_secs(5)).await;
             let existing: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM model_catalog")
                 .fetch_one(&pool2).await.unwrap_or(0);
             eprintln!("[startup] model_catalog has {existing} entries — running refresh to apply latest aggregation logic");
             let inserted = refresh_cloud_model_catalog(&pool2).await;
-            // Retry if no rows were written (HF rate-limit or pool contention at startup).
             if inserted == 0 {
                 eprintln!("[startup] 0 variants written — retrying catalog fetch in 90s");
                 tokio::time::sleep(Duration::from_secs(90)).await;
@@ -1056,7 +974,6 @@ async fn main() {
     tokio::spawn(idle_digest_task(pool.clone()));
     tokio::spawn(otel_exporter_task(state.clone()));
 
-    // Self-hosted control plane: announce mode + license state at boot.
     if is_self_hosted() {
         match std::env::var("WICKLEE_LICENSE_KEY").ok().filter(|k| !k.trim().is_empty()) {
             Some(key) => {
@@ -1070,7 +987,6 @@ async fn main() {
         }
     }
 
-    // Refresh JWKS every 6 hours.
     if let Some(url) = jwks_url {
         tokio::spawn(async move {
             loop {
@@ -1086,8 +1002,6 @@ async fn main() {
         });
     }
 
-    // Purge expired stream tokens, stale rate-limit keys, and abandoned
-    // pairing claims every 5 minutes.
     let state_cleanup = state.clone();
     tokio::spawn(async move {
         let pool_cleanup = state_cleanup.pool.clone();
@@ -1102,7 +1016,6 @@ async fn main() {
         }
     });
 
-    // Dashboard routes — restrictive CORS (wicklee.dev + localhost dev only).
     let dashboard_routes = Router::new()
         .route("/api/auth/signup",       post(handle_signup))
         .route("/api/auth/login",        post(handle_login))
@@ -1149,24 +1062,18 @@ async fn main() {
         .route("/api/slo/:id",                  delete(handle_delete_slo))
         .route("/api/nodes/:node_id",    patch(handle_update_node))
         .route("/api/billing/config",    get(handle_billing_config))
-        .route("/api/billing/status",    get(handle_billing_status)) // public — no auth
+        .route("/api/billing/status",    get(handle_billing_status))
         .route("/api/webhooks/paddle",   post(handle_paddle_webhook))
         .route("/api/otel/config",       get(handle_get_otel_config).put(handle_put_otel_config))
         .route("/api/audit-log",         get(handle_audit_log))
         .route("/api/audit-log/export",  get(handle_audit_log_export))
         .route("/api/audit-log/drain",   get(handle_get_audit_drain).put(handle_put_audit_drain).delete(handle_delete_audit_drain))
-        // Model governance (Enterprise). Violations are listed on a distinct
-        // path registered BEFORE the :id delete route so it can't be captured
-        // as an id.
         .route("/api/model-policy/violations", get(handle_model_policy_violations))
         .route("/api/model-policy",            get(handle_model_policy_list).post(handle_model_policy_create))
-        // ":id", not "{id}" — axum 0.7 path-parameter syntax. Braces are a
-        // LITERAL segment in 0.7, so "{id}" silently matched nothing.
         .route("/api/model-policy/:id",        axum::routing::delete(handle_model_policy_delete))
         .with_state(state.clone())
         .layer(middleware::from_fn(cors_dashboard));
 
-    // Open routes — permissive CORS. V1 API (external consumers), agent telemetry, health.
     let open_routes = Router::new()
         .route("/health",                  get(handle_health))
         .route("/api/agent/version",       get(handle_agent_version))
@@ -1189,7 +1096,7 @@ async fn main() {
         .layer(middleware::from_fn(cors_open));
 
     let app = dashboard_routes.merge(open_routes)
-        .layer(axum::extract::DefaultBodyLimit::max(2 * 1024 * 1024)); // 2 MB global limit
+        .layer(axum::extract::DefaultBodyLimit::max(2 * 1024 * 1024));
 
     let port: u16 = std::env::var("PORT")
         .ok().and_then(|p| p.parse().ok()).unwrap_or(8080);

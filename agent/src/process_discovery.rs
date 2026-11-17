@@ -41,8 +41,6 @@
 use std::collections::HashMap;
 use tokio::sync::watch;
 
-// ── Runtime specification ─────────────────────────────────────────────────────
-
 /// Declarative description of a single inference runtime.
 ///
 /// All discovery logic is derived entirely from this struct — no per-runtime
@@ -245,14 +243,12 @@ fn normalize_vllm_dtype(quantization: Option<&str>, dtype: Option<&str>) -> Opti
             "bitsandbytes"                            => "BNB-4BIT".into(),
             "aqlm"                                    => "AQLM".into(),
             "hqq"                                     => "HQQ".into(),
-            // Unknown scheme — pass through uppercased; sizing treats
-            // unrecognized tags as FP16 (conservative overestimate).
             _ => q.to_ascii_uppercase(),
         });
     }
     let d = dtype?.to_ascii_lowercase();
     match d.as_str() {
-        "auto"                 => None, // model-config default — nothing learned
+        "auto"                 => None,
         "half" | "float16"     => Some("FP16".into()),
         "bfloat16"             => Some("BF16".into()),
         "float" | "float32"    => Some("F32".into()),
@@ -260,8 +256,6 @@ fn normalize_vllm_dtype(quantization: Option<&str>, dtype: Option<&str>) -> Opti
         _ => Some(d.to_ascii_uppercase()),
     }
 }
-
-// ── Port resolution ───────────────────────────────────────────────────────────
 
 /// How a runtime's port was decided.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -326,14 +320,10 @@ pub fn resolve_port(
     discovered.map(|p| (p, PortSource::Discovered))
 }
 
-// ── Watch channel types ───────────────────────────────────────────────────────
-
 /// Receives the current state of a runtime: `Some(port)` = running, `None` = not found.
 pub type PortRx = watch::Receiver<Option<u16>>;
 /// Sends runtime state updates into a harvester's watch channel.
 pub type PortTx = watch::Sender<Option<u16>>;
-
-// ── Tier-3: Linux socket-inode scan ──────────────────────────────────────────
 
 /// Collects all socket inodes held open by `pid` by reading `/proc/{pid}/fd/`.
 ///
@@ -350,7 +340,6 @@ fn socket_inodes_for_pid(pid: u32) -> std::collections::HashSet<u64> {
     for entry in entries.flatten() {
         if let Ok(target) = std::fs::read_link(entry.path()) {
             let s = target.to_string_lossy();
-            // socket fds resolve to "socket:[inode]"
             if let Some(inner) = s.strip_prefix("socket:[").and_then(|s| s.strip_suffix(']'))
                 && let Ok(inode) = inner.parse::<u64>() {
                     inodes.insert(inode);
@@ -371,22 +360,17 @@ fn listening_inode_to_port(path: &str) -> HashMap<u64, u16> {
         return map;
     };
     for line in content.lines().skip(1) {
-        // Columns: sl  local_address  rem_address  state  tx_q:rx_q  ...  inode
-        // Example: "  0: 00000000:1F92 00000000:0000 0A  00000000:00000000 00:00000000 00000000  1000  0  12345678 ..."
         let cols: Vec<&str> = line.split_whitespace().collect();
         if cols.len() < 10 {
             continue;
         }
-        // state is field [3]; "0A" = TCP_LISTEN
         if cols[3] != "0A" {
             continue;
         }
-        // local_address is field [1]: "<hex_ip>:<hex_port>"
         let local_addr = cols[1];
         let Some(colon_pos) = local_addr.rfind(':') else { continue };
         let port_hex = &local_addr[colon_pos + 1..];
         let Ok(port) = u16::from_str_radix(port_hex, 16) else { continue };
-        // inode is field [9]
         let Ok(inode) = cols[9].parse::<u64>() else { continue };
         map.insert(inode, port);
     }
@@ -438,8 +422,6 @@ fn socket_port_for_pid(_pid: u32, _listen_maps: &[HashMap<u64, u16>]) -> Option<
     None
 }
 
-// ── Process scanner ───────────────────────────────────────────────────────────
-
 /// Scans all running processes and returns a map of `runtime_name → port`
 /// for every runtime that is currently active.
 ///
@@ -486,14 +468,10 @@ pub fn scan_runtimes() -> HashMap<&'static str, u16> {
     }
     let mut candidates: HashMap<&'static str, Candidate> = HashMap::new();
 
-    // vLLM dtype/quantization flags, captured from the matched process's argv.
-    // The explicit-port process is the main server; workers inherit the same
-    // argv, so a non-explicit match is an acceptable source too.
     let mut vllm_dtype: Option<String> = None;
     let mut vllm_dtype_from_explicit = false;
 
     for process in sys.processes().values() {
-        // Short-circuit only once every runtime has an explicit-port match.
         let all_confirmed = candidates.len() == RUNTIME_SPECS.len()
             && candidates.values().all(|c| c.explicit);
         if all_confirmed { break; }
@@ -504,7 +482,7 @@ pub fn scan_runtimes() -> HashMap<&'static str, u16> {
 
         for spec in RUNTIME_SPECS {
             if candidates.get(spec.name).is_some_and(|c| c.explicit) {
-                continue; // already locked in with an explicit port
+                continue;
             }
             if !spec.matches(&name, &cmd) { continue; }
 
@@ -524,38 +502,23 @@ pub fn scan_runtimes() -> HashMap<&'static str, u16> {
 
             match candidates.get_mut(spec.name) {
                 Some(c) if explicit => {
-                    // Hard upgrade: switch to the process that has --port <N>.
                     c.explicit = true;
                     c.port     = port;
                     c.pids     = vec![pid];
                 }
                 Some(c) => {
-                    // Another non-explicit match (likely a worker subprocess).
-                    // Accumulate its PID so Tier 3 can scan it too.
                     c.pids.push(pid);
                 }
                 None => {
                     candidates.insert(spec.name, Candidate { explicit, port, pids: vec![pid] });
                 }
             }
-            break; // a process matches at most one runtime
+            break;
         }
     }
 
-    // Publish the captured vLLM flags (None when vLLM isn't running or its
-    // cmdline carried no dtype/quantization information).
     *VLLM_DTYPE.lock().unwrap() = vllm_dtype;
 
-    // Tier 3: for any runtime whose port is still unconfirmed (no explicit --port
-    // flag found in any process's argv), attempt a socket-inode scan on EVERY
-    // matching PID.  Worker sub-processes typically bind internal sockets on the
-    // runtime's default port; the main server binds on the configured port.
-    // Strategy: prefer the first PID whose listening socket port differs from the
-    // runtime's default_port — that is the user-configured main server.
-    //
-    // The kernel TCP tables are parsed ONCE here and shared across every PID,
-    // instead of re-reading them per PID (previously O(pids × table_size), which
-    // is costly with many vLLM worker subprocesses on a busy host).
     let listen_maps: Vec<HashMap<u64, u16>> = {
         #[cfg(target_os = "linux")]
         {
@@ -610,23 +573,17 @@ pub fn start_discovery_loop(txs: HashMap<&'static str, PortTx>, interval_secs: u
     tokio::spawn(async move {
         let mut ticker =
             tokio::time::interval(std::time::Duration::from_secs(interval_secs));
-        // If a scan takes longer than the interval (unlikely), skip missed ticks
-        // rather than firing a burst of back-to-back scans.
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut first_scan = true;
 
         loop {
             ticker.tick().await;
 
-            // A full process walk is synchronous file I/O — run it on the
-            // blocking pool so it never stalls a tokio worker. If the scan
-            // panics, skip this cycle rather than reporting every runtime gone.
             let Ok(scan) = tokio::task::spawn_blocking(scan_runtimes).await else { continue };
             let active: HashMap<&str, u16> = scan.into_iter().collect();
 
             for (name, tx) in &txs {
                 let new_val = active.get(name).copied();
-                // Only send when the value actually changed.
                 if *tx.borrow() != new_val {
                     let _ = tx.send(new_val);
                     match new_val {
@@ -684,7 +641,6 @@ mod port_resolution_tests {
         assert_eq!(env_port_var("vllm"), "WICKLEE_VLLM_PORT");
         assert_eq!(env_port_var("llamacpp"), "WICKLEE_LLAMACPP_PORT");
         assert_eq!(env_port_var("sglang"), "WICKLEE_SGLANG_PORT");
-        // A hyphenated runtime name becomes an underscore.
         assert_eq!(env_port_var("llama-box"), "WICKLEE_LLAMA_BOX_PORT");
     }
 }
@@ -703,14 +659,12 @@ mod vllm_flag_tests {
         assert_eq!(extract_string_flag(&cmd, "--dtype").as_deref(), Some("bfloat16"));
         let cmd = argv("python -m vllm.entrypoints.openai.api_server --quantization=awq");
         assert_eq!(extract_string_flag(&cmd, "--quantization").as_deref(), Some("awq"));
-        // Next-arg-is-a-flag must not be consumed as a value.
         let cmd = argv("vllm serve model --dtype --port 8000");
         assert_eq!(extract_string_flag(&cmd, "--dtype"), None);
     }
 
     #[test]
     fn quantization_wins_over_dtype() {
-        // Weights are stored at the quantized width; dtype describes activations.
         assert_eq!(
             normalize_vllm_dtype(Some("awq_marlin"), Some("float16")).as_deref(),
             Some("AWQ"),
@@ -729,8 +683,6 @@ mod vllm_flag_tests {
 
     #[test]
     fn dtype_auto_yields_none() {
-        // "--dtype auto" is vLLM's default and means "use the model config's
-        // torch_dtype" — nothing learned, fall back to name-based sizing.
         assert_eq!(normalize_vllm_dtype(None, Some("auto")), None);
         assert_eq!(normalize_vllm_dtype(None, None), None);
     }

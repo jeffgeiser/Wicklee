@@ -21,8 +21,6 @@ import {
 } from './ObservationCard';
 import { LabeledCopyButton } from '../shared/CopyButton';
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
 function fmtAge(tsMs: number): string {
   const elapsed = Date.now() - tsMs;
   const m = Math.round(elapsed / 60_000);
@@ -39,8 +37,6 @@ function severityDotCls(confidence: string | undefined): string {
   }
 }
 
-// ── Props ────────────────────────────────────────────────────────────────────
-
 interface AccordionObservationCardProps {
   insight:         DetectedInsight & { firstFiredMs?: number };
   showNodeHeader:  boolean;
@@ -49,8 +45,6 @@ interface AccordionObservationCardProps {
   /** When part of a grouped/deduped incident, lists all affected nodes. */
   groupedNodes?:   Array<{ nodeId: string; hostname: string }>;
 }
-
-// ── Component ────────────────────────────────────────────────────────────────
 
 const AccordionObservationCard: React.FC<AccordionObservationCardProps> = ({
   insight,
@@ -94,37 +88,30 @@ const AccordionObservationCard: React.FC<AccordionObservationCardProps> = ({
         ? 'bg-gray-800/30 border-gray-700/50 opacity-70'
         : 'bg-gray-800/60 border-gray-700'
     }`}>
-      {/* ── Collapsed header — always visible ─────────────────────────── */}
       <button
         onClick={() => setExpanded(v => !v)}
         className="w-full flex items-center gap-2.5 px-4 py-3 text-left group"
       >
-        {/* Severity dot */}
         <span className={`shrink-0 w-2 h-2 rounded-full ${severityDotCls(insight.confidence)}`} />
 
-        {/* Pattern icon */}
         <span className="shrink-0">{patternIcon(insight.patternId)}</span>
 
-        {/* Title */}
         <span className="flex-1 text-sm font-semibold text-white truncate min-w-0">
           {insight.title}
         </span>
 
-        {/* Grouped badge */}
         {isGrouped && (
           <span className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-blue-400 bg-blue-500/10 border border-blue-500/20 px-1.5 py-0.5 rounded-md">
             {groupedNodes!.length} nodes
           </span>
         )}
 
-        {/* Node hostname */}
         {showNodeHeader && !isGrouped && (
           <span className="shrink-0 text-[10px] text-gray-500 bg-gray-700 px-1.5 py-0.5 rounded">
             {insight.hostname}
           </span>
         )}
 
-        {/* Resolved badge */}
         {isResolved && (
           <span className="shrink-0 flex items-center gap-1 text-[10px] text-green-400/80">
             <CheckCircle className="w-3 h-3" />
@@ -132,27 +119,22 @@ const AccordionObservationCard: React.FC<AccordionObservationCardProps> = ({
           </span>
         )}
 
-        {/* Hook value */}
         <span className={`shrink-0 text-xs font-bold font-mono ${isResolved ? 'text-gray-500' : hookColor(insight.patternId)}`}>
           {insight.hook}
         </span>
 
-        {/* Age */}
         {insight.firstFiredMs && (
           <span className="shrink-0 text-[10px] text-gray-600 font-mono">
             {fmtAge(insight.firstFiredMs)}
           </span>
         )}
 
-        {/* Chevron */}
         <ChevronDown className={`shrink-0 w-3.5 h-3.5 text-gray-600 group-hover:text-gray-400 transition-transform duration-150 ${expanded ? 'rotate-180' : ''}`} />
       </button>
 
-      {/* ── Expanded body ─────────────────────────────────────────────── */}
       {expanded && (
         <div className="px-4 pb-4 space-y-3 border-t border-gray-700/50">
 
-          {/* Grouped nodes list */}
           {isGrouped && (
             <div className="flex flex-wrap gap-1.5 pt-3">
               {groupedNodes!.map(n => (
@@ -163,10 +145,8 @@ const AccordionObservationCard: React.FC<AccordionObservationCardProps> = ({
             </div>
           )}
 
-          {/* Body */}
           <p className="text-xs text-gray-400 leading-relaxed pt-3">{insight.body}</p>
 
-          {/* Recommendation */}
           {insight.recommendation && !isResolved && (
             <div className="flex gap-2 p-3 rounded-xl bg-gray-900/60 border border-gray-700/60">
               <Lightbulb className="w-3.5 h-3.5 text-indigo-400/70 shrink-0 mt-0.5" />
@@ -180,7 +160,6 @@ const AccordionObservationCard: React.FC<AccordionObservationCardProps> = ({
             </div>
           )}
 
-          {/* Resolution steps */}
           {insight.resolution_steps && insight.resolution_steps.length > 0 && !isResolved && (
             <div className="flex gap-2 p-3 rounded-xl bg-gray-900/60 border border-gray-700/60">
               <ListChecks className="w-3.5 h-3.5 text-gray-500 shrink-0 mt-0.5" />
@@ -200,7 +179,6 @@ const AccordionObservationCard: React.FC<AccordionObservationCardProps> = ({
             </div>
           )}
 
-          {/* Action copy buttons */}
           {insight.actions.length > 0 && !isResolved && (
             <div className="flex flex-wrap gap-2">
               {insight.actions.map(action => (
@@ -213,10 +191,8 @@ const AccordionObservationCard: React.FC<AccordionObservationCardProps> = ({
             </div>
           )}
 
-          {/* Confidence bar */}
           {isBuilding && !isResolved && <ConfidenceBar insight={insight} />}
 
-          {/* Dismiss button */}
           {!isResolved && (
             <div className="flex justify-end pt-1">
               <button

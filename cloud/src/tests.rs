@@ -20,7 +20,6 @@ mod security_tests {
         let now = 1_700_000_000;
         let good = sign("sec", now, body);
         assert!(verify_paddle_signature("sec", &format!("ts={now};h1={good}"), body, now));
-        // Rotation: any h1 may match.
         let hdr = format!("ts={now};h1={};h1={good}", "0".repeat(64));
         assert!(verify_paddle_signature("sec", &hdr, body, now + 10));
     }
@@ -31,10 +30,8 @@ mod security_tests {
         let ts = 1_700_000_000;
         let sig = sign("sec", ts, body);
         let hdr = format!("ts={ts};h1={sig}");
-        // Replayed outside the tolerance window, either direction.
         assert!(!verify_paddle_signature("sec", &hdr, body, ts + PADDLE_SIG_TOLERANCE_S + 1));
         assert!(!verify_paddle_signature("sec", &hdr, body, ts - PADDLE_SIG_TOLERANCE_S - 1));
-        // Tampered body, wrong secret, missing parts, non-numeric ts.
         assert!(!verify_paddle_signature("sec", &hdr, br#"{"a":2}"#, ts));
         assert!(!verify_paddle_signature("other", &hdr, body, ts));
         assert!(!verify_paddle_signature("sec", &format!("h1={sig}"), body, ts));
@@ -45,7 +42,6 @@ mod security_tests {
 
     #[test]
     fn paddle_signature_covers_raw_non_utf8_bytes() {
-        // A lossy UTF-8 re-encode would change these bytes and break the MAC.
         let body = b"{\"x\":\"\xff\xfe\"}";
         let ts = 1_700_000_000;
         let sig = sign("sec", ts, body);
@@ -70,7 +66,6 @@ mod security_tests {
         assert_eq!(paddle_status("subscription.paused", &empty), "paused");
         assert_eq!(paddle_status("subscription.past_due", &empty), "past_due");
         assert_eq!(paddle_status("subscription.activated", &empty), "active");
-        // data.status wins: an `updated` event can carry past_due or canceled.
         let d = serde_json::json!({ "status": "canceled" });
         assert_eq!(paddle_status("subscription.updated", &d), "canceled");
     }
@@ -92,9 +87,7 @@ mod security_tests {
 
     #[test]
     fn client_ip_reads_proxy_appended_entry_not_client_supplied() {
-        // Client spoofs "1.1.1.1"; our proxy appended the real peer last.
         assert_eq!(client_ip_from_xff(Some("1.1.1.1, 203.0.113.9"), 1), "203.0.113.9");
-        // Two trusted hops: client is second from the right.
         assert_eq!(client_ip_from_xff(Some("1.1.1.1, 203.0.113.9, 10.0.0.2"), 2), "203.0.113.9");
         assert_eq!(client_ip_from_xff(Some("203.0.113.9"), 1), "203.0.113.9");
         assert_eq!(client_ip_from_xff(Some("203.0.113.9"), 3), "203.0.113.9");
@@ -140,11 +133,9 @@ mod outbound_and_token_tests {
 
     #[test]
     fn outbound_addr_check_rejects_any_private_answer() {
-        // Tests run without SELF_HOSTED / OUTBOUND_ALLOW_PRIVATE.
         let public: SocketAddr = "8.8.8.8:443".parse().unwrap();
         let private: SocketAddr = "10.0.0.5:443".parse().unwrap();
         assert!(check_outbound_addrs(vec![public]).is_ok());
-        // One private record among public ones is enough to refuse (rebinding).
         assert!(check_outbound_addrs(vec![public, private]).is_err());
         assert!(check_outbound_addrs(vec![]).is_err());
     }
@@ -164,9 +155,7 @@ mod outbound_and_token_tests {
         assert!(stored.starts_with("sha256:"));
         assert_eq!(node_token_check(&stored, tok), Some(false));
         assert_eq!(node_token_check(&stored, "wk_wrong"), None);
-        // A presented value equal to the stored HASH must not authenticate.
         assert_eq!(node_token_check(&stored, &stored), None);
-        // Legacy plaintext rows still work and are flagged for re-hashing.
         assert_eq!(node_token_check(tok, tok), Some(true));
         assert_eq!(node_token_check(tok, "wk_wrong"), None);
     }
@@ -189,7 +178,7 @@ mod perf_path_tests {
         let nodes = vec![
             node("a", Some("alpha"), None),
             node("b", None, Some("env:prod")),
-            node("offline", None, None), // no in-memory entry — omitted
+            node("offline", None, None),
             node("c", None, None),
         ];
         let mut metrics = HashMap::new();
@@ -197,7 +186,6 @@ mod perf_path_tests {
             metrics.insert(id.to_string(), entry(ts));
         }
 
-        // Limit 2 by pairing order: a, b allowed; "offline" and c are past it.
         let v: serde_json::Value = serde_json::from_str(&build_fleet_frame(&nodes, 2, &metrics)).unwrap();
         let list = v["nodes"].as_array().unwrap();
         let ids: Vec<&str> = list.iter().map(|n| n["node_id"].as_str().unwrap()).collect();
@@ -225,7 +213,6 @@ mod perf_path_tests {
         assert!(snapshot_persist_due(0, 5), "first push after boot writes");
         assert!(!snapshot_persist_due(1_000, 1_000 + SNAPSHOT_PERSIST_MS - 1));
         assert!(snapshot_persist_due(1_000, 1_000 + SNAPSHOT_PERSIST_MS));
-        // Clock stepping backwards must not panic or write.
         assert!(!snapshot_persist_due(10_000, 5_000));
     }
 
@@ -243,8 +230,6 @@ mod perf_path_tests {
 
     #[test]
     fn unowned_sweep_never_reaches_a_redeemable_claim() {
-        // activate accepts claims with paired_at >= now - PAIR_CODE_TTL_MS;
-        // the sweep must only delete strictly older ones.
         const { assert!(UNOWNED_NODE_TTL_MS > PAIR_CODE_TTL_MS) };
     }
 }

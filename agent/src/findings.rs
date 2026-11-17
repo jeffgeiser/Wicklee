@@ -17,12 +17,6 @@
 //! evidence references: a label or reference nothing can construct invites a
 //! reader to assume a capability exists.
 
-// Every item here exists for one of the two configurations. A build with no
-// local store has no verify route and no stored-receipt rules, so the verify
-// comparison, the `Verified` evidence path and the row conversions the store
-// needs have no caller there — present and compiled, but unreached. Allowed
-// for that target only: the default build still fails on genuinely dead code
-// in this file, and every other module keeps its dead-code check on musl too.
 #![cfg_attr(target_env = "musl", allow(dead_code))]
 
 use std::collections::BTreeMap;
@@ -241,10 +235,6 @@ impl Statement {
         text: impl Into<String>,
         supports: &[&Statement],
     ) -> Result<Self, EvidenceError> {
-        // Observed or verified, for the reason `Finding::new` gives: the rule
-        // forbids inference resting on inference, and a measurement is not
-        // inference. `baseline_regression` offers a cause for a drop its only
-        // hard evidence measured.
         if !supports
             .iter()
             .any(|s| matches!(s.label, Evidence::Observed | Evidence::Verified))
@@ -363,8 +353,6 @@ pub(crate) fn push_statement(
     }
 }
 
-// ── Findings ──────────────────────────────────────────────────────────────────
-
 /// Ollama's default context, which a request that omits `num_ctx` falls back to
 /// and reloads the model at (step 0, V3).
 pub(crate) const RUNTIME_DEFAULT_CONTEXT: u64 = 4096;
@@ -431,13 +419,6 @@ impl Finding {
         first_seen_ms: i64,
         last_seen_ms: i64,
     ) -> Option<Self> {
-        // The second evidence rule: a finding with only inferred statements is
-        // not shown. Verified counts as well as observed — the rule exists to
-        // keep a finding from resting on inference alone, and a measurement is
-        // not inference. `baseline_regression` is the case: its evidence is
-        // six receipts and no transition, so requiring specifically `Observed`
-        // would reject a finding for having better evidence than the rule asks
-        // for.
         if !statements
             .iter()
             .any(|s| matches!(s.label, Evidence::Observed | Evidence::Verified))
@@ -477,7 +458,6 @@ fn finding_id(rule: &str, models: &[String]) -> String {
     sorted.sort_unstable();
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for part in std::iter::once(rule).chain(sorted) {
-        // The separator keeps ("ab","c") from hashing as ("a","bc").
         for b in part.as_bytes().iter().chain(std::iter::once(&0x1f_u8)) {
             h ^= u64::from(*b);
             h = h.wrapping_mul(0x0100_0000_01b3);
@@ -584,17 +564,6 @@ pub(crate) fn evaluate(inputs: &RuleInputs) -> Inspection {
     let mut findings = Vec::new();
     let mut not_checked = Vec::new();
 
-    // On Apple Silicon there is one memory pool, so `/api/ps` reports
-    // `size_vram` equal to `size` for every model and the difference this rule
-    // looks for cannot exist. It is listed as not checked rather than left to
-    // silently never fire: the spec's rule requirement is that a rule whose
-    // signal is missing says so, and the step 8 fault-injection harness found
-    // this by trying to induce a split at context 131072 and measuring
-    // size_vram == size == 7,961,250,364 bytes.
-    //
-    // Keyed on the platform rather than on the data, because "every model seen
-    // so far reported equal sizes" is also true of a discrete GPU with room to
-    // spare, and that host should keep the rule.
     if inputs.unified_memory {
         not_checked.push(NotChecked {
             rule: "cpu_split",
@@ -626,8 +595,6 @@ pub(crate) fn evaluate(inputs: &RuleInputs) -> Inspection {
         });
     }
 
-    // Receipts, not transitions: this is the one rule that compares
-    // measurements rather than counting events.
     #[cfg(not(target_env = "musl"))]
     {
         let (found, skipped) = baseline_regression(inputs);
@@ -643,8 +610,6 @@ pub(crate) fn evaluate(inputs: &RuleInputs) -> Inspection {
             .into(),
     });
 
-    // After the rules, because a verified change is about a finding rather
-    // than about the log the finding came from.
     #[cfg(not(target_env = "musl"))]
     attach_verified_changes(&mut findings, inputs.verify_runs);
 
@@ -719,15 +684,12 @@ fn attach_verified_changes(findings: &mut [Finding], runs: &[crate::fingerprint:
 fn baseline_regression(inputs: &RuleInputs) -> (Vec<Finding>, Option<NotChecked>) {
     use std::collections::BTreeMap;
 
-    // (model, digest, context) → receipts with a rate, oldest first.
     let mut groups: BTreeMap<(&str, &str, u64), Vec<&crate::receipts::Receipt>> = BTreeMap::new();
     for r in inputs.receipts {
         if r.source != crate::receipts::ReceiptSource::Fingerprint {
             continue;
         }
         let (Some(digest), Some(ctx)) = (r.digest.as_deref(), r.context_length) else {
-            // A receipt that does not say which weights or which context it
-            // measured cannot be compared against anything.
             continue;
         };
         if r.decode_tps().is_some() {
@@ -740,8 +702,6 @@ fn baseline_regression(inputs: &RuleInputs) -> (Vec<Finding>, Option<NotChecked>
 
     for ((model, _digest, ctx), mut rs) in groups {
         rs.sort_by_key(|r| r.ts_ms);
-        // Two sides of three, which is the fourth evidence rule's minimum and
-        // the fingerprint's default run count.
         if rs.len() < MIN_RECEIPTS_PER_SIDE * 2 {
             continue;
         }
@@ -765,9 +725,6 @@ fn baseline_regression(inputs: &RuleInputs) -> (Vec<Finding>, Option<NotChecked>
         if drop_pct < BASELINE_REGRESSION_PCT {
             continue;
         }
-        // Overlapping ranges mean the two sets are one measurement with
-        // scatter, not a before and an after. The fourth evidence rule again,
-        // and the reason this rule cannot fire on a noisy host.
         if b.overlaps(&c) {
             continue;
         }
@@ -786,10 +743,6 @@ fn baseline_regression(inputs: &RuleInputs) -> (Vec<Finding>, Option<NotChecked>
             statements.push(s);
         }
 
-        // What differed, from what the receipts themselves carry. Not a
-        // ModelState diff: a receipt records the host as it was when the
-        // measurement was taken, which is the only snapshot that belongs in
-        // this comparison.
         let changes = receipt_config_diff(&base, &now);
         if let Some(observed) = statements.first().cloned()
             && !changes.is_empty()
@@ -811,8 +764,6 @@ fn baseline_regression(inputs: &RuleInputs) -> (Vec<Finding>, Option<NotChecked>
         ));
     }
 
-    // The honest "not checked" reason, which is different from "no baseline":
-    // a host may have fingerprinted once and have nothing to compare yet.
     let not_checked = (comparable == 0).then(|| NotChecked {
         rule: "baseline_regression",
         reason: "no model has six fingerprint runs at one digest and context yet, \
@@ -880,10 +831,6 @@ fn cpu_split(inputs: &RuleInputs, real: &[&Transition]) -> Vec<Finding> {
         if outside == 0 {
             continue;
         }
-        // The crossing into the current split. Without one in the log there is
-        // no observed "since when", and an observed statement needs a basis —
-        // so the rule stays quiet rather than asserting a start time it never
-        // saw.
         let Some(crossing) = real
             .iter()
             .rev()
@@ -921,9 +868,6 @@ fn cpu_split(inputs: &RuleInputs, real: &[&Transition]) -> Vec<Finding> {
                 &[crossing],
             ),
         );
-        // The context it was loaded at, from the log. A growth before the
-        // crossing is the KV-cache explanation the spec asks for; without one
-        // the rule still reports the split but claims no cause for it.
         let grew = real.iter().rev().find(|t| {
             t.model == state.model
                 && t.kind == TransitionKind::ContextChanged
@@ -1081,9 +1025,6 @@ fn eviction_churn(inputs: &RuleInputs, real: &[&Transition]) -> Vec<Finding> {
         .filter(|t| t.kind == TransitionKind::Loaded && t.ts_ms >= cutoff)
         .collect();
 
-    // An unload before its own expiry, close in time to some other model's
-    // load. `Cause::ExpiryReached` is excluded because that is the keep-alive
-    // doing its job, which is `expiry_reload`'s business, not churn.
     let driven: Vec<&Transition> = real
         .iter()
         .filter(|t| {
@@ -1161,7 +1102,6 @@ fn expiry_reload(inputs: &RuleInputs, real: &[&Transition]) -> Vec<Finding> {
         {
             continue;
         }
-        // The next load of the same model, if it came back soon enough.
         let back = real[i + 1..]
             .iter()
             .find(|o| o.model == t.model && o.kind == TransitionKind::Loaded)
@@ -1263,8 +1203,6 @@ pub(crate) fn from_observations(
                 o.confidence_ratio,
             ),
         );
-        // Kept only if it hedges. A dropped one is logged by push_statement,
-        // which is how the prose that needs rewording makes itself known.
         if let Some(observed) = statements.first().cloned() {
             push_statement(
                 &mut statements,
@@ -1351,7 +1289,6 @@ mod tests {
             prompt_eval_count: None,
             prompt_eval_cached_count: None,
             prompt_eval_ns: None,
-            // 100 tokens, so the rate is 100 / (eval_ns / 1e9).
             eval_count: Some(100),
             eval_ns: Some(eval_ns),
             total_ns: None,
@@ -1365,7 +1302,6 @@ mod tests {
 
     #[test]
     fn unified_memory_declares_cpu_split_rather_than_never_firing_it() {
-        // A split that a discrete-GPU host would report.
         let mut split = ModelState {
             model: "coder:14b".into(),
             digest: None,
@@ -1406,8 +1342,6 @@ mod tests {
     #[cfg(not(target_env = "musl"))]
     #[test]
     fn baseline_regression_fires_on_a_measured_drop_and_names_what_changed() {
-        // Three runs at 25 tok/s, then three at 12.5 — a 50% drop with no
-        // overlap, and a model loaded alongside it the second time.
         let fast = [4_000_000_000_u64, 4_040_000_000, 3_960_000_000];
         let slow = [8_000_000_000_u64, 8_080_000_000, 7_920_000_000];
         let mut receipts = Vec::new();
@@ -1437,7 +1371,6 @@ mod tests {
         assert!(verified.text.contains("50% below"), "{}", verified.text);
         assert!(verified.text.contains("25.0 tok/s"), "{}", verified.text);
         assert!(verified.text.contains("context 8192"), "{}", verified.text);
-        // Six receipts cited, three a side.
         assert_eq!(verified.basis.len(), 6);
 
         let inferred = f.statements.iter().find(|s| s.label == Evidence::Inferred).expect("a cause offered");
@@ -1450,7 +1383,6 @@ mod tests {
     fn baseline_regression_holds_back_on_everything_it_cannot_prove() {
         let steady = [4_000_000_000_u64, 4_040_000_000, 3_960_000_000];
 
-        // Fewer than two sets of three: nothing to compare, and it says so.
         let few: Vec<_> = steady
             .iter()
             .enumerate()
@@ -1461,8 +1393,6 @@ mod tests {
         assert!(found.is_empty());
         assert!(not_checked.expect("a reason").reason.contains("six fingerprint runs"));
 
-        // A drop measured at a different context is a configuration change
-        // someone made, not a regression: the groups never meet.
         let mut mixed = few.clone();
         for (i, ns) in [8_000_000_000_u64, 8_080_000_000, 7_920_000_000].iter().enumerate() {
             mixed.push(fp_receipt(&format!("R-c{i}"), T0 + 100_000 + i as i64, *ns, 4096, &[]));
@@ -1470,7 +1400,6 @@ mod tests {
         let i = RuleInputs { receipts: &mixed, ..inputs(&[], &[], T0 + 200_000) };
         assert!(baseline_regression(&i).0.is_empty(), "different context, different group");
 
-        // A drop under the threshold does not fire. 25 to 21.7 tok/s is 13%.
         let mut small = few.clone();
         for (i, ns) in [4_600_000_000_u64, 4_620_000_000, 4_580_000_000].iter().enumerate() {
             small.push(fp_receipt(&format!("R-m{i}"), T0 + 100_000 + i as i64, *ns, 8192, &[]));
@@ -1478,8 +1407,6 @@ mod tests {
         let i = RuleInputs { receipts: &small, ..inputs(&[], &[], T0 + 200_000) };
         assert!(baseline_regression(&i).0.is_empty(), "13% is under the 20% threshold");
 
-        // Callback receipts are never compared, however many there are: each
-        // measured whatever prompt a caller happened to send.
         let callbacks: Vec<_> = (0..8)
             .map(|i| {
                 let mut r = fp_receipt(&format!("R-cb{i}"), T0 + i, if i < 4 { 4_000_000_000 } else { 9_000_000_000 }, 8192, &[]);
@@ -1522,11 +1449,9 @@ mod tests {
             high,
         };
 
-        // One run is a baseline and says nothing.
         attach_verified_changes(&mut findings, &[mk(T0, 20.0, 19.9, 20.1)]);
         assert_eq!(findings[0].statements.len(), 1, "a baseline is not a change");
 
-        // Two with separated ranges is a measured change.
         attach_verified_changes(
             &mut findings,
             &[mk(T0, 20.0, 19.9, 20.1), mk(T0 + 1, 27.5, 27.4, 27.6)],
@@ -1537,7 +1462,6 @@ mod tests {
         assert!(s.text.contains("coder:14b"), "{}", s.text);
         assert_eq!(s.basis.len(), 2, "both runs cited");
 
-        // Two that overlap attaches nothing: that is not a change.
         let mut other = findings.clone();
         other[0].statements.truncate(1);
         attach_verified_changes(
@@ -1557,7 +1481,6 @@ mod tests {
         let s = Statement::observed("coder:14b is resident.", &[&t]).unwrap();
         assert_eq!(s.label, Evidence::Observed);
         assert_eq!(s.basis, vec![EvidenceRef::Transition { id: 1, ts_ms: t.ts_ms }]);
-        // Subjects come from the evidence, not from the caller.
         assert_eq!(s.subjects, vec!["coder:14b".to_string(), "classifier:3b".to_string()]);
     }
 
@@ -1583,13 +1506,11 @@ mod tests {
             Statement::inferred("The keep-alive may be too short.", &[]),
             Err(EvidenceError::NoObservedSupport),
         );
-        // An inferred statement cannot stand on another inference alone.
         let inf = Statement::inferred("The keep-alive may be too short.", &[&obs]).unwrap();
         assert_eq!(
             Statement::inferred("Throughput may suffer.", &[&inf]),
             Err(EvidenceError::NoObservedSupport),
         );
-        // It inherits the evidence of what it was built on.
         assert_eq!(inf.basis, obs.basis);
         assert_eq!(inf.subjects, obs.subjects);
     }
@@ -1613,7 +1534,6 @@ mod tests {
                 "{hedged:?} hedges and must be accepted"
             );
         }
-        // Word boundaries: a near-miss is not a hedge.
         for not_hedged in [
             "The likelihood is high.",
             "Mayhem followed.",
@@ -1636,13 +1556,6 @@ mod tests {
         push_statement(&mut out, "test_rule", Statement::observed("x", &[&t]));
         assert_eq!(out.len(), 1);
     }
-
-    // ── Rule tests ───────────────────────────────────────────────────────────
-    //
-    // Every rule is a pure function of a synthetic log, so each one gets a case
-    // that must fire and a case that must not. The negative cases are the point:
-    // a rule that fires on a healthy host is worse than one that misses, because
-    // the product's claim is that a finding means something.
 
     const T0: i64 = 1_700_000_000_000;
     const GIB: u64 = 1024 * 1024 * 1024;
@@ -1832,8 +1745,6 @@ mod tests {
     #[test]
     fn context_reset_ignores_probe_caused_transitions() {
         // The agent's own probe did exactly this before step 1 fixed it. The
-        // exclusion stays so a regression in the probe cannot manufacture
-        // findings about itself.
         let mut log = reset_pair(1, T0, "coder:14b", 32768, Cause::Probe);
         log.extend(reset_pair(3, T0 + 60_000, "coder:14b", 32768, Cause::Probe));
         assert!(
@@ -1850,8 +1761,6 @@ mod tests {
 
     #[test]
     fn context_reset_ignores_a_context_change_with_no_reload() {
-        // A caller legitimately lowering the context without a reload is not
-        // this finding: there is no ExpiryReset or Loaded at that timestamp.
         let before = state("coder:14b", Some(10 * GIB), Some(10 * GIB), Some(32768));
         let after = state("coder:14b", Some(6 * GIB), Some(6 * GIB), Some(RUNTIME_DEFAULT_CONTEXT));
         let log: Vec<Transition> = (0..3)
@@ -1896,8 +1805,6 @@ mod tests {
 
     #[test]
     fn eviction_churn_does_not_count_a_keep_alive_expiring() {
-        // Expiry is the keep-alive doing its job. That is expiry_reload's
-        // business, and counting it here would double-report one event.
         let log = [
             trans(1, T0, "a:7b", TransitionKind::Unloaded, Cause::ExpiryReached, None, None),
             trans(2, T0 + 2_000, "b:7b", TransitionKind::Loaded, Cause::User, None, None),
@@ -1954,8 +1861,6 @@ mod tests {
 
     #[test]
     fn expiry_reload_ignores_a_model_that_came_back_much_later() {
-        // Expired and reloaded half an hour later is a model used twice a day,
-        // not a keep-alive set too short.
         let mut log = Vec::new();
         for i in 0..3 {
             log.extend(expiry_cycle(
@@ -2009,13 +1914,10 @@ mod tests {
     fn a_finding_id_is_stable_for_the_same_condition_and_differs_otherwise() {
         let models = vec!["coder:14b".to_string(), "classifier:3b".to_string()];
         let reordered = vec!["classifier:3b".to_string(), "coder:14b".to_string()];
-        // Stable across restarts and independent of iteration order, because
-        // `verify` in step 6 compares two runs by id.
         assert_eq!(finding_id("cpu_split", &models), finding_id("cpu_split", &reordered));
         assert_ne!(finding_id("cpu_split", &models), finding_id("expiry_reload", &models));
         assert_ne!(finding_id("cpu_split", &models), finding_id("cpu_split", &models[..1]));
         assert!(finding_id("cpu_split", &models).starts_with("F-"));
-        // The separator does its job: ("ab","c") and ("a","bc") are different.
         assert_ne!(
             finding_id("r", &["ab".to_string(), "c".to_string()]),
             finding_id("r", &["a".to_string(), "bc".to_string()]),
@@ -2028,12 +1930,9 @@ mod tests {
         assert_eq!(parse_lookback_ms("90m"), Some(5_400_000));
         assert_eq!(parse_lookback_ms("24h"), Some(86_400_000));
         assert_eq!(parse_lookback_ms(" 7d "), Some(604_800_000));
-        // A bare number has no unit, and defaulting one would answer a
-        // different question than the caller asked.
         for bad in ["", "24", "h", "24w", "-1h", "0h", "1.5h", "24 h", "abc"] {
             assert_eq!(parse_lookback_ms(bad), None, "{bad:?} must be refused");
         }
-        // No silent wrap on an absurd window.
         assert_eq!(parse_lookback_ms("9999999999999999999d"), None);
     }
 
@@ -2046,8 +1945,6 @@ mod tests {
         assert_eq!(bytes_human(4 * GIB), "4.0 GiB");
         assert_eq!(bytes_human(512 * 1024 * 1024), "512 MiB");
     }
-
-    // ── The observations adapter ─────────────────────────────────────────────
 
     #[cfg(not(target_env = "musl"))]
     fn observation(

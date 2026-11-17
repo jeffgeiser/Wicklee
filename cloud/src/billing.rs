@@ -2,8 +2,6 @@
 
 use crate::*;
 
-// ── Billing handlers ──────────────────────────────────────────────────────────
-
 /// Paddle price IDs, read from the environment.
 ///
 /// `team_annual` has no historical counterpart — the annual Team plan

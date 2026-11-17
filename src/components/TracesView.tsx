@@ -36,9 +36,6 @@ import { RANGE_CONFIG } from '../cloud/utils/historyRange';
 
 import { IS_LOCAL_HOST as isLocalHost, IS_AGENT } from '../utils/buildTarget';
 
-// ── Proxy status hook — one-shot fetch from /api/metrics ─────────────────────
-// Proxy config is immutable at runtime (set at agent startup), so a single
-// fetch is sufficient. Returns { proxyActive, listenPort, targetPort }.
 function useProxyStatus() {
   const [status, setStatus] = useState<{
     proxyActive: boolean;
@@ -50,7 +47,6 @@ function useProxyStatus() {
   useEffect(() => {
     if (!isLocalHost) return;
     let cancelled = false;
-    // One-shot JSON read — /api/metrics is an SSE stream that never ends.
     fetch('/api/metrics/snapshot')
       .then(r => r.json())
       .then((data: SentinelMetrics) => {
@@ -84,8 +80,6 @@ interface TracesViewProps {
   onNavConsumed?: () => void;
 }
 
-// ── Sovereignty Section ────────────────────────────────────────────────────────
-
 const SovereigntySection: React.FC<{
   pairingInfo: PairingInfo | null;
   proxyActive: boolean;
@@ -96,16 +90,12 @@ const SovereigntySection: React.FC<{
   const { fleetEvents, connectionState } = useFleetStream();
   const [expanded, setExpanded] = useState(false);
 
-  // In Cockpit mode (localhost), pairing state comes from the local agent's /api/pair/status.
-  // In Mission Control mode (cloud), the fleet is "connected" when the SSE stream is live —
-  // pairingInfo reflects the local agent pair handshake, which is irrelevant in this context.
   const isPaired = isLocalHost
     ? pairingInfo?.status === 'connected'
     : connectionState === 'connected' || connectionState === 'degraded';
   const fleetUrl   = pairingInfo?.fleet_url ?? (isPaired ? 'wicklee.dev' : null);
   const nodeId     = pairingInfo?.node_id ?? null;
 
-  // Connection events — most recent first, cap at 8
   const connectionEvents = fleetEvents
     .filter(e => e.type === 'node_online' || e.type === 'node_offline')
     .slice(0, 8);
@@ -139,7 +129,6 @@ const SovereigntySection: React.FC<{
   return (
     <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-sm dark:shadow-none overflow-hidden">
 
-      {/* ── Collapsible header ─────────────────────────────────────────────── */}
       <button
         onClick={() => setExpanded(e => !e)}
         className="w-full flex items-center justify-between px-5 py-4 hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-colors"
@@ -163,14 +152,11 @@ const SovereigntySection: React.FC<{
         </div>
       </button>
 
-      {/* ── Expandable content ─────────────────────────────────────────────── */}
       {expanded && (
       <div className="px-5 pb-5 space-y-4 border-t border-gray-100 dark:border-gray-700 pt-4">
 
-      {/* ── Destination + Manifest ───────────────────────────────────────────── */}
       <div className="grid md:grid-cols-2 gap-4">
 
-        {/* Telemetry Destination */}
         <div className="bg-gray-800 border border-gray-700 rounded-2xl p-5 space-y-4">
           <p className="text-[10px] font-bold uppercase tracking-widest text-gray-500">
             Telemetry Destination
@@ -222,7 +208,6 @@ const SovereigntySection: React.FC<{
             </div>
           </div>
 
-          {/* What is (and isn't) transmitted */}
           <div className="border-t border-gray-700 pt-4 space-y-3">
             <div>
               <p className="text-[10px] text-gray-500 uppercase tracking-widest font-semibold mb-2">
@@ -261,7 +246,6 @@ const SovereigntySection: React.FC<{
           </div>
         </div>
 
-        {/* Outbound Connection Manifest */}
         <div className="bg-gray-800 border border-gray-700 rounded-2xl p-5 space-y-3">
           <p className="text-[10px] font-bold uppercase tracking-widest text-gray-500">
             Outbound Connection Manifest
@@ -302,7 +286,6 @@ const SovereigntySection: React.FC<{
         </div>
       </div>
 
-      {/* ── Connection Event Log ─────────────────────────────────────────────── */}
       <div className="bg-gray-800 border border-gray-700 rounded-2xl overflow-hidden">
         <div className="px-5 py-3 border-b border-gray-700 flex items-center justify-between">
           <p className="text-[10px] font-bold uppercase tracking-widest text-gray-500">
@@ -355,13 +338,6 @@ const SovereigntySection: React.FC<{
   );
 };
 
-// ── Metric History Panel — Phase 4A ──────────────────────────────────────────
-// Fetches GET /api/history from the local agent local store.
-// Available in Cockpit mode (isLocalHost) only — the agent must be running.
-//
-// "View source →" links in AIInsights will deep-link here so operators can
-// see the raw samples that triggered a pattern observation.
-
 type HistoryWindow = 1 | 6 | 24;
 
 /** Format a ts_ms timestamp as a short HH:MM label for chart x-axis. */
@@ -396,8 +372,6 @@ const MiniChart: React.FC<MiniChartProps> = ({ data, getValue, label, unit, colo
   const peak   = values.length > 0 ? Math.max(...values) : null;
   const latest = values.length > 0 ? values[values.length - 1] : null;
 
-  // If all values are nearly identical the recharts auto-domain collapses to
-  // [v, v], rendering the line invisible. Detect this and widen the domain.
   const derivedDomain: [number, number] | undefined = (() => {
     if (yDomain) return yDomain;
     if (values.length < 2) return undefined;
@@ -468,7 +442,7 @@ const MiniChart: React.FC<MiniChartProps> = ({ data, getValue, label, unit, colo
 };
 
 const MetricHistoryPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
-  const window_ = 1 as HistoryWindow;  // localhost: 1h DuckDB buffer only
+  const window_ = 1 as HistoryWindow;
   const [resp,    setResp]   = useState<HistoryResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState<string | null>(null);
@@ -499,7 +473,6 @@ const MetricHistoryPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
   return (
     <div className="space-y-4">
 
-      {/* ── Section header ──────────────────────────────────────────────────── */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 bg-indigo-500/10 border border-indigo-500/20 rounded-xl flex items-center justify-center shrink-0">
@@ -518,7 +491,6 @@ const MetricHistoryPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
           </div>
         </div>
 
-        {/* Time window selector — localhost only has 1h of DuckDB data */}
         <div className="flex items-center gap-1 bg-gray-800 border border-gray-700 rounded-xl p-1">
           <button
             className="px-3 py-1 rounded-lg text-[10px] font-semibold bg-indigo-600 text-white"
@@ -536,7 +508,6 @@ const MetricHistoryPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
         </div>
       </div>
 
-      {/* ── Error state ─────────────────────────────────────────────────────── */}
       {error && (
         <div className="flex items-center gap-3 p-4 bg-amber-500/8 border border-amber-500/20 rounded-xl">
           <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
@@ -544,7 +515,6 @@ const MetricHistoryPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
         </div>
       )}
 
-      {/* ── Charts — 2×3 grid ───────────────────────────────────────────────── */}
       {!error && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           <MiniChart
@@ -564,7 +534,6 @@ const MetricHistoryPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
               color="text-amber-400"
               colorFill="#f59e0b"
             />
-            {/* Clock throttle indicator — shown when any sample has throttling */}
             {samples.some(s => (s.clock_throttle_pct ?? 0) > 0) && (() => {
               const latestThrottle = [...samples].reverse().find(s => (s.clock_throttle_pct ?? 0) > 0)?.clock_throttle_pct ?? 0;
               return (
@@ -615,7 +584,6 @@ const MetricHistoryPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
         </div>
       )}
 
-      {/* ── Empty state ─────────────────────────────────────────────────────── */}
       {!error && !loading && samples.length === 0 && (
         <div className="flex flex-col items-center justify-center py-10 text-center">
           <Database className="w-6 h-6 text-gray-700 mb-2" />
@@ -629,26 +597,15 @@ const MetricHistoryPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
   );
 };
 
-// ── Agent Health Panel — Phase 4A ─────────────────────────────────────────────
-// Surfaces the internal health of the local Wicklee agent:
-//   - Collection layer  — is the SSE/WS harvester delivering telemetry?
-//   - Local Store      — does GET /api/history respond successfully?
-//   - Last telemetry    — when did the last metric frame arrive?
-//
-// Available in Cockpit mode (isLocalHost) only.
-
 const AgentHealthPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
   const isLocalHost = IS_AGENT;
 
-  // On localhost, probe the local agent directly instead of using the fleet SSE
-  // (FleetStreamContext connects to the cloud SSE, which is disconnected on localhost).
   const fleetStream = useFleetStream();
   const [localAgentOk, setLocalAgentOk]         = useState(false);
   const [localLastMs, setLocalLastMs]            = useState<number | null>(null);
   const [dbStatus, setDbStatus] = useState<'ok' | 'unavailable' | 'checking'>('checking');
   const [liveMetrics, setLiveMetrics]            = useState<SentinelMetrics | null>(null);
 
-  // Lightweight local agent + store probe — runs once on mount.
   useEffect(() => {
     if (!nodeId) return;
     const probe = async () => {
@@ -665,10 +622,8 @@ const AgentHealthPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
         setDbStatus('unavailable');
       }
     };
-    // Also hit the SSE endpoint to verify the agent's live stream and get metrics.
     const sseProbe = async () => {
       try {
-        // One-shot JSON read — /api/metrics itself is an SSE stream that never ends.
         const r = await fetch('/api/metrics/snapshot');
         if (r.ok) {
           const data: SentinelMetrics = await r.json();
@@ -676,13 +631,12 @@ const AgentHealthPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
           setLocalLastMs(Date.now());
           setLiveMetrics(data);
         }
-      } catch { /* agent unreachable */ }
+      } catch { }
     };
     probe();
     sseProbe();
   }, [nodeId]);
 
-  // Resolve connection state: localhost → local probes, cloud → fleet SSE.
   const connectionState = isLocalHost
     ? (localAgentOk ? 'connected' : 'disconnected')
     : fleetStream.connectionState;
@@ -710,7 +664,6 @@ const AgentHealthPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
     connectionState === 'idle'         ? 'Idle'         :
                                          'Disconnected';
 
-  // Derive actual harvester status from live metrics (not just connectionState).
   const m = liveMetrics;
   const connected = connectionState === 'connected';
 
@@ -764,7 +717,6 @@ const AgentHealthPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
   return (
     <div className="space-y-4">
 
-      {/* ── Section header ──────────────────────────────────────────────────── */}
       <div className="flex items-center gap-3">
         <div className="w-8 h-8 bg-green-500/10 border border-green-500/20 rounded-xl flex items-center justify-center shrink-0">
           <Server className="w-4 h-4 text-green-400" />
@@ -775,10 +727,8 @@ const AgentHealthPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
         </div>
       </div>
 
-      {/* ── Health indicators ────────────────────────────────────────────────── */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
 
-        {/* SSE/WS Collection */}
         <div className="bg-gray-800 border border-gray-700 rounded-xl p-4 space-y-2">
           <div className="flex items-center gap-2">
             <Activity className="w-3.5 h-3.5 text-gray-500 shrink-0" />
@@ -795,7 +745,6 @@ const AgentHealthPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
           )}
         </div>
 
-        {/* Local Store */}
         <div className="bg-gray-800 border border-gray-700 rounded-xl p-4 space-y-2">
           <div className="flex items-center gap-2">
             <Database className="w-3.5 h-3.5 text-gray-500 shrink-0" />
@@ -818,7 +767,6 @@ const AgentHealthPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
           </p>
         </div>
 
-        {/* Last telemetry */}
         <div className="bg-gray-800 border border-gray-700 rounded-xl p-4 space-y-2">
           <div className="flex items-center gap-2">
             <Clock className="w-3.5 h-3.5 text-gray-500 shrink-0" />
@@ -830,7 +778,6 @@ const AgentHealthPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
 
       </div>
 
-      {/* ── Harvesters list — reflects actual metric availability ─────────────── */}
       <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-4 space-y-2">
         <div className="flex items-center gap-2 mb-3">
           <Cpu className="w-3 h-3 text-gray-600 shrink-0" />
@@ -865,8 +812,6 @@ const AgentHealthPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
   );
 };
 
-// ── Local trace table ──────────────────────────────────────────────────────────
-
 const TraceTable: React.FC<{
   tenantId: string;
   proxyActive: boolean;
@@ -877,8 +822,6 @@ const TraceTable: React.FC<{
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState<string | null>(null);
 
-  // The spinner is for the first load and explicit refreshes only — the 5 s
-  // background poll flipping it on every tick made the header flicker.
   const fetchTraces = useCallback(async (showSpinner = false) => {
     if (showSpinner) setLoading(true);
     try {
@@ -979,7 +922,6 @@ const TraceTable: React.FC<{
               <tr>
                 <td colSpan={6} className="px-6 py-12 text-center">
                   {proxyActive ? (
-                    /* Proxy active, just waiting for traffic */
                     <div className="flex flex-col items-center justify-center max-w-md mx-auto">
                       <div className="w-12 h-12 bg-green-500/10 rounded-2xl flex items-center justify-center mb-4 border border-green-500/20">
                         <Activity className="w-6 h-6 text-green-400" />
@@ -999,7 +941,6 @@ const TraceTable: React.FC<{
                       </div>
                     </div>
                   ) : (
-                    /* Proxy not active — onboarding guide */
                     <div className="flex flex-col items-center justify-center max-w-lg mx-auto text-left">
                       <div className="w-12 h-12 bg-gray-700/50 rounded-2xl flex items-center justify-center mb-4 border border-white/5">
                         <Activity className="w-6 h-6 text-gray-500" />
@@ -1053,10 +994,6 @@ const TraceTable: React.FC<{
   );
 };
 
-// ── Event History Panel ──────────────────────────────────────────────────────
-// Persisted Live Activity events from the agent's local store (node_events table).
-// 7-day retention. Cockpit-only — same gate as Agent Health and Metric History.
-
 const EVENT_TYPE_COLORS: Record<string, string> = {
   startup:        'text-green-400',
   update:         'text-blue-400',
@@ -1076,7 +1013,6 @@ const EventHistoryPanel: React.FC = () => {
 
   return (
     <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-5">
-      {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">
           <Clock className="w-4 h-4 text-cyan-400" />
@@ -1112,7 +1048,6 @@ const EventHistoryPanel: React.FC = () => {
         </div>
       </div>
 
-      {/* Error */}
       {error && (
         <div className="flex items-center gap-2 text-amber-400 text-xs mb-3">
           <AlertTriangle className="w-3.5 h-3.5" />
@@ -1120,7 +1055,6 @@ const EventHistoryPanel: React.FC = () => {
         </div>
       )}
 
-      {/* Empty state */}
       {!loading && !error && events.length === 0 && (
         <p className="text-xs text-gray-600 text-center py-4">
           No events recorded yet. Events persist to local store on agent startup, updates, and
@@ -1128,7 +1062,6 @@ const EventHistoryPanel: React.FC = () => {
         </p>
       )}
 
-      {/* Event list — consecutive identical events collapsed into one row with ×N badge */}
       {events.length > 0 && (
         <div className="space-y-1.5 max-h-[300px] overflow-y-auto pr-1">
           {events
@@ -1149,10 +1082,8 @@ const EventHistoryPanel: React.FC = () => {
               <div key={`${ev.ts_ms}-${i}`}
                 className="flex items-start gap-2.5 py-1.5 px-2 rounded hover:bg-gray-700/50 transition-colors"
               >
-                {/* Level dot */}
                 <span className={`mt-1.5 w-1.5 h-1.5 rounded-full flex-shrink-0 ${LEVEL_DOT[ev.level] ?? 'bg-gray-500'}`} />
 
-                {/* Content */}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <p className="text-xs text-gray-300 leading-snug truncate">{ev.message}</p>
@@ -1177,7 +1108,6 @@ const EventHistoryPanel: React.FC = () => {
         </div>
       )}
 
-      {/* Load more */}
       {hasMore && events.length > 0 && (
         <button
           onClick={loadMore}
@@ -1188,7 +1118,6 @@ const EventHistoryPanel: React.FC = () => {
         </button>
       )}
 
-      {/* Footer */}
       {events.length > 0 && (
         <p className="text-[11px] text-gray-700 leading-relaxed mt-3">
           Stored in <span className="font-mono text-gray-600">node_events</span> table ·{' '}
@@ -1198,12 +1127,6 @@ const EventHistoryPanel: React.FC = () => {
     </div>
   );
 };
-
-// ══════════════════════════════════════════════════════════════════════════════
-// CLOUD SECTIONS — Fleet-first Mission Control (wicklee.dev only)
-// ══════════════════════════════════════════════════════════════════════════════
-
-// ── Section 1: Sovereignty (merged Guard + Inspector) ─────────────────────────
 
 /** Fields synced to the cloud, grouped by category. */
 const SYNCED_FIELD_GROUPS: { label: string; fields: string[] }[] = [
@@ -1245,7 +1168,6 @@ const NodeFieldInspector: React.FC<{ metrics: SentinelMetrics }> = ({ metrics })
         </button>
       </div>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* SYNCED fields */}
         <div>
           <div className="flex items-center gap-1.5 mb-2">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
@@ -1275,7 +1197,6 @@ const NodeFieldInspector: React.FC<{ metrics: SentinelMetrics }> = ({ metrics })
             })}
           </div>
         </div>
-        {/* LOCAL-ONLY fields */}
         <div>
           <div className="flex items-center gap-1.5 mb-2">
             <EyeOff className="w-3 h-3 text-gray-600" />
@@ -1316,7 +1237,6 @@ const FleetSovereigntyGuard: React.FC<{
 
   return (
     <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-sm dark:shadow-none overflow-hidden">
-      {/* Header */}
       <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-gray-700">
         <div className="flex items-center gap-2">
           <Shield className="w-4 h-4 text-emerald-400" />
@@ -1336,7 +1256,6 @@ const FleetSovereigntyGuard: React.FC<{
         </span>
       </div>
 
-      {/* Connection manifest table with expandable rows */}
       {entries.length === 0 ? (
         <div className="px-6 py-10 text-center">
           <Wifi className="w-6 h-6 mx-auto text-gray-600 mb-2" />
@@ -1396,8 +1315,6 @@ const FleetSovereigntyGuard: React.FC<{
   );
 };
 
-// ── Section 3: Fleet Event Timeline ───────────────────────────────────────────
-
 const EVENT_TYPE_FILTERS = [
   'startup', 'update', 'model_swap', 'thermal_change',
   'node_offline', 'node_online', 'observation', 'error',
@@ -1413,14 +1330,12 @@ const EVENT_TYPE_BADGE: Record<string, string> = {
   node_offline: 'text-red-400 bg-red-500/10',
   node_online: 'text-emerald-400 bg-emerald-500/10',
   error: 'text-red-400 bg-red-500/10',
-  // Observation events from fleet evaluator
   zombied_engine: 'text-red-400 bg-red-500/10',
   thermal_redline: 'text-orange-400 bg-orange-500/10',
   oom_warning: 'text-amber-400 bg-amber-500/10',
   wes_cliff: 'text-purple-400 bg-purple-500/10',
   agent_version_mismatch: 'text-yellow-400 bg-yellow-500/10',
   fleet_load_imbalance: 'text-orange-400 bg-orange-500/10',
-  // Resolved variants
   zombied_engine_resolved: 'text-emerald-400 bg-emerald-500/10',
   thermal_redline_resolved: 'text-emerald-400 bg-emerald-500/10',
   oom_warning_resolved: 'text-emerald-400 bg-emerald-500/10',
@@ -1428,7 +1343,6 @@ const EVENT_TYPE_BADGE: Record<string, string> = {
   agent_version_mismatch_resolved: 'text-emerald-400 bg-emerald-500/10',
   fleet_load_imbalance_resolved: 'text-emerald-400 bg-emerald-500/10',
 };
-// Map observation event_types to the "observation" filter category
 const OBSERVATION_EVENT_TYPES = new Set([
   'zombied_engine', 'thermal_redline', 'oom_warning', 'wes_cliff', 'agent_version_mismatch', 'fleet_load_imbalance',
   'zombied_engine_resolved', 'thermal_redline_resolved', 'oom_warning_resolved',
@@ -1447,7 +1361,6 @@ const FleetEventTimeline: React.FC<{
   const [token, setToken] = useState<string | null>(null);
   const [tokenReady, setTokenReady] = useState(false);
 
-  // Resolve token on mount — also refresh every 50s to avoid JWT expiry (Clerk tokens last ~60s)
   useEffect(() => {
     let cancelled = false;
     const resolve = () => getToken().then(t => { if (!cancelled) { setToken(t); setTokenReady(true); } });
@@ -1456,7 +1369,6 @@ const FleetEventTimeline: React.FC<{
     return () => { cancelled = true; clearInterval(iv); };
   }, [getToken]);
 
-  // "observation" is a meta-filter that matches multiple event_types client-side
   const serverEventType = selectedType && selectedType !== 'observation' ? selectedType : undefined;
   const { events: rawEvents, loading, error, hasMore, loadMore, refresh } = useEventHistory({
     isFleet: true,
@@ -1464,13 +1376,12 @@ const FleetEventTimeline: React.FC<{
     eventType: serverEventType,
     nodeId: selectedNode || undefined,
     limit: 50,
-    skip: !tokenReady, // Don't fetch until auth token is resolved
+    skip: !tokenReady,
   });
   const events = selectedType === 'observation'
     ? rawEvents.filter(ev => ev.event_type != null && OBSERVATION_EVENT_TYPES.has(ev.event_type))
     : rawEvents;
 
-  // Authenticated export download
   const handleExport = useCallback(async (format: 'csv' | 'json') => {
     const t = await getToken();
     const params = new URLSearchParams({ format });
@@ -1490,7 +1401,6 @@ const FleetEventTimeline: React.FC<{
     URL.revokeObjectURL(url);
   }, [getToken, selectedNode]);
 
-  // Build hostname map for display — prefer configured location label over raw hostname
   const hostnameMap = React.useMemo(() => {
     const map: Record<string, string> = {};
     nodes.forEach(n => {
@@ -1502,7 +1412,6 @@ const FleetEventTimeline: React.FC<{
 
   return (
     <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-sm dark:shadow-none overflow-hidden">
-      {/* Header */}
       <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-gray-700">
         <div className="flex items-center gap-2">
           <Activity className="w-4 h-4 text-indigo-400" />
@@ -1537,7 +1446,6 @@ const FleetEventTimeline: React.FC<{
         </div>
       </div>
 
-      {/* Filters */}
       <div className="px-5 py-3 flex items-center gap-3 flex-wrap border-b border-gray-100 dark:border-gray-700">
         <select
           value={selectedNode}
@@ -1564,7 +1472,6 @@ const FleetEventTimeline: React.FC<{
         </div>
       </div>
 
-      {/* Event list */}
       <div className="max-h-[400px] overflow-y-auto">
         {error && <div className="px-5 py-4 text-sm text-red-400">{error}</div>}
         {!error && events.length === 0 && !loading && (
@@ -1602,7 +1509,6 @@ const FleetEventTimeline: React.FC<{
         {loading && <div className="px-5 py-3 text-center text-xs text-gray-500"><RefreshCw size={12} className="inline animate-spin mr-1" /> Loading…</div>}
       </div>
 
-      {/* Pagination */}
       {hasMore && events.length > 0 && !loading && (
         <div className="px-5 py-3 border-t border-gray-100 dark:border-gray-700">
           <button onClick={loadMore} className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
@@ -1613,8 +1519,6 @@ const FleetEventTimeline: React.FC<{
     </div>
   );
 };
-
-// ── Section 4: Fleet Metric History (compact 2×2 grid) ────────────────────────
 
 type FleetMetricRange = '1h' | '24h' | '7d' | '30d';
 
@@ -1650,9 +1554,6 @@ const FLEET_CHART_CONFIG: { key: keyof FleetMetricPoint; label: string; unit: st
   { key: 'wes_score',  label: 'WES Score',     unit: '',      color: '#14b8a6', gradId: 'fmcWes'  },
 ];
 
-// Ranges this mini chart offers, gated by the same RANGE_CONFIG tier table as
-// the main history charts (and the backend's range_upgrade_plan), instead of a
-// separate per-tier list that could drift.
 const FLEET_METRIC_RANGES: FleetMetricRange[] = ['1h', '24h', '7d', '30d'];
 const allowedFleetRanges = (tier: SubscriptionTier): FleetMetricRange[] =>
   FLEET_METRIC_RANGES.filter(r => tierRank(tier) >= tierRank(RANGE_CONFIG[r].minTier));
@@ -1694,11 +1595,9 @@ const FleetMetricsMini: React.FC<{
 
   useEffect(() => { fetchData(range); }, [range, selectedNode, fetchData]);
 
-  // Merge all node points for "All Nodes" view or use single node
   const chartPoints: FleetMetricPoint[] = React.useMemo(() => {
     if (data.length === 0) return [];
     if (data.length === 1) return data[0].points;
-    // Multiple nodes: merge by timestamp (avg across nodes per bucket)
     const byTs = new Map<number, FleetMetricPoint[]>();
     data.forEach(n => n.points.forEach(p => {
       const arr = byTs.get(p.ts_ms) ?? [];
@@ -1716,7 +1615,6 @@ const FleetMetricsMini: React.FC<{
       });
   }, [data]);
 
-  // CSV export
   const handleCsvExport = useCallback(() => {
     if (chartPoints.length === 0) return;
     const header = 'timestamp,tok_s,watts,gpu_pct,cpu_pct,mem_pct,swap_write';
@@ -1737,14 +1635,12 @@ const FleetMetricsMini: React.FC<{
 
   return (
     <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-sm dark:shadow-none overflow-hidden">
-      {/* Header */}
       <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-gray-700">
         <div className="flex items-center gap-2">
           <Database className="w-4 h-4 text-blue-400" />
           <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Fleet Metric History</h3>
         </div>
         <div className="flex items-center gap-2">
-          {/* Range selector */}
           <div className="flex items-center gap-1">
             {(['1h', '24h', '7d', '30d'] as const).map(r => {
               const allowed = allowedRanges.includes(r);
@@ -1767,7 +1663,6 @@ const FleetMetricsMini: React.FC<{
               );
             })}
           </div>
-          {/* Node selector — pill buttons matching MetricsHistoryChart pattern */}
           <div className="flex items-center gap-1 border-l border-gray-700 pl-2 ml-1">
             <button
               onClick={() => setSelectedNode('')}
@@ -1789,7 +1684,6 @@ const FleetMetricsMini: React.FC<{
               </button>
             ))}
           </div>
-          {/* CSV export */}
           {chartPoints.length > 0 && (
             <button onClick={handleCsvExport} className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-gray-500 hover:text-gray-300 hover:bg-gray-700 transition-colors" title="Export CSV">
               <FileDown className="w-3 h-3" /> CSV
@@ -1801,7 +1695,6 @@ const FleetMetricsMini: React.FC<{
         </div>
       </div>
 
-      {/* Charts grid */}
       {error ? (
         <div className="px-5 py-8 text-center text-sm text-red-400">{error}</div>
       ) : chartPoints.length === 0 && !loading ? (
@@ -1877,21 +1770,14 @@ const FleetMetricsMini: React.FC<{
   );
 };
 
-// ── Main component ─────────────────────────────────────────────────────────────
-
 const TracesView: React.FC<TracesViewProps> = ({ nodes: _nodes, tenantId, pairingInfo, getToken, subscriptionTier, getNodeSettings, navParams, onNavConsumed }) => {
-  // Derive nodeId from pairing info first, then fall back to the WS metrics
-  // stream so Metric History / Agent Health render even before /api/pair/status
-  // resolves (or when the node is unpaired).
   const { allNodeMetrics } = useFleetStream();
   const wsNodeId = Object.keys(allNodeMetrics)[0] ?? '';
   const nodeId = pairingInfo?.node_id || wsNodeId;
   const { proxyActive, listenPort: proxyListenPort, targetPort: proxyTargetPort, runtimeOverrides } = useProxyStatus();
 
-  // Consume nav params after mount so they don't persist on tab re-visits.
   useEffect(() => {
     if (navParams && onNavConsumed) {
-      // Delay slightly so child components can read the initial value.
       const id = setTimeout(onNavConsumed, 500);
       return () => clearTimeout(id);
     }
@@ -1899,7 +1785,6 @@ const TracesView: React.FC<TracesViewProps> = ({ nodes: _nodes, tenantId, pairin
 
   return (
     <div className="space-y-8">
-      {/* ── Cloud: Fleet-first Mission Control ─────────────────────────── */}
       {!isLocalHost && (
         <>
           <FleetSovereigntyGuard nodes={_nodes} getNodeSettings={getNodeSettings} />
@@ -1908,16 +1793,10 @@ const TracesView: React.FC<TracesViewProps> = ({ nodes: _nodes, tenantId, pairin
         </>
       )}
 
-      {/* ── Localhost: Cockpit single-node diagnostics ─────────────────── */}
-      {/* 1. Sovereignty (collapsible) */}
       {isLocalHost && <SovereigntySection pairingInfo={pairingInfo} proxyActive={proxyActive} proxyListenPort={proxyListenPort} proxyTargetPort={proxyTargetPort} runtimeOverrides={runtimeOverrides} />}
-      {/* 2. Metric History (6-chart 3×2 grid) */}
       {isLocalHost && nodeId && <MetricHistoryPanel nodeId={nodeId} />}
-      {/* 3. Inference Traces */}
       {isLocalHost && <TraceTable tenantId={tenantId} proxyActive={proxyActive} proxyListenPort={proxyListenPort} proxyTargetPort={proxyTargetPort} />}
-      {/* 4. Connection Event Log */}
       {isLocalHost && <EventHistoryPanel />}
-      {/* 5. Diagnostics (formerly Agent Health) */}
       {isLocalHost && nodeId && <AgentHealthPanel   nodeId={nodeId} />}
     </div>
   );

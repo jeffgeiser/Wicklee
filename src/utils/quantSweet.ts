@@ -44,8 +44,6 @@ import { lookupPerplexity, QUALITY_BAND_LABEL } from './perplexity';
 import { quantCompressionRatio } from './quantSize';
 import { chipBandwidthGBs } from './chipBandwidth';
 
-// ── Chip bandwidth lookup ──────────────────────────────────────────────────────
-
 /**
  * Memory bandwidth in GB/s for the node's chip.
  * Used for display context only ("your M4 Max — 546 GB/s").
@@ -59,8 +57,6 @@ import { chipBandwidthGBs } from './chipBandwidth';
 export function chipBandwidthGbs(node: SentinelMetrics): number | null {
   return chipBandwidthGBs(node.chip_name ?? node.gpu_name ?? null);
 }
-
-// ── Quant compression ratios ──────────────────────────────────────────────────
 
 /**
  * VRAM footprint relative to FP16 baseline, derived from the canonical
@@ -145,15 +141,13 @@ function activeModelName(node: SentinelMetrics): string | null {
       ?? null;
 }
 
-// ── Recommendation output ─────────────────────────────────────────────────────
-
 type RecommendationKind =
-  | 'upgrade'      // strong: Q2/Q3 → Q4
-  | 'consider'     // optional: Q4 → Q6_K if headroom allows
-  | 'sweet-spot'   // already optimal: Q5/Q6
-  | 'downgrade'    // headroom is tight: consider dropping one level
-  | 'lossless'     // Q8/F16 — good quality, check context tradeoff
-  | 'none';        // not enough data to recommend
+  | 'upgrade'
+  | 'consider'
+  | 'sweet-spot'
+  | 'downgrade'
+  | 'lossless'
+  | 'none';
 
 export interface QuantRecommendation {
   kind:            RecommendationKind;
@@ -180,8 +174,6 @@ export interface QuantRecommendation {
   /** Supporting detail (1–2 sentences). */
   detail:          string;
 }
-
-// ── Main function ─────────────────────────────────────────────────────────────
 
 /**
  * Compute quantization sweet spot recommendation for a node's current model.
@@ -210,8 +202,6 @@ export function computeQuantRecommendation(
   const currentQuality = qualityDeltaFor(modelName, representativeQuantForFamily(currentFamily), currentFamily);
   const qFor = (family: string) => qualityDeltaFor(modelName, representativeQuantForFamily(family), family);
 
-  // Estimate FP16 baseline size from observed model size + current quant ratio.
-  // This anchors all subsequent size estimates to the actual loaded model.
   const fp16Gb = modelSizeGb / currentRatio;
 
   function sizeAt(family: string): number {
@@ -220,15 +210,10 @@ export function computeQuantRecommendation(
 
   function estTps(targetSizeGb: number): number | null {
     if (observedTps == null || observedTps <= 0 || modelSizeGb <= 0) return null;
-    // Scale observed throughput by inverse size ratio (bandwidth-bound assumption).
     return observedTps * (modelSizeGb / targetSizeGb);
   }
 
   function fits(targetSizeGb: number): boolean {
-    // Target fits if the additional VRAM it needs is within headroom, minus
-    // a reserve of 10% of total capacity — recommending an upgrade that
-    // consumes all headroom would push the node straight into the Poor
-    // band of computeModelFitScore (<10% free).
     const delta   = targetSizeGb - modelSizeGb;
     const reserve = totalGb != null ? totalGb * 0.10 : 0;
     return delta <= headroomGb - reserve;
@@ -241,7 +226,6 @@ export function computeQuantRecommendation(
     currentQuality,
   };
 
-  // ── Q2 / Q3: strong upgrade recommendation ───────────────────────────────
   if (currentFamily === 'Q2' || currentFamily === 'Q3') {
     const targetFamily = 'Q4';
     const targetSizeGb = sizeAt(targetFamily);
@@ -265,7 +249,6 @@ export function computeQuantRecommendation(
     };
   }
 
-  // ── Q4: consider Q6 upgrade if headroom allows ───────────────────────────
   if (currentFamily === 'Q4') {
     const targetFamily = 'Q6';
     const targetSizeGb = sizeAt(targetFamily);
@@ -292,7 +275,6 @@ export function computeQuantRecommendation(
       };
     }
 
-    // Doesn't fit — Q4 is the right choice for this headroom
     return {
       ...base,
       kind:          'sweet-spot',
@@ -307,11 +289,7 @@ export function computeQuantRecommendation(
     };
   }
 
-  // ── Q5 / Q6: already near-lossless ──────────────────────────────────────
   if (currentFamily === 'Q5' || currentFamily === 'Q6') {
-    // Suggest downgrade to Q4 only if headroom is very tight (<10% of total).
-    // Tight headroom check: if more than 80% of available headroom is used by
-    // the model, context runway will suffer.
     const q4SizeGb   = sizeAt('Q4');
     const vramFreed  = modelSizeGb - q4SizeGb;
     const headroomTight = headroomGb < 2.0;
@@ -345,7 +323,6 @@ export function computeQuantRecommendation(
     };
   }
 
-  // ── Q8 / F16: lossless — check if context headroom trade is worth it ─────
   if (currentFamily === 'Q8' || currentFamily === 'F16') {
     const targetFamily = currentFamily === 'F16' ? 'Q8' : 'Q6';
     const targetSizeGb = sizeAt(targetFamily);
@@ -353,7 +330,7 @@ export function computeQuantRecommendation(
     const headroomTight = headroomGb < 3.0;
 
     if (headroomTight && vramFreed > 1.0) {
-      const eTps = estTps(targetSizeGb); // will be faster, so ratio > 1
+      const eTps = estTps(targetSizeGb);
       return {
         ...base,
         kind:          'downgrade',
@@ -382,7 +359,6 @@ export function computeQuantRecommendation(
     };
   }
 
-  // ── Unknown quant family ─────────────────────────────────────────────────
   return {
     ...base,
     kind:          'none',

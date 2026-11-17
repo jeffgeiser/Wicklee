@@ -21,7 +21,6 @@ describe('safeRedirectPath', () => {
     expect(safe(q('//evil.example/'))).toBeNull();
     expect(safe(q('/\\evil.example/'))).toBeNull();
     expect(safe(q('javascript:alert(1)'))).toBeNull();
-    // Browsers strip tab/newline and treat backslash as slash.
     expect(safe(q('/\t/evil.example/'))).toBeNull();
     expect(safe(q('/\n/evil.example/'))).toBeNull();
     expect(safe(q('\\evil.example/'))).toBeNull();

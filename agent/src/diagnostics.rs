@@ -5,11 +5,6 @@ use std::time::Duration;
 #[cfg(any(all(target_os = "linux", not(target_env = "musl")), target_os = "windows"))]
 use nvml_wrapper::{enum_wrappers::device::TemperatureSensor, Nvml};
 
-// ── Startup Diagnostics ───────────────────────────────────────────────────────
-//
-// Runs once at boot. Prints a clean bordered summary to stdout showing only
-// what is relevant on this platform. Silent absence means N/A — no SKIP lines.
-
 /// Returns the platform-specific config.toml path for use in diagnostic hints.
 fn config_path_hint() -> &'static str {
     #[cfg(target_os = "macos")]
@@ -56,10 +51,8 @@ pub(crate) async fn run_startup_diagnostics(node_id: &str, pairing_status: &str,
     // ── Platform rows (only what's relevant on this OS) ───────────────────────
     let mut platform_rows: Vec<String> = Vec::new();
 
-    // macOS: pmset thermal + ioreg GPU util + powermetrics power
     #[cfg(target_os = "macos")]
     {
-        // pmset -g therm → CPU thermal throttle state
         if let Ok(out) = tokio::process::Command::new("pmset")
             .args(["-g", "therm"]).output().await
         {
@@ -69,7 +62,6 @@ pub(crate) async fn run_startup_diagnostics(node_id: &str, pairing_status: &str,
             }
         }
 
-        // ioreg IOAccelerator → GPU utilization
         if let Ok(out) = tokio::process::Command::new("ioreg")
             .args(["-r", "-c", "IOAccelerator"]).output().await
         {
@@ -79,11 +71,6 @@ pub(crate) async fn run_startup_diagnostics(node_id: &str, pairing_status: &str,
             }
         }
 
-        // powermetrics → CPU power draw (requires root)
-        // When --status is run as a non-root user, powermetrics will fail — but
-        // the LaunchDaemon runs as root and CAN collect power data. Check the
-        // live daemon's metrics endpoint first; only report the problem if both
-        // the daemon and local powermetrics are unavailable.
         let daemon_has_power = async {
             let client = reqwest::Client::builder()
                 .timeout(Duration::from_secs(2))
@@ -92,7 +79,6 @@ pub(crate) async fn run_startup_diagnostics(node_id: &str, pairing_status: &str,
                 .get(format!("http://127.0.0.1:{port}/api/metrics/snapshot"))
                 .send().await.ok()?;
             let json: serde_json::Value = resp.json().await.ok()?;
-            // apple_soc_power_w is populated only when powermetrics succeeds
             json.get("apple_soc_power_w")
                 .and_then(|v| v.as_f64())
                 .filter(|&w| w > 0.0)
@@ -100,7 +86,6 @@ pub(crate) async fn run_startup_diagnostics(node_id: &str, pairing_status: &str,
         if let Some(watts) = daemon_has_power {
             platform_rows.push(row("Power", &format!("{watts:.1}W  (powermetrics via daemon)")));
         } else {
-            // Daemon not running or not reporting power — try direct
             match tokio::process::Command::new("powermetrics")
                 .args(["-n", "1", "-i", "500", "--samplers", "cpu_power"])
                 .output().await
@@ -113,12 +98,9 @@ pub(crate) async fn run_startup_diagnostics(node_id: &str, pairing_status: &str,
         }
     }
 
-    // Linux: NVML (glibc only) + RAPL CPU power
     #[cfg(target_os = "linux")]
     {
-        // NVML — not available in musl builds
         #[cfg(not(target_env = "musl"))]
-        // No NVIDIA on this machine → Err, and we stay silent.
         if let Ok(nvml) = Nvml::init() {
                 let count = nvml.device_count().unwrap_or(0);
                 if count > 0
@@ -142,7 +124,6 @@ pub(crate) async fn run_startup_diagnostics(node_id: &str, pairing_status: &str,
                     }
         }
 
-        // RAPL CPU power (powercap, no sudo needed)
         {
             let found = crate::RAPL_PATHS.iter().find(|(path, _)| crate::read_rapl_uj(path).is_some());
             if let Some((path, label)) = found
@@ -156,7 +137,6 @@ pub(crate) async fn run_startup_diagnostics(node_id: &str, pairing_status: &str,
         }
     }
 
-    // Windows: NVML GPU
     #[cfg(target_os = "windows")]
     match Nvml::init() {
         Ok(nvml) => {
@@ -189,10 +169,8 @@ pub(crate) async fn run_startup_diagnostics(node_id: &str, pairing_status: &str,
         }
     }
 
-    // ── Runtime (all platforms) ───────────────────────────────────────────────
     println!("{sep}");
 
-    // ── Inference runtime detection (process-first, port-agnostic) ──────────
     {
         let discovered = process_discovery::scan_runtimes();
         let client = reqwest::Client::builder()
@@ -200,11 +178,6 @@ pub(crate) async fn run_startup_diagnostics(node_id: &str, pairing_status: &str,
             .build()
             .unwrap_or_default();
 
-        // Ollama — resolved by the shared resolver, so this box reports the
-        // port the harvester will actually use. It used to read config.toml
-        // and the process scan only, which meant an agent started with
-        // WICKLEE_OLLAMA_PORT printed ":11434 (auto)" while being pointed
-        // somewhere else entirely.
         let ollama_res = process_discovery::resolve_port(
             cfg_ref.runtime_ports.as_ref().and_then(|r| r.ollama),
             process_discovery::env_port("ollama"),
@@ -214,12 +187,6 @@ pub(crate) async fn run_startup_diagnostics(node_id: &str, pairing_status: &str,
         let ollama_source = ollama_res.map(|(_, src)| src.label()).unwrap_or("auto");
         let ollama_pinned = ollama_res.is_some_and(|(_, src)| src.is_pinned());
         if let Some(port) = ollama_port {
-            // Two separate questions, because one `?` chain conflated them:
-            // did /api/ps answer, and did it list a model. An idle Ollama
-            // answers with an empty list, which used to read as "the API did
-            // not answer" and fired the Port Doctor warning at a perfectly
-            // healthy runtime — while a dead port printed "running (no model
-            // loaded)". A failed read is not an empty result.
             let ps: Option<serde_json::Value> = async {
                 let resp = client
                     .get(format!("http://127.0.0.1:{port}/api/ps"))
@@ -241,10 +208,6 @@ pub(crate) async fn run_startup_diagnostics(node_id: &str, pairing_status: &str,
             };
             println!("{}", row("Ollama", &format!(":{port} ({ollama_source}) · {hint}")));
 
-            // Port Doctor: API did not answer on a non-default discovered
-            // port = probably a worker socket, and the harvester will fall
-            // back. A pinned port gets the opposite advice, because the
-            // harvester will not move off it.
             if !api_ok && port != 11434 && !ollama_pinned {
                 println!("  ⚠️  Ollama process found on :{port} but the API did not answer.");
                 println!("     This is likely an internal worker socket, not the API.");
@@ -258,9 +221,6 @@ pub(crate) async fn run_startup_diagnostics(node_id: &str, pairing_status: &str,
             println!("{}", row("Ollama", "not running"));
         }
 
-        // vLLM — check config override first, then process scan.
-        // Port Doctor: when auto-discovered on the default port (:8000) and the API
-        // doesn't respond, warn the user — they likely need a config override.
         let vllm_res = process_discovery::resolve_port(
             cfg_ref.runtime_ports.as_ref().and_then(|r| r.vllm),
             process_discovery::env_port("vllm"),
@@ -277,7 +237,6 @@ pub(crate) async fn run_startup_diagnostics(node_id: &str, pairing_status: &str,
             let status_str = if up { "healthy" } else { "starting up" };
             println!("{}", row("vLLM", &format!(":{port} ({vllm_source}) · {status_str}")));
 
-            // Port Doctor: default port + API not responding = likely wrong port
             if !up && !vllm_res.is_some_and(|(_, src)| src.is_pinned()) && port == 8000 {
                 println!("  ⚠️  vLLM detected but API not responding on :8000.");
                 println!("     If vLLM uses a non-default port, add to config:");
@@ -292,8 +251,6 @@ pub(crate) async fn run_startup_diagnostics(node_id: &str, pairing_status: &str,
             println!("       hint: sudo setcap cap_sys_ptrace+ep $(which wicklee)  # zero-config cross-user detection");
         }
 
-        // Ollama Port Doctor: same check for Ollama on default port
-        // (already handled above via the health check in the port validation harvester)
     }
 
     println!("{bot}");

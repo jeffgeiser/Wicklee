@@ -17,9 +17,6 @@ interface ModelsPageProps {
   onNavigateToInsightsPerformance?: () => void;
 }
 
-// ── Section wrapper — thin rule, small-caps eyebrow, optional inline meta ──
-// Replaces the prior icon-box pattern. Removes ~120px of vertical chrome per
-// section so the page fits roughly one viewport on desktop.
 interface SectionProps {
   eyebrow: string;
   meta?: string;
@@ -50,32 +47,18 @@ const Card: React.FC<{ children: React.ReactNode; className?: string }> = ({ chi
   <div className={`rounded-2xl border border-gray-700 bg-gray-800/50 ${className}`}>{children}</div>
 );
 
-// ── Bug fix: synthesize a per-model entry from singular fields ─────────────
-// The active_models array on MetricsPayload is only populated when 2+ models
-// are loaded concurrently — Ollama's /api/ps + the agent's per-model
-// accumulators kick in only in that case. When a single model is loaded,
-// the agent uses the legacy ollama_active_model + ollama_tokens_per_second
-// singular fields. Prior to this fix, single-model nodes appeared empty
-// on this page even though the Intelligence dashboard showed them just fine.
 function singleModelFallback(s: SentinelMetrics): ModelLiveMetrics | null {
   if (!s.ollama_active_model) return null;
   return {
     model: s.ollama_active_model,
     tok_s: s.ollama_tokens_per_second ?? null,
     vram_mb: s.ollama_model_size_gb != null ? Math.round(s.ollama_model_size_gb * 1024) : null,
-    wes: null,           // singular WES isn't per-model attributed; surfaced via leaderboard instead
-    request_count: 0,    // singular path has no per-model request count without the proxy
+    wes: null,
+    request_count: 0,
     runtime: 'ollama',
   } as ModelLiveMetrics;
 }
 
-// ── Section 1: LOADED — pure model-state view ───────────────────────────────
-// Reframe from "LIVE" inference metrics (tok/s, WES, requests) → pure
-// model-state: what's loaded, where, with what config, active vs idle.
-// Inference performance is already on the Intelligence tab at the node
-// level (with greater fidelity than we can offer per-model without the
-// optional Ollama proxy). The Models tab now answers a question Intelligence
-// can't: "what does my fleet have loaded right now, and which is active?"
 interface LoadedModelRow {
   node_id: string;
   node_label: string;
@@ -90,14 +73,8 @@ const LoadedSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
   const [localSentinel, setLocalSentinel] = useState<SentinelMetrics | null>(null);
   const [fleetNodes, setFleetNodes] = useState<Array<{ node_id: string; metrics: SentinelMetrics | null; display_name?: string | null }>>([]);
 
-  // Localhost: shared local-agent metrics stream (same connection Overview uses).
   useLocalMetricsStream(setLocalSentinel, isLocalHost);
 
-  // Fleet: live frames come from the fleet SSE (useFleetStream). A direct
-  // /api/fleet fetch still seeds first paint — stream state used to miss the
-  // singular ollama_active_model before its first frame landed — and covers
-  // nodes the stream holds no metrics for. That fetch was a 3 s poll
-  // duplicating the SSE; it now only refreshes every 30 s.
   const { allNodeMetrics, lastSeenMsMap } = useFleetStream();
   useEffect(() => {
     if (isLocalHost || !getToken) return;
@@ -113,7 +90,7 @@ const LoadedSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
         const data = await res.json();
         if (cancelled) return;
         setFleetNodes(data.nodes || []);
-      } catch { /* ignore transient fetch errors */ }
+      } catch { }
     };
     fetchOnce();
     const id = setInterval(fetchOnce, 30_000);
@@ -125,23 +102,17 @@ const LoadedSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
     const collectFromSentinel = (s: SentinelMetrics, label: string) => {
       const shared = { node_id: s.node_id, node_label: label };
 
-      // ── Ollama ──
       if (s.active_models?.length) {
-        // Multi-model path
         for (const m of s.active_models) {
           out.push({ ...shared, model: m, active: m.model === s.ollama_active_model });
         }
       } else {
-        // Single-model fallback (legacy singular fields)
         const fallback = singleModelFallback(s);
         if (fallback) {
           out.push({ ...shared, model: fallback, active: true });
         }
       }
 
-      // ── vLLM ── model identity lives in vllm_model_name, never in the
-      // Ollama-shaped fields above — without this branch, pure-vLLM nodes
-      // vanish from this page while Fleet Status still shows their model.
       if (s.vllm_running && s.vllm_model_name) {
         out.push({
           ...shared,
@@ -156,7 +127,6 @@ const LoadedSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
         });
       }
 
-      // ── llama.cpp ── same blind spot as vLLM.
       if (s.llamacpp_running && s.llamacpp_model_name) {
         out.push({
           ...shared,
@@ -175,10 +145,6 @@ const LoadedSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
       const s = localSentinel;
       if (s) collectFromSentinel(s, s.hostname || s.node_id);
     } else {
-      // Stream metrics (fresher) win; the polled list fills in the rest.
-      // Stream hostnames already carry display_name (FleetStreamContext).
-      // Once the stream has a frame, it is authoritative for membership, so a
-      // node removed (or an org switched) since the last poll drops at once.
       const streamHasFrame = Object.keys(lastSeenMsMap).length > 0;
       const seen = new Set<string>();
       for (const node of fleetNodes) {
@@ -221,17 +187,13 @@ const LoadedSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
       ) : (
         <Card>
           <div className="overflow-x-auto">
-            {/* table-fixed + explicit col widths prevent column shifting when a
-                row has an unusually long model name (e.g. fine-tunes with
-                very descriptive names). Model column gets the flexible space
-                via auto; everything else has a deterministic min width. */}
             <table className="w-full text-sm table-fixed">
               <colgroup>
-                {!isLocalHost && <col className="w-[18%]" />}{/* Node */}
-                <col />{/* Model — flexible */}
-                <col className="w-[12%]" />{/* Quant */}
-                <col className="w-[16%]" />{/* Memory */}
-                <col className="w-[14%]" />{/* Status */}
+                {!isLocalHost && <col className="w-[18%]" />}{}
+                <col />
+                <col className="w-[12%]" />
+                <col className="w-[16%]" />
+                <col className="w-[14%]" />
               </colgroup>
               <thead>
                 <tr className="text-[10px] uppercase tracking-widest text-gray-500 border-b border-gray-700">
@@ -244,7 +206,6 @@ const LoadedSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
               </thead>
               <tbody>
                 {rows.map((r, i) => {
-                  // Memory: prefer VRAM (GPU nodes), fall back to size_gb (CPU nodes).
                   let memoryDisplay = '—';
                   let memoryLabel: 'VRAM' | 'RAM' | null = null;
                   if (r.model.vram_mb != null && r.model.vram_mb > 0) {
@@ -260,9 +221,6 @@ const LoadedSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
                       ? 'GPU memory currently allocated to this model.'
                       : undefined;
 
-                  // Status: ● Active per the runtime-aware flag computed at
-                  // collection (Ollama: most-recently-inferenced per /api/ps;
-                  // vLLM/llama.cpp: currently inferring), ○ Idle otherwise.
                   const isActive = r.active;
 
                   return (
@@ -294,10 +252,6 @@ const LoadedSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
   );
 };
 
-// ── Section 2: RECENT — last 7 days, merged comparison + cost ──────────────
-// Folds the previously-separate Cost-by-Model section into the comparison
-// table as a column. Cost is a stat about historical runs, not its own
-// first-class concept — keeping them separate read as repetitive.
 interface ComparisonRow {
   model: string | null;
   hours_active: number | null;
@@ -316,7 +270,6 @@ const RecentSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
   const [sortBy, setSortBy] = useState<'wes' | 'tok_s' | 'cost'>('wes');
 
   useEffect(() => {
-    // Fleet mode needs an authenticated session; bail if no token plumbing.
     if (!isLocalHost && !getToken) return;
     let cancelled = false;
     const fetchData = async () => {
@@ -423,7 +376,6 @@ const RecentSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
   );
 };
 
-// ── Section 3: SWAPS — model switching activity ───────────────────────────
 interface SwapEntry { ts_ms: number; node_id?: string; from_model: string | null; to_model: string | null; gap_ms: number; }
 interface SwapsResponse { swaps: SwapEntry[]; total_swaps: number; total_gap_ms: number; total_gap_minutes: number; }
 
@@ -515,7 +467,6 @@ const SwapsSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<st
   );
 };
 
-// ── Section 4: BROWSE — HuggingFace GGUF catalog (lowest urgency, last) ────
 const BrowseSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<string | null> }> = ({ isLocalHost, getToken }) => (
   <Section eyebrow="Browse" meta="HuggingFace GGUF catalog scored against your hardware">
     {isLocalHost ? (
@@ -528,16 +479,6 @@ const BrowseSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
   </Section>
 );
 
-// ── Collapsible "Past activity" footer ─────────────────────────────────────
-// Recent (7-day comparison) and Swaps (24h transitions) are useful but
-// secondary — they answer "how did models perform historically" rather than
-// "what's loaded right now." Demoted below the primary Loaded + Browse view
-// to a collapsed-by-default disclosure that operators can expand when
-// they need the deeper history.
-//
-// Long-term: Swaps belongs in the Observability tab as a `model_swap_thrashing`
-// alert pattern (fires when swap frequency exceeds threshold). For now it
-// lives here as a manual deep-dive. See backlog.
 const PastActivityFooter: React.FC<{
   isLocalHost: boolean;
   getToken?: () => Promise<string | null>;
@@ -568,8 +509,6 @@ const PastActivityFooter: React.FC<{
       {openSection === 'recent' && (
         <>
           <RecentSection isLocalHost={isLocalHost} getToken={getToken} />
-          {/* Handoff: this table answers "which model earns its watts" — the
-              team/fleet money questions live one tab over. */}
           {onNavigateToInsightsPerformance && (
             <p className="text-[11px] text-gray-600 px-1">
               Cost attribution by team, capacity planning, and idle-waste recovery live on{' '}
@@ -589,15 +528,9 @@ const PastActivityFooter: React.FC<{
   );
 };
 
-// ── Page ────────────────────────────────────────────────────────────────────
 const ModelsPage: React.FC<ModelsPageProps> = ({ isLocalHost, getToken, onNavigateToInsightsPerformance }) => {
   return (
     <div className="space-y-6 p-4 sm:p-6 max-w-7xl mx-auto">
-      {/* Page header — establishes identity, doesn't duplicate section subtitles.
-          Platform contract: this tab is the MODEL axis — what's loaded and where,
-          what each model ran and cost, what you could add. Live node telemetry is
-          Intelligence; fleet efficiency/planning/cost governance over time is
-          Insights → Performance. Keep new features on the right side of that line. */}
       <header className="flex items-start gap-3 pb-2">
         <div className="h-10 w-10 rounded-xl bg-blue-600/10 border border-blue-600/20 flex items-center justify-center text-blue-400">
           <Boxes className="w-5 h-5" />
