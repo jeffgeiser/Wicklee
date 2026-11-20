@@ -9,7 +9,7 @@
     "build": "tsc && vite build",
     "postbuild": "node scripts/generate-static-pages.mjs",
     "build:agent": "tsc && vite build --mode agent",
-    "lint": "eslint . --max-warnings 27",
+    "lint": "eslint . --max-warnings 5",
     "test": "vitest run",
     "test:watch": "vitest",
     "preview": "vite preview --host 0.0.0.0 --port ${PORT:-3000}",
