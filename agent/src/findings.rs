@@ -1182,8 +1182,8 @@ fn expiry_reload(inputs: &RuleInputs, real: &[&Transition]) -> Vec<Finding> {
 /// statement and kept only if it hedges, which most of this copy does not.
 ///
 /// The alternative was rewording nineteen shipped patterns' prose to separate
-/// measurement from mechanism. That is worth doing and it is not step 4: the
-/// cloud consumes these same fields. Until then the full card stays available
+/// measurement from mechanism. That is worth doing and it is not step 4: other
+/// consumers read these same fields. Until then the full card stays available
 /// at `/api/observations`, and `inspect` carries the title and the measurement
 /// rather than a sentence it cannot label honestly.
 #[cfg(not(target_env = "musl"))]

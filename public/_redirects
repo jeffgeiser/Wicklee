@@ -6,14 +6,10 @@
 # window.location.pathname — so a static host must serve index.html for them or
 # a direct hit / refresh / shared link 404s.
 #
-# nginx already does this via `try_files $uri $uri/ /index.html` (nginx.conf),
-# so this file is inert on the Railway deployment and only matters wherever
-# Cloudflare Pages serves the site. Harmless to have in both.
-#
-# Routes are listed EXPLICITLY rather than using a blanket `/* / 200`:
-# a catch-all would also swallow /api/*, /mcp and /metrics, which must reach the
-# backend rather than return the SPA shell. Add a line here when you add a route
-# to App.tsx that isn't prerendered.
+# Routes are listed EXPLICITLY rather than using a blanket `/* / 200`, so a
+# path that does not exist (/api/*, /mcp, a mistyped URL) is a real 404 rather
+# than the SPA shell with a 200. Add a line here when you add a route to
+# App.tsx that isn't prerendered.
 #
 # The rewrite target is `/`, NOT `/index.html`. Pages canonicalises HTML paths
 # ("pretty URLs": /about/index.html → /about/), so a 200 rewrite to /index.html
@@ -26,6 +22,3 @@
 /metrics-reference  /   200
 /terms              /   200
 /privacy            /   200
-/refund             /   200
-/sign-in            /   200
-/sign-up            /   200

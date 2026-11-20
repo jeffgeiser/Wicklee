@@ -1,10 +1,8 @@
-import React, { Suspense, useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { LayoutGrid, Server, Activity, Cpu, Users, Settings, BookOpen, Newspaper, Github, User as UserIcon, Boxes } from 'lucide-react';
 import { ConnectionState, DashboardTab, User, TIER_BADGE } from '../types';
 import { usePermissions } from '../hooks/usePermissions';
 import { IS_AGENT } from '../utils/buildTarget';
-
-const LazyClerkAccountActions = IS_AGENT ? ((() => null) as never) : React.lazy(() => import('../cloud/ClerkAccountActions'));
 
 interface SidebarProps {
   activeTab: DashboardTab;
@@ -142,17 +140,6 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
                   GitHub
                 </a>
               </div>
-
-              {!IS_AGENT && !isLocalHost && (
-                <Suspense fallback={
-                  <div className="mt-1.5 pt-1.5 border-t border-gray-100 dark:border-gray-700/50 space-y-0.5">
-                    <div className="px-3 py-2 h-9" />
-                    <div className="px-3 py-2 h-9" />
-                  </div>
-                }>
-                  <LazyClerkAccountActions onClose={() => setIsAvatarMenuOpen(false)} />
-                </Suspense>
-              )}
             </div>
           )}
         </div>

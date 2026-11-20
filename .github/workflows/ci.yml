@@ -2,11 +2,9 @@ name: CI
 
 # Tests, typecheck, and cross-binary contract checks on every push/PR.
 #
-# The June 2026 calculation-consistency audit added test suites whose whole
-# purpose is to catch drift automatically (e.g. cloud fit-scoring is pinned
-# to the agent's canonical values; quant compression ratios are pinned to
-# bytesPerWeight()/2). They only guard anything if CI runs them — both the
-# fit-score drift and the ratio-table drift happened while nothing watched.
+# Test suites exist to catch drift automatically (e.g. quant compression
+# ratios are pinned to bytesPerWeight()/2). They only guard anything if CI
+# runs them.
 on:
   push:
     branches:
@@ -33,18 +31,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Perplexity baseline in sync (frontend copy matches cloud/data)
-        run: npm run check:perplexity-sync
-
-      - name: Scoring module in sync (agent + cloud mirrors match shared/scoring.rs)
-        run: npm run check:scoring-sync
-
-      # Invariants CLAUDE.md states in prose, as checks: the WES colour ladder
-      # has exactly one implementation, its frozen boundaries are intact, and
-      # every field the agent sends exists in the cloud struct and the frontend
-      # type. An inline copy of the ladder had already drifted to grey below 1
-      # while only the written instruction guarded it.
-      - name: Invariants (WES scale, MetricsPayload three-way sync)
+      # Invariants stated in prose, as checks: the WES colour ladder has
+      # exactly one implementation, its frozen boundaries are intact, and every
+      # field the agent sends exists in the frontend type. An inline copy of the
+      # ladder had already drifted to grey below 1 while only the written
+      # instruction guarded it.
+      - name: Invariants (WES scale, MetricsPayload sync)
         run: npm run check:invariants
 
       - name: Typecheck
@@ -64,7 +56,7 @@ jobs:
       # postbuild failure (generate-static-pages.mjs guards, prerender.js
       # missing, a meta-swap probe not matching) surfaced only after merge.
       # ~10s. Also the only place the code-split output is checked.
-      - name: Build (cloud target + prerendered pages)
+      - name: Build (website + prerendered pages)
         run: npm run build
 
   agent-windows:
@@ -124,29 +116,6 @@ jobs:
       - name: Tests
         run: cargo test
         working-directory: agent
-
-  cloud:
-    name: Cloud · cargo test
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: cloud
-
-      - name: Clippy (-D warnings)
-        run: cargo clippy --all-targets -- -D warnings
-        working-directory: cloud
-
-      - name: Tests
-        run: cargo test
-        working-directory: cloud
 
   # ── Agent · musl target (no DuckDB) ───────────────────────────────────────────
   # 71 `#[cfg(target_env = "musl")]` sites across 9 modules carry the no-store

@@ -23,7 +23,7 @@ That's what v0.9.0 fixes.
 
 ## What Runtime Config Surface does
 
-For every model loaded on every node in your fleet, Wicklee now captures the launch-time configuration and surfaces it through a single click in the dashboard. Specifically:
+For every model loaded on a node, Wicklee now captures the launch-time configuration and surfaces it through a single click in the dashboard. Specifically:
 
 - **Ollama** — `POST /api/show` returns the parameters block, template, system prompt, GPU layer count, quantization level, and the model_info dictionary (context length, parameter count, layer architecture). All of it cached and queryable.
 - **vLLM** — `GET /v1/server_info` (vLLM 0.5.0+) returns the served model name, max model length, tensor parallel size, and quantization. For older vLLM versions, Wicklee falls back to parsing the process command line via `ps aux`.
@@ -69,10 +69,9 @@ That's deliberate. Putting Wicklee in the request path or the configuration path
 System prompts can contain proprietary information. Templates can reflect internal product structure. Wicklee handles this with a privacy-first default:
 
 - The **full config** (including `template` and `system_prompt`) lives in the agent's in-memory cache on each node and is served to the localhost dashboard via the agent's local API only.
-- The **cloud telemetry path** strips `template` and `system_prompt` by default. Fleet aggregation sees the metadata (model name, context length, quantization, GPU layers) but not the prompt-level content.
-- Users who want full config sharing across the fleet (for, say, centralized config audit) can opt in via `config.toml`, but it's off by default.
+- Nothing leaves the node. The agent has no cloud connection, so the prompt-level content is only ever readable by whoever can reach the agent's own port.
 
-This isn't a privacy policy. It's a structural default — the cloud-push serialization simply doesn't include those fields unless you turn them on.
+This isn't a privacy policy. It's a structural default. (When this post was written, a hosted fleet view existed and received a stripped copy of the config. It was shut down on 2026-11-20.)
 
 ## Three things you can do with it today
 
@@ -84,7 +83,7 @@ curl -s http://node-b:7700/api/runtime-config?model=llama3.2:8b > b.json
 diff <(jq -S . a.json) <(jq -S . b.json)
 ```
 
-**2. Audit fleet-wide configs.** Across multiple paired nodes, the cloud aggregator (with opt-in full sharing) can answer "show me every node running Llama 3.2 with a context length different from 8192." Useful for compliance and for catching configuration drift before it becomes a performance mystery.
+**2. Audit configs across nodes.** Loop the same API call over your nodes and filter the JSON — for example, "show me every node running Llama 3.2 with a context length different from 8192." Useful for catching configuration drift before it becomes a performance mystery.
 
 **3. Build a config-history view.** Wicklee captures `captured_at_ms` on every snapshot. With DuckDB enabled (default on glibc Linux and macOS builds), you can query "what was the config 3 days ago, when WES was 23% higher?" The data is local; the queries are SQL.
 
@@ -99,8 +98,8 @@ curl -fsSL https://wicklee.dev/install.sh | bash
 sudo ~/.wicklee/bin/wicklee --install-service
 ```
 
-That's it. The "Config" pill appears next to active models in the diagnostic rail; multi-model nodes get per-row config links in the Active Models panel. The new dedicated [Models tab](https://wicklee.dev/dashboard) (also new this week) gives you a fleet-wide view of discovery, comparison, and configs in one place.
+That's it. The "Config" pill appears next to active models in the diagnostic rail; multi-model nodes get per-row config links in the Active Models panel. The Models tab in the local dashboard gives you discovery, comparison, and configs in one place.
 
 ---
 
-*The Wicklee agent and local dashboard are open source under Apache 2.0; the fleet control plane is source-available under FSL-1.1-Apache-2.0. Source on [GitHub](https://github.com/jeffgeiser/Wicklee).*
+*The Wicklee agent and local dashboard are open source under Apache 2.0. Source on [GitHub](https://github.com/jeffgeiser/Wicklee).*

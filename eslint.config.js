@@ -34,7 +34,6 @@ export default tseslint.config(
       'agent/frontend/dist/**',
       'node_modules/**',
       'public/**',
-      'cloud/**',
       'agent/**',
       'deploy/**',
     ],

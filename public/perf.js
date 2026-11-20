@@ -10,7 +10,7 @@
  * Copy and Share buttons, so the numbers from the actual device on the actual
  * network can be pasted into a chat or an issue.
  *
- * Cross-origin resources (Clerk, Google Fonts) expose start and end
+ * Cross-origin resources (Google Fonts) expose start and end
  * times but hide sizes and wait/download split unless they send
  * Timing-Allow-Origin — those show as `?`. The waterfall shape is still there.
  */
@@ -170,7 +170,7 @@
   root.appendChild(pre);
   document.documentElement.appendChild(pill);
 
-  // Open a beat after `load` so late arrivals (ClerkJS, fonts, the lazy app
+  // Open a beat after `load` so late arrivals (fonts, the lazy app
   // chunk) are in the list. Refresh re-reads the timeline at any time.
   function armed() { setTimeout(show, 2500); }
   if (document.readyState === 'complete') armed(); else addEventListener('load', armed);

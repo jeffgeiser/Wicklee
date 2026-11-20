@@ -55,14 +55,13 @@ A specialized agent that:
 - Computes derived metrics that have no native equivalent — WES (tokens per watt with thermal penalty), per-model VRAM share, inference state classification
 - Runs as a single small binary with minimal dependencies, on the actual node — not as a sampled SaaS that proxies metrics from a 10-second window
 
-Then exposes that data through standard interfaces:
+Then exposes that data through interfaces that run on the node itself:
 
-- **OpenTelemetry exporter** — feeds Datadog, Grafana, Honeycomb, New Relic without replacing them
-- **Prometheus scrape endpoint** — drops into existing Prometheus stacks unchanged
-- **REST + Webhooks** — for custom dashboards, alerting, automation
-- **MCP server** — for AI agents (Cursor, Claude Desktop) to query node state
+- **A local REST API and SSE stream** on `localhost:7700` — for scripts, custom dashboards and automation
+- **A command-line interface** — `wicklee inspect`, `ready`, `findings` and `verify` turn the data into evidence-backed findings
+- **An MCP server** — for AI agents (Cursor, Claude Desktop) to query node state
 
-The model isn't "replace your observability." It's "specialize narrowly, integrate everywhere." Your stack stays standard; you just give it eyes for the hardware layer everyone else ignores.
+The model isn't "replace your observability." It's "specialize narrowly." Your stack stays what it is; this gives you the hardware layer everyone else ignores.
 
 ## What this means for buyers
 
@@ -72,7 +71,7 @@ If you're running self-hosted AI in production today, you probably have *one* of
 2. **You're stretching a generic tool to fit.** You set up Datadog and watch GPU% climb, but can't answer "why is inference slow" when it does.
 3. **You bought a specialized AI observability platform.** Your bill is meaningful. The vendor focuses on prompt-level observability (cost per token, model latency by API endpoint) and treats hardware as a black box.
 
-Hardware-aware observability is the fourth option: deep visibility into the physical layer your AI runs on, fed through the standard interfaces your existing tools already understand. You get the specialized depth without abandoning your stack or paying twice for overlapping coverage.
+Hardware-aware observability is the fourth option: deep visibility into the physical layer your AI runs on, on the node, with nothing to sign up for and nothing leaving the machine.
 
 ## Try it
 
@@ -85,8 +84,8 @@ curl -fsSL https://wicklee.dev/install.sh | bash
 
 The dashboard opens at `http://localhost:7700`. WES, thermal state, per-model VRAM, inference state machine, and multi-runtime detection are all in the agent, which is free and needs no account.
 
-For multi-node fleets, the cloud dashboard at `wicklee.dev` aggregates everything across paired nodes, and an OpenTelemetry exporter and a Prometheus scrape endpoint feed an existing observability stack. (Written in 2026 against the hosted fleet view, which was shut down on 2026-11-20. The agent's own localhost surface is what a current release gives you.)
+Run it on each node you care about. (When this post was written in May 2026 Wicklee also offered a hosted fleet view, an OpenTelemetry exporter and a Prometheus endpoint. Those were shut down on 2026-11-20 and are no longer part of Wicklee; the agent's own localhost surface is what a current release gives you.)
 
 ---
 
-*The Wicklee agent and local dashboard are open source under Apache 2.0; the fleet control plane is source-available under FSL-1.1-Apache-2.0. Source on [GitHub](https://github.com/jeffgeiser/Wicklee).*
+*The Wicklee agent and local dashboard are open source under Apache 2.0. Source on [GitHub](https://github.com/jeffgeiser/Wicklee).*

@@ -11,29 +11,21 @@
  *     Model Fit Score
  *   Tab: Performance
  *     WES Leaderboard · Inference Density Map (2-col)
- *     WES Trend Chart (cloud only)
  *     Quantization ROI
- *   Tab: Forensics
- *     6-card grid: Efficiency Regression, Memory Forecast, Hardware Cold Start,
- *                  Fleet Thermal Diversity, Inference Density Historical, Sovereignty Audit
  *
  * Works in both modes:
  *   Cockpit  (isLocalHost) — local SSE at /api/metrics, single-node
  *   Mission Control        — FleetStreamContext allNodeMetrics, multi-node
  */
 
-import { isProOrAbove as tierIsProOrAbove } from '../utils/tier';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Thermometer, Zap, HardDrive, Target, BarChart2,
-  TrendingDown, Database, Cpu, Globe, Shield,
-  Activity, Layers, CheckCircle, ChevronDown, History, Clock,
-  Check} from 'lucide-react';
+  Database, Cpu, Globe,
+  Activity, CheckCircle, ChevronDown, History, Clock,
+} from 'lucide-react';
 
 import { NodeAgent, SentinelMetrics, InsightsTier, FleetEvent, SubscriptionTier, ObservabilityNavParams } from '../types';
-import { useFleetObservations as useCloudFleetObservations } from '../cloud/hooks/useFleetObservations';
-import type { FleetObservation } from '../cloud/hooks/useFleetObservations';
-import { useFleetDuty as useCloudFleetDuty } from '../cloud/hooks/useFleetDuty';
 import { useFleetStream } from '../contexts/FleetStreamContext';
 
 import { computeWES, computeRawWES, thermalCostPct, wesColorClass } from '../utils/wes';
@@ -58,25 +50,11 @@ import IdleResourceCard    from './insights/tier2/IdleResourceCard';
 import ModelFitAnalysis from './insights/tier2/ModelFitAnalysis';
 
 import InsightsGlobalStatusRail, { FiringAlert } from './insights/InsightsGlobalStatusRail';
-import InsightsLockedCard from './insights/InsightsLockedCard';
 import InsightsLiteCard   from './insights/InsightsLiteCard';
 import InsightsTeaseCard  from './insights/InsightsTeaseCard';
 import HexHive from './shared/HexHive';
 import type { HexHiveRow } from './shared/HexHive';
-import WESHistoryChart from '../cloud/WESHistoryChart';
-import MetricsHistoryChart from '../cloud/MetricsHistoryChart';
-import ThermalBudgetCard from '../cloud/insights/ThermalBudgetCard';
-import ChargebackCard from '../cloud/insights/ChargebackCard';
-import CapacityPlannerCard from '../cloud/insights/CapacityPlannerCard';
-import MigrationAdvisorCard from '../cloud/insights/MigrationAdvisorCard';
-import IdleWasteCard from '../cloud/insights/IdleWasteCard';
-import {
-  useForensicsHistory, EfficiencyRegressionCard, MemoryForecastCard, ColdStartCard,
-  ThermalDiversityCard, InferenceDensityCard, SovereigntyAuditCard,
-} from '../cloud/insights/ForensicsCards';
-
 import AccordionObservationCard from './insights/AccordionObservationCard';
-import FleetObservationCard from '../cloud/insights/FleetObservationCard';
 
 import ModelFitMiniTile from './insights/ModelFitMiniTile';
 import FleetHeaderBar from './insights/FleetHeaderBar';
@@ -86,16 +64,7 @@ import { useLocalObservations } from '../hooks/useLocalObservations';
 import type { DetectedInsight } from '../types/observations';
 import { appendRecentEvent, ONSET_SUPPRESSION_MS } from '../lib/insightLifecycle';
 
-import { IS_AGENT, IS_LOCAL_HOST as isLocalHost } from '../utils/buildTarget';
-
-const noFleetObservations: typeof useCloudFleetObservations = () => ({
-  observations: [],
-  loading: false,
-  refresh: async () => {},
-  acknowledge: async () => {},
-});
-const useFleetObservations = IS_AGENT ? noFleetObservations : useCloudFleetObservations;
-const useFleetDuty: typeof useCloudFleetDuty = IS_AGENT ? () => null : useCloudFleetDuty;
+import { IS_LOCAL_HOST as isLocalHost } from '../utils/buildTarget';
 
 /** Simple WES from live telemetry (no history — same formula as Overview). */
 function computeNodeWes(m: SentinelMetrics): number | null {
@@ -129,33 +98,6 @@ const ALERT_HOLD_MS   = 5 * 60_000;
 const OBS_HOLD_MS     = 10 * 60_000;
 /** Maximum entries stored in the Recent Activity log. */
 const MAX_LOG_ENTRIES = 50;
-
-/** Map a cloud FleetObservation to the DetectedInsight shape used by observation cards. */
-function serverObsToInsight(o: FleetObservation, resolvedHostname?: string): DetectedInsight {
-  let ctx: Record<string, unknown> = {};
-  try { if (o.context_json) ctx = JSON.parse(o.context_json); } catch {}
-
-  return {
-    patternId:       o.alert_type,
-    nodeId:          o.node_id,
-    hostname:        resolvedHostname ?? o.node_id,
-    title:           o.title,
-    hook:            (ctx.hook as string) ?? o.detail,
-    body:            o.detail,
-    recommendation:  (ctx.recommendation as string) ?? '',
-    resolution_steps: (ctx.resolution_steps as string[]) ?? [],
-    action_id:       (ctx.action_id as DetectedInsight['action_id']) ?? 'check_thermal_zone',
-    requiredMs:      300_000,
-    observedMs:      Date.now() - o.fired_at_ms,
-    confidence:      (ctx.confidence as DetectedInsight['confidence']) ?? (o.severity === 'critical' ? 'high' : 'moderate'),
-    confidenceRatio: (ctx.confidence_ratio as number) ?? 1.0,
-    tier:            'community',
-    actions:         [],
-    firstFiredMs:    o.fired_at_ms,
-    best_node_id:    null,
-    best_node_hostname: null,
-  };
-}
 
 /** Cached pattern-engine observation with lifecycle timestamps. */
 interface ObsEntry {
@@ -356,17 +298,15 @@ const WesLeaderboardLite: React.FC<{ nodes: SentinelMetrics[] }> = ({ nodes }) =
   );
 };
 
-type InsightsTab = 'triage' | 'performance' | 'forensics';
+type InsightsTab = 'triage' | 'performance';
 
 const InsightsTabBar: React.FC<{
   active: InsightsTab;
   onChange: (t: InsightsTab) => void;
-  hasForensicsUnlocked: boolean;
-}> = ({ active, onChange, hasForensicsUnlocked }) => {
+}> = ({ active, onChange }) => {
   const tabs: { id: InsightsTab; label: string; locked?: boolean }[] = [
     { id: 'triage',      label: 'Triage' },
     { id: 'performance', label: 'Performance' },
-    { id: 'forensics',   label: 'Forensics', locked: !hasForensicsUnlocked },
   ];
   return (
     <div className="flex items-center gap-1 px-6 pt-4 pb-0 border-b border-gray-700/60">
@@ -419,7 +359,7 @@ interface AIInsightsProps {
    * `onDeepLinkConsumed` so the parent can clear the state and not
    * re-trigger on subsequent renders.
    */
-  deepLink?: { tab: 'triage' | 'performance' | 'forensics'; scrollTo?: string };
+  deepLink?: { tab: 'triage' | 'performance'; scrollTo?: string };
   /** Called by AIInsights once it has handled the deep-link target. */
   onDeepLinkConsumed?: () => void;
   /** Navigate to the Models tab — used by model-placement cards (e.g. the
@@ -846,16 +786,10 @@ const LocalPerformanceHistory: React.FC<{ nodeId: string }> = ({ nodeId }) => {
 
 const AIInsights: React.FC<AIInsightsProps> = ({
   nodes,
-  insightsTier,
   canViewInsight,
-  getToken,
-  historyDays = 1,
-  subscriptionTier = 'community',
   onFleetEvent,
-  onNavigateToObservability,
   deepLink,
   onDeepLinkConsumed,
-  onNavigateToModels,
   onNavigateToPricing,
 }) => {
 
@@ -887,7 +821,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   }, [deepLink]);
   const [benchmarkReport, setBenchmarkReport] = useState<BenchmarkReport | null>(null);
   /** Shared node selection for WES + Metrics history charts */
-  const [perfNodeId, setPerfNodeId] = useState<string | null>(null);
 
   const wattReadingsRef        = useRef<number[]>([]);
   const [sessionBaselineWatts, setSessionBaselineWatts] = useState<number | null>(null);
@@ -906,14 +839,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
   const [logExpanded, setLogExpanded] = useState(false);
   const [showResolved, setShowResolved] = useState(false);
 
-  const { observations: serverObservations, acknowledge: acknowledgeObs } = useFleetObservations({
-    getToken,
-    state: 'all',
-    skip: isLocalHost,
-  });
-
-  const fleetDuty = useFleetDuty(isLocalHost ? null : getToken ?? null);
-
   const { observations: localAgentObs } = useLocalObservations(!isLocalHost);
 
   const appendToLog = useCallback((entry: AlertLogEntry) => {
@@ -928,38 +853,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
 
   const obsCacheRef  = useRef(new Map<string, ObsEntry>());
   const [obsEntries, setObsEntries] = useState<ObsEntry[]>([]);
-  const isProOrAbove = tierIsProOrAbove(subscriptionTier);
-
-  const serverSeededRef = useRef(false);
-  useEffect(() => {
-    if (!isProOrAbove) return;
-    const cache = obsCacheRef.current;
-    let changed = false;
-    if (!serverSeededRef.current && serverObservations.length > 0) {
-      serverSeededRef.current = true;
-      changed = true;
-      for (const obs of serverObservations) {
-        if (obs.state === 'acknowledged') continue;
-        const key = `${obs.alert_type}:${obs.node_id}`;
-        if (cache.has(key)) continue;
-        cache.set(key, {
-          insight:      serverObsToInsight(obs, allNodeMetrics[obs.node_id]?.hostname ?? obs.node_id),
-          firstFiredMs: obs.fired_at_ms,
-          resolvedMs:   obs.state === 'resolved' ? (obs.resolved_at_ms ?? Date.now()) : null,
-        });
-      }
-    }
-    if (!serverSeededRef.current) return;
-    for (const [key, entry] of cache) {
-      const { nodeId, hostname } = entry.insight;
-      if (hostname !== nodeId) continue;
-      const resolved = allNodeMetrics[nodeId]?.hostname;
-      if (!resolved || resolved === hostname) continue;
-      cache.set(key, { ...entry, insight: { ...entry.insight, hostname: resolved } });
-      changed = true;
-    }
-    if (changed) setObsEntries(Array.from(cache.values()));
-  }, [serverObservations, isProOrAbove, allNodeMetrics]);
 
   /**
    * Onset suppression map — tracks the last timestamp a pattern_onset event was
@@ -1218,7 +1111,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
     });
     setObsEntries(sorted);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [localAgentObs, serverObservations]);
+  }, [localAgentObs]);
 
   const effectiveNodes: SentinelMetrics[] = isLocalHost && localSentinel
     ? [localSentinel]
@@ -1292,15 +1185,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
         const idleStart = nodeIdleStartMsRef.current[n.node_id];
         if (idleStart == null) return false;
         return (now - idleStart) >= 3 * 60 * 1_000;
-      })
-    : [];
-
-  const fleetIdleNodes: SentinelMetrics[] = !isLocalHost
-    ? effectiveNodes.filter(n => {
-        if (getNodePowerW(n) == null) return false;
-        const dutyEntry = fleetDuty?.nodes.find(d => d.node_id === n.node_id);
-        if (!dutyEntry || dutyEntry.duty_pct == null) return false;
-        return dutyEntry.duty_pct < 5;
       })
     : [];
 
@@ -1442,10 +1326,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
 
   const fitNodes = effectiveNodes.filter(n => computeModelFitScore(n) != null);
 
-  const isTeamOrAbove = insightsTier === 'trend' || insightsTier === 'predictive';
-  const hasCloudHistory = !isLocalHost && !!getToken;
-  const forensicsHistory = useForensicsHistory(getToken, hasCloudHistory && isTeamOrAbove && activeTab === 'forensics');
-
   const localNodeId   = m?.node_id ?? 'local';
   const localSettings = getNodeSettings(localNodeId);
 
@@ -1545,14 +1425,13 @@ const AIInsights: React.FC<AIInsightsProps> = ({
         activeObsCount={
           isLocalHost
             ? localAgentObs.length
-            : serverObservations.filter(o => o.state === 'open').length
+            : 0
         }
       />
 
       <InsightsTabBar
         active={activeTab}
         onChange={setActiveTab}
-        hasForensicsUnlocked={isTeamOrAbove}
       />
 
       <div className="flex-1 min-h-0 overflow-y-auto">
@@ -1744,42 +1623,12 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                             hook:      entry.insight.hook,
                             detail:    `${entry.insight.title} dismissed (1h) on ${entry.insight.hostname}`,
                           });
-                          const matchingObs = serverObservations.find(
-                            o => o.alert_type === entry.insight.patternId && o.node_id === entry.insight.nodeId && o.state === 'open'
-                          );
-                          if (matchingObs) {
-                            acknowledgeObs(matchingObs.id);
-                          }
                         }}
                       />
                     ))}
                   </div>
                 );
               })()}
-
-              {!isLocalHost && serverObservations.length > 0 && (
-                <div className="space-y-2">
-                  <SectionHeader>Observations</SectionHeader>
-                  {serverObservations
-                    .filter(o => showResolved || o.state === 'open')
-                    .map(obs => {
-                      const nodeHost = effectiveNodes.find(n => n.node_id === obs.node_id)?.hostname ?? obs.node_id;
-                      return (
-                        <FleetObservationCard
-                          key={obs.id}
-                          obs={obs}
-                          hostname={nodeHost}
-                          onAcknowledge={() => acknowledgeObs(obs.id)}
-                          onViewInTimeline={
-                            onNavigateToObservability
-                              ? () => onNavigateToObservability({ nodeId: obs.node_id, centerMs: obs.fired_at_ms })
-                              : undefined
-                          }
-                        />
-                      );
-                    })}
-                </div>
-              )}
 
               <div>
                 {fitNodes.length > 0
@@ -1846,17 +1695,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                       <Section2NominalRow icon={<Zap className="w-4 h-4" />} label="Idle Resource Cost" status="No idle overhead detected"
                         lastFiredMs={lastIdleFiredRef.current} lastFiredDetail={lastIdleDetailRef.current} />
                     )
-                  ) : fleetIdleNodes.length > 0 ? (
-                    <div className="space-y-3">
-                      {fleetIdleNodes.map(n => {
-                        const ns = getNodeSettings(n.node_id);
-                        return (
-                          <div key={n.node_id} id={`insight-idle-resource-${n.node_id}`}>
-                            <IdleResourceCard node={n} dutyPct={fleetDuty?.nodes.find(d => d.node_id === n.node_id)?.duty_pct ?? null} kwhRate={ns.kwhRate} pue={ns.pue} showNodeHeader />
-                          </div>
-                        );
-                      })}
-                    </div>
                   ) : (
                     <Section2NominalRow icon={<Zap className="w-4 h-4" />} label="Idle Resource Cost" status="No idle overhead detected"
                       lastFiredMs={lastIdleFiredRef.current} lastFiredDetail={lastIdleDetailRef.current} />
@@ -1930,54 +1768,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                 </div>
               )}
 
-              {isProOrAbove && !isLocalHost && (() => {
-                const now24h = Date.now() - 24 * 60 * 60 * 1000;
-                const resolved = serverObservations
-                  .filter(o => o.state === 'resolved' && o.resolved_at_ms != null && o.resolved_at_ms > now24h)
-                  .sort((a, b) => (b.resolved_at_ms ?? 0) - (a.resolved_at_ms ?? 0));
-                if (resolved.length === 0) return null;
-                return (
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-widest text-gray-500">
-                      <CheckCircle className="w-3.5 h-3.5 text-green-400" />
-                      Resolved — Last 24h ({resolved.length})
-                    </div>
-                    <div className="rounded-2xl border border-gray-700 overflow-hidden">
-                      {resolved.map((obs, i) => {
-                        const durationMs = (obs.resolved_at_ms ?? 0) - obs.fired_at_ms;
-                        const ago = Date.now() - (obs.resolved_at_ms ?? Date.now());
-                        return (
-                          <div
-                            key={obs.id}
-                            className={`flex items-center gap-3 px-4 py-2.5 ${
-                              i < resolved.length - 1 ? 'border-b border-gray-700/60' : ''
-                            } bg-gray-800`}
-                          >
-                            <div className="w-1.5 h-1.5 rounded-full shrink-0 bg-green-500/50" />
-                            <div className="flex-1 min-w-0">
-                              <span className="text-xs text-gray-400">{obs.title}</span>
-                              <span className="text-[10px] text-gray-600 ml-2 font-telin">{obs.node_id}</span>
-                            </div>
-                            <div className="flex items-center gap-3 shrink-0">
-                              <span className="font-telin text-[10px] text-green-500/70 flex items-center gap-1">
-                                <Check className="w-2.5 h-2.5" />
-                                {durationMs < 60000 ? `${Math.round(durationMs / 1000)}s` :
-                                 durationMs < 3600000 ? `${Math.round(durationMs / 60000)}m` :
-                                 `${(durationMs / 3600000).toFixed(1)}h`}
-                              </span>
-                              <span className="font-telin text-[10px] text-gray-700">
-                                {ago < 60000 ? 'just now' :
-                                 ago < 3600000 ? `${Math.round(ago / 60000)}m ago` :
-                                 `${Math.round(ago / 3600000)}h ago`}
-                              </span>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                );
-              })()}
             </>
           )}
 
@@ -2021,52 +1811,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
               {isLocalHost && <InferenceProfiler />}
 
               {isLocalHost && <SlaMonitor />}
-
-              {!isLocalHost && getToken && (
-                <WESHistoryChart
-                  getToken={getToken}
-                  historyDays={historyDays}
-                  subscriptionTier={subscriptionTier}
-                  selectedNodeId={perfNodeId}
-                  onNodeSelect={setPerfNodeId}
-                />
-              )}
-
-              {!isLocalHost && getToken && (
-                <ThermalBudgetCard
-                  getToken={getToken}
-                  subscriptionTier={subscriptionTier}
-                  selectedNodeId={perfNodeId}
-                />
-              )}
-
-              {!isLocalHost && getToken && (
-                <ChargebackCard
-                  getToken={getToken}
-                  subscriptionTier={subscriptionTier}
-                  onNavigateToPricing={onNavigateToPricing}
-                />
-              )}
-
-              {!isLocalHost && getToken && (
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                  <CapacityPlannerCard getToken={getToken} subscriptionTier={subscriptionTier} onNavigateToPricing={onNavigateToPricing} />
-                  <MigrationAdvisorCard getToken={getToken} subscriptionTier={subscriptionTier} onNavigateToPricing={onNavigateToPricing} onViewModels={onNavigateToModels} />
-                </div>
-              )}
-
-              {!isLocalHost && getToken && (
-                <IdleWasteCard getToken={getToken} subscriptionTier={subscriptionTier} onNavigateToPricing={onNavigateToPricing} />
-              )}
-
-              {!isLocalHost && getToken && (
-                <MetricsHistoryChart
-                  getToken={getToken}
-                  subscriptionTier={subscriptionTier}
-                  selectedNodeId={perfNodeId}
-                  onNodeSelect={setPerfNodeId}
-                />
-              )}
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
 
@@ -2163,180 +1907,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
               </div>
 
             </>
-          )}
-
-          {activeTab === 'forensics' && (
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-
-              {canViewInsight(8) ? (
-                <EfficiencyRegressionCard history={forensicsHistory} hasCloud={hasCloudHistory} />
-              ) : (
-                <InsightsTeaseCard
-                  onUpgradeClick={onNavigateToPricing}
-                  title="Efficiency Regression"
-                  icon={<TrendingDown className="w-3.5 h-3.5" />}
-                  tierRequired="team"
-                  upgradeCopy="Unlock 7-day WES baseline comparison on Team →"
-                  liveContent={
-                    <div className="space-y-1.5">
-                      <p className="text-[10px] text-gray-600 uppercase tracking-widest">Current WES</p>
-                      {fleetWes != null ? (
-                        <div className="flex items-baseline gap-2">
-                          <span className={`font-telin text-xl font-bold ${wesColorClass(fleetWes)}`}>
-                            {fleetWes.toFixed(1)}
-                          </span>
-                          <span className="text-[10px] text-gray-600">vs. baseline: requires Team history</span>
-                        </div>
-                      ) : (
-                        <p className="text-xs text-gray-600">No active inference — WES unavailable.</p>
-                      )}
-                    </div>
-                  }
-                />
-              )}
-
-              {canViewInsight(9) ? (
-                <MemoryForecastCard history={forensicsHistory} hasCloud={hasCloudHistory} />
-              ) : (
-                <InsightsTeaseCard
-                  onUpgradeClick={onNavigateToPricing}
-                  title="Memory Forecast"
-                  icon={<Database className="w-3.5 h-3.5" />}
-                  tierRequired="team"
-                  upgradeCopy="Unlock ETA forecasting & 15-min alerts on Team →"
-                  liveContent={(() => {
-                    const pressureNode = effectiveNodes.find(n => n.memory_pressure_percent != null);
-                    const pressure = pressureNode?.memory_pressure_percent ?? null;
-                    const vramNode = effectiveNodes.find(n => (n.nvidia_vram_total_mb ?? 0) >= INFERENCE_VRAM_THRESHOLD_MB);
-                    const vramPct = vramNode
-                      ? (((vramNode.nvidia_vram_used_mb ?? 0) / (vramNode.nvidia_vram_total_mb ?? 1)) * 100)
-                      : null;
-                    const displayPct = pressure ?? vramPct;
-                    return (
-                      <div className="space-y-1.5">
-                        <p className="text-[10px] text-gray-600 uppercase tracking-widest">Memory Pressure</p>
-                        {displayPct != null ? (
-                          <div className="flex items-baseline gap-2">
-                            <span className={`font-telin text-xl font-bold ${
-                              displayPct >= 80 ? 'text-red-400' : displayPct >= 60 ? 'text-amber-400' : 'text-green-400'
-                            }`}>
-                              {displayPct.toFixed(0)}%
-                            </span>
-                            <span className="text-[10px] text-gray-600">
-                              {displayPct >= 80 ? 'Critical — forecast requires Team' : displayPct >= 60 ? 'Elevated' : 'Normal'}
-                            </span>
-                          </div>
-                        ) : (
-                          <p className="text-xs text-gray-600">No memory pressure data.</p>
-                        )}
-                      </div>
-                    );
-                  })()}
-                />
-              )}
-
-              {canViewInsight(11) ? (
-                <ColdStartCard history={forensicsHistory} hasCloud={hasCloudHistory} />
-              ) : (
-                <InsightsTeaseCard
-                  onUpgradeClick={onNavigateToPricing}
-                  title="Hardware Cold Start"
-                  icon={<Activity className="w-3.5 h-3.5" />}
-                  tierRequired="team"
-                  upgradeCopy="Unlock load-time detection & cold start alerts on Team →"
-                  liveContent={(() => {
-                    const loadedNode = effectiveNodes.find(n => n.ollama_active_model);
-                    return (
-                      <div className="space-y-1.5">
-                        <p className="text-[10px] text-gray-600 uppercase tracking-widest">Model State</p>
-                        {loadedNode ? (
-                          <div className="flex items-center gap-2">
-                            <div className="w-1.5 h-1.5 rounded-full bg-green-500/70 shrink-0" />
-                            <span className="font-mono text-xs text-gray-300 truncate">{loadedNode.ollama_active_model}</span>
-                            <span className="text-[10px] text-gray-600">loaded</span>
-                          </div>
-                        ) : (
-                          <div className="flex items-center gap-2">
-                            <div className="w-1.5 h-1.5 rounded-full bg-gray-600 shrink-0" />
-                            <span className="text-xs text-gray-600">No model loaded — cold start on next request</span>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })()}
-                />
-              )}
-
-              {canViewInsight(12) ? (
-                <ThermalDiversityCard history={forensicsHistory} hasCloud={hasCloudHistory} />
-              ) : (
-                <InsightsTeaseCard
-                  onUpgradeClick={onNavigateToPricing}
-                  title="Fleet Thermal Diversity"
-                  icon={<Globe className="w-3.5 h-3.5" />}
-                  tierRequired="team"
-                  upgradeCopy="Unlock cascade risk analysis on Team →"
-                  liveContent={(() => {
-                    const counts = effectiveNodes.reduce<Record<string, number>>(
-                      (acc, n) => {
-                        const s = n.thermal_state?.toLowerCase() ?? 'normal';
-                        acc[s] = (acc[s] ?? 0) + 1;
-                        return acc;
-                      }, {}
-                    );
-                    const states: Array<{ label: string; key: string; color: string }> = [
-                      { label: 'Normal',   key: 'normal',   color: 'text-green-400' },
-                      { label: 'Fair',     key: 'fair',     color: 'text-yellow-400' },
-                      { label: 'Serious',  key: 'serious',  color: 'text-amber-400' },
-                      { label: 'Critical', key: 'critical', color: 'text-red-400' },
-                    ];
-                    const active = states.filter(s => (counts[s.key] ?? 0) > 0);
-                    return effectiveNodes.length === 0 ? (
-                      <p className="text-xs text-gray-600">No nodes connected.</p>
-                    ) : (
-                      <div className="flex flex-wrap gap-x-3 gap-y-1">
-                        {active.length > 0 ? active.map(s => (
-                          <span key={s.key} className="text-xs">
-                            <span className={`font-telin font-bold ${s.color}`}>{counts[s.key]}</span>
-                            <span className="text-gray-600 ml-1">{s.label}</span>
-                          </span>
-                        )) : states.map(s => (
-                          <span key={s.key} className="text-xs">
-                            <span className="font-telin font-bold text-green-400">0</span>
-                            <span className="text-gray-600 ml-1">{s.label}</span>
-                          </span>
-                        ))}
-                      </div>
-                    );
-                  })()}
-                />
-              )}
-
-              {canViewInsight(13) ? (
-                <InferenceDensityCard history={forensicsHistory} hasCloud={hasCloudHistory} />
-              ) : (
-                <InsightsLockedCard
-                  onUpgradeClick={onNavigateToPricing}
-                  title="Inference Density (Historical)"
-                  icon={<Layers className="w-3.5 h-3.5" />}
-                  description="Historical playback of the inference density hive plot. Unlock peak-hour analysis and utilisation trends."
-                  tierRequired="team"
-                />
-              )}
-
-              {canViewInsight(14) ? (
-                <SovereigntyAuditCard />
-              ) : (
-                <InsightsLockedCard
-                  onUpgradeClick={onNavigateToPricing}
-                  title="Sovereignty Audit"
-                  icon={<Shield className="w-3.5 h-3.5" />}
-                  description="Cryptographically signed compliance PDF. Audit trail of every telemetry destination, pairing event, and outbound connection."
-                  tierRequired="enterprise"
-                />
-              )}
-
-            </div>
           )}
 
         </div>

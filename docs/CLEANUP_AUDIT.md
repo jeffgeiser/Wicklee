@@ -1,5 +1,7 @@
 # Cleanup Audit
 
+> **Historical record (step 0, 2026-11).** It describes `cloud/`, `src/cloud/`, `cloud_push.rs`, the demo and the enterprise docs as they were. All of them have since been removed (`docs/TRANSITION_PLAN.md`); file paths and line numbers below no longer exist in the tree.
+
 Phase 1, step 0. Required by cleanup rule 1 in `docs/PHASE1_SPEC.md`: "Audit
 before deleting. For each candidate it lists the callers, the routes the
 frontend still uses, and the cloud consumers. Nothing is deleted on a guess."

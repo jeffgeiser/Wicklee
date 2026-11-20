@@ -227,7 +227,7 @@ fn extract_string_flag(cmd: &[String], flag: &str) -> Option<String> {
 }
 
 /// Normalize vLLM `--quantization` / `--dtype` values to the canonical quant
-/// tags used by `bytes_per_weight()` across the agent, cloud, and frontend.
+/// tags used by `bytes_per_weight()` across the agent and frontend.
 ///
 /// Quantization wins over dtype when both are present (weights are stored at
 /// the quantized width; dtype then describes activations). `--dtype auto` —

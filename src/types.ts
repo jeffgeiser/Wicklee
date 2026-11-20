@@ -446,18 +446,9 @@ export interface Tenant {
   name: string;
 }
 
-type FleetPairingStatus = 'unpaired' | 'pending' | 'connected';
 
 /** Ambient status of the live telemetry connection, used to drive logo + status dot animations. */
 export type ConnectionState = 'connected' | 'degraded' | 'idle' | 'disconnected';
-
-export interface PairingInfo {
-  status: FleetPairingStatus;
-  node_id: string;
-  code?: string | null;
-  expires_at?: number | null;
-  fleet_url?: string | null;
-}
 
 /** Shape of a single node in the fleet SSE stream frame. */
 export interface FleetNode {

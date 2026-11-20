@@ -1,6 +1,5 @@
 import React from 'react';
-import { Cloud, CloudLightning } from 'lucide-react';
-import { ConnectionState, DashboardTab, PairingInfo, Tenant, User as UserType } from '../types';
+import { ConnectionState, DashboardTab, Tenant, User as UserType } from '../types';
 import Logo from './Logo';
 
 interface HeaderProps {
@@ -13,13 +12,11 @@ interface HeaderProps {
   setActiveTab?: (tab: DashboardTab) => void;
   theme?: 'light' | 'dark';
   onToggleTheme?: () => void;
-  pairingInfo?: PairingInfo | null;
-  onOpenPairing?: () => void;
   isLocalHost?: boolean;
   connectionState?: ConnectionState;
 }
 
-const Header: React.FC<HeaderProps> = ({ activeTab, pairingInfo, onOpenPairing, theme, connectionState = 'disconnected', isLocalHost = false }) => {
+const Header: React.FC<HeaderProps> = ({ activeTab, theme, connectionState = 'disconnected' }) => {
   const titles: Record<string, string> = {
     [DashboardTab.TEAM]:         'Team & Memberships',
     [DashboardTab.API_KEYS]:     'Manage API Keys',
@@ -36,42 +33,6 @@ const Header: React.FC<HeaderProps> = ({ activeTab, pairingInfo, onOpenPairing, 
         )}
       </div>
 
-      <div className="flex items-center gap-6">
-        <div className="flex items-center gap-4">
-          {pairingInfo?.status === 'connected' ? (
-            <button
-              onClick={onOpenPairing}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-500/10 border border-green-500/20 hover:bg-green-500/20 transition-colors"
-              title={`${pairingInfo.node_id} — Fleet Connected`}
-            >
-              <CloudLightning className="w-4 h-4 text-green-400" />
-              <span className="text-[11px] font-telin text-green-400 hidden sm:inline">{pairingInfo.node_id}</span>
-            </button>
-          ) : pairingInfo?.status === 'pending' ? (
-            <button
-              onClick={onOpenPairing}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20 hover:bg-amber-500/20 transition-colors relative"
-              title="Pairing in progress"
-            >
-              <span className="animate-ping absolute inset-0 rounded-lg bg-amber-400/10" />
-              <Cloud className="w-4 h-4 text-amber-400 relative" />
-              <span className="text-[11px] font-telin text-amber-400 relative hidden sm:inline">Pairing…</span>
-            </button>
-          ) : (
-            <button
-              onClick={onOpenPairing}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold transition-all shadow-lg shadow-blue-500/20"
-            >
-              {isLocalHost ? (
-                <span className="hidden sm:inline">Connect to Cloud</span>
-              ) : (
-                <span className="hidden sm:inline">+ Add Node</span>
-              )}
-            </button>
-          )}
-
-        </div>
-      </div>
     </header>
   );
 };

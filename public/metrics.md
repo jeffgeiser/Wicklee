@@ -6,7 +6,7 @@
 
 ## How Wicklee Works: Synchronous Observation
 
-Wicklee is a sovereign Rust binary that observes your inference fleet without ever touching your private data. Unlike standard scrapers that pull static counters, Wicklee performs Synchronous Observation by merging two high-fidelity telemetry streams:
+Wicklee is a sovereign Rust binary that observes your inference hosts without ever touching your private data. Unlike standard scrapers that pull static counters, Wicklee performs Synchronous Observation by merging two high-fidelity telemetry streams:
 
 - **Hardware Harvester (1 Hz):** The agent queries your kernel and GPU drivers (NVML / IOReg / RAPL) once per second to capture micro-spikes in power, thermals, and utilization that 1-minute Prometheus scrapes miss.
 
@@ -30,7 +30,7 @@ Every colored dot, badge, and bar in the dashboard — explained in one place.
 |------------|---------|-------|
 | Animated green ping + solid green fill | **Online** | Last telemetry received within 60 seconds |
 | Gray outlined circle, no fill | **Offline** | No telemetry for > 60 seconds |
-| Solid gray dot | **Pending** | Paired but no telemetry received yet |
+| Solid gray dot | **Pending** | Agent detected but no telemetry received yet |
 
 A node is considered online if `Date.now() − lastSeen ≤ 60,000 ms`. Rolling-buffer smoothing is paused and cleared when a node goes offline.
 
@@ -119,79 +119,22 @@ For NVIDIA nodes without a native macOS `thermal_state`, temperature is inferred
 
 ## Dashboard: Insight Tiles
 
-Eight summary cards at the top of the dashboard. All displayed values pass through a rolling-average buffer (fleet metrics: 12-sample window; per-node metrics: 8-sample window) to suppress probe noise while keeping transitions live.
+Summary cards at the top of the dashboard. All displayed values pass through a rolling-average buffer (aggregate metrics: 12-sample window; per-node metrics: 8-sample window) to suppress probe noise while keeping transitions live.
 
 | # | Tile | Formula / Source | Notes |
 |---|------|-----------------|-------|
 | 1 | **Throughput** | `∑ estimateTps(tok/s, peakTps, GPU%, inferenceActive)` across active nodes | Sub-label: "live" (proxy active), "live estimate" (polling), "idle-spd baseline", or "sampling every 30s" |
-| 2 | **Fleet Health** | `(# nodes with Normal or Fair thermal) ÷ (# nodes with thermal data) × 100` | 🟢 100%, 🟡 ≥75%, 🔴 <75% |
-| 3 | **Total Fleet VRAM** | `∑ nvidia_vram_used_mb ÷ ∑ nvidia_vram_total_mb` | NVIDIA only — Apple Silicon unified memory is excluded |
-| 4 | **Fleet Nodes** | Online node count / total paired node count | Online = telemetry within last 60s |
+| 3 | **Total VRAM** | `∑ nvidia_vram_used_mb ÷ ∑ nvidia_vram_total_mb` | NVIDIA only — Apple Silicon unified memory is excluded |
 | 5 | **Avg WES** | Mean `tok/s ÷ (watts × PUE × ThermalPenalty)` across nodes with power data | Thermally penalized tok/watt |
-| 6 | **W/1K Tkn** | `(totalPowerW ÷ fleetTps) × 1000` | Watts per 1,000 tok/s; equivalent to J/tok |
+| 6 | **W/1K Tkn** | `(totalPowerW ÷ totalTps) × 1000` | Watts per 1,000 tok/s; equivalent to J/tok |
 | 7 | **Cost/1M Tokens** | `wattPer1k × kWhRate ÷ 3,600,000 × 1,000` | Default $0.13/kWh; configure in Settings. The `÷ 3,600,000` converts Joules to kWh and the `× 1,000` scales a per-1k-token cost to per-million — the same two steps as the worked example under COST/1M TOKENS below |
-| 8 | **Fleet Power Cost/Day** | `∑ (watts_i × PUE_i) × 24 × (rate ÷ 1000)` | Always-on infrastructure cost — not filtered by inference activity |
+| 8 | **Power Cost/Day** | `∑ (watts_i × PUE_i) × 24 × (rate ÷ 1000)` | Always-on infrastructure cost — not filtered by inference activity |
 
 *Source: `src/utils/efficiency.ts`, computed inline in `src/components/Overview.tsx`*
 
 ---
 
-## Dashboard: Fleet Status Table
-
-Ten columns in the main node table. Values update at 1 Hz and are smoothed over an 8-sample rolling window before display.
-
-| Column | What it shows | Data source | Color logic |
-|--------|--------------|-------------|-------------|
-| **NODE** | Node ID + hostname + online dot | `node_id`, `hostname`, `timestamp_ms` | Online/offline/pending dot (see Visual Indicators) |
-| **MEMORY** | Memory utilization % + bar | `memory_pressure_percent` (Apple) OR `used_memory_mb / total_memory_mb × 100` | Green <70%, Amber 70–90%, Red ≥90% |
-| **VRAM** | NVIDIA VRAM % + bar | `nvidia_vram_used_mb / nvidia_vram_total_mb × 100` | Same thresholds; shows `—` on Apple Silicon |
-| **MODEL** | Model name + **Fit Dot** + vLLM cache% | `ollama_active_model`, `vllm_model_name`, `vllm_cache_usage_perc` | Fit dot: Green/Amber/Red (see Visual Indicators) |
-| **WES** | Wicklee Efficiency Score | `computeWES(tps, watts, thermal, pue)` | Green >10, Amber 1–10, Red <1 |
-| **TOK/S** | Three-state throughput reading | `estimateTps()` with LIVE / IDLE-SPD / BUSY badge | See TOK/S Badges above |
-| **TOK/W** | Tokens per watt | `tps ÷ (watts / 1000)` | No threshold — higher is always better |
-| **WATTS** | Board power draw | `cpu_power_w + nvidia_power_draw_w` | No threshold coloring in table |
-| **GPU%** | GPU utilization | `nvidia_gpu_utilization_percent` OR `gpu_utilization_percent` | No threshold coloring in table |
-| **THERMAL** | Thermal state badge | `thermal_state` (macOS pmset / Linux) or inferred from `nvidia_gpu_temp_c` | Green / Yellow / Orange / Red (see Thermal Badges) |
-
----
-
-## Dashboard: Fleet Intelligence Cards
-
-Cards rendered below the Fleet Status table.
-
----
-
-### Best Route Now
-
-Picks the single best node for three routing strategies, using smoothed values:
-
-- **Lowest Latency** — node with the highest current `tps` (fastest response)
-- **Highest Efficiency** — node with the highest `wes` (best tok/watt)
-- **Lowest Cost** — node with the lowest `costPer1m` (cheapest per 1M tokens; requires power data)
-
-Use this when you want to direct a single request to the optimal node right now, rather than load-balancing across the fleet.
-
----
-
-### Cost Efficiency Card
-
-Fleet-level $/1M tokens broken down with per-node contribution. Same formula as Insight Tile 7 but shows how many nodes are contributing and their individual costs. Color: 🟢 green < $0.01, 🟡 amber $0.01–$0.05, 🔴 red > $0.05 per node.
-
----
-
-### Tokens Per Watt Card
-
-`fleetTps ÷ totalFleetWatts` — fleet-wide energy efficiency. Rises when efficient nodes (Apple Silicon, quantized models) are active; falls when power-hungry GPUs dominate the fleet.
-
----
-
-### Thermal Diversity
-
-Count of nodes per thermal state (Normal / Fair / Serious / Critical). A fleet where any node shows Serious or Critical is already losing throughput capacity silently.
-
----
-
-### Display Smoothing
+## Dashboard: Display Smoothing
 
 All numbers in the dashboard pass through a rolling-average (simple moving average) buffer before rendering. Raw unsmoothed values always drive alert thresholds so warnings fire without delay.
 
@@ -200,7 +143,7 @@ All numbers in the dashboard pass through a rolling-average (simple moving avera
 | Metric set | Window | At 1 Hz = |
 |---|---|---|
 | Per-node (tok/s, watts, GPU%) | 8 samples | ~8 seconds |
-| Fleet aggregates (fleet tok/s, $/1M, WES, W/1k) | 12 samples | ~12 seconds |
+| Aggregates (total tok/s, $/1M, WES, W/1k) | 12 samples | ~12 seconds |
 
 **Localhost broadcast rate**
 
@@ -433,7 +376,7 @@ The OS-level assessment of hardware thermal condition. macOS: read from `pmset` 
 
 **Unit:** W per (k·tok/s) — watts of sustained power draw per 1,000 tokens/second of throughput.
 
-How much power the fleet sustains per unit of inference capacity. Lower is more efficient. The ratio `W / (tok/s)` is mathematically equivalent to J/tok (joules per token) — same number, power framing. The cost formula uses this equivalence to derive $/1M (see COST/1M TOKENS below).
+How much power the machine sustains per unit of inference capacity. Lower is more efficient. The ratio `W / (tok/s)` is mathematically equivalent to J/tok (joules per token) — same number, power framing. The cost formula uses this equivalence to derive $/1M (see COST/1M TOKENS below).
 
 ---
 
@@ -479,43 +422,6 @@ Shown per-million so you can compare directly against cloud API pricing (e.g. GP
 
 ---
 
-## Fleet Metrics
-
-Aggregated across all paired nodes. Available in the cloud dashboard at wicklee.dev.
-
----
-
-### FLEET AVG WES
-
-Average WES score across all online nodes with power data. Weighted equally — not by throughput. A useful fleet health signal, but use Best Route Now for routing decisions.
-
----
-
-### COST EFFICIENCY — $/1M Tokens
-
-Fleet-level cost per million tokens at current draw and throughput. Uses per-node electricity rate and PUE multiplier from Settings. The sovereign fleet benchmark — compare to cloud API pricing to quantify your cost advantage.
-
----
-
-### TOKENS PER WATT (Fleet)
-
-**Formula:** `fleet_tok/s ÷ total_fleet_watts`
-
-Fleet-wide energy efficiency. Rises when efficient nodes (Apple Silicon) are active, falls when power-hungry nodes dominate the fleet.
-
----
-
-### FLEET HEALTH
-
-Percentage of nodes with `thermal_state = Normal or Fair`. A node at Serious or Critical thermal state is already throttling — fleet health reflects how many nodes are in this condition simultaneously.
-
-**Ranges:**
-- `100%` 🟢 All nodes running within design limits
-- `≥ 75%` 🟡 Monitor · mild throttling on at least one node
-- `< 75%` 🔴 Active degradation · fleet efficiency is reduced
-
----
-
 ## Configuration
 
 User-configured multipliers that affect cost and efficiency calculations.
@@ -545,7 +451,7 @@ Correlates the loaded model's weight size against available memory (VRAM for NVI
 | **Fair** 🟡 | Model fits AND (headroom 10–20% OR thermal is Fair) |
 | **Good** 🟢 | Model fits AND headroom > 20% AND thermal is Normal (or unavailable) |
 
-The score appears as a colored dot next to the model name in the Fleet Status table (see **Model Fit Dot** in Visual Indicators). Hover the dot for the exact reason string.
+The score appears as a colored dot next to the model name in the node table (see **Model Fit Dot** in Visual Indicators). Hover the dot for the exact reason string.
 
 *Source: `src/utils/modelFit.ts` → `computeModelFitScore()`*
 
@@ -557,4 +463,4 @@ Default: `$0.13 USD/kWh`. Used in all cost calculations when no per-node rate is
 
 ---
 
-*Wicklee — sovereign GPU fleet intelligence · wicklee.dev*
+*Wicklee — the evidence layer for self-hosted AI inference · wicklee.dev*

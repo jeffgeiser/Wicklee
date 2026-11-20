@@ -3,19 +3,19 @@
 > The evidence layer for self-hosted AI inference.
 > This document contains everything an AI agent needs to integrate with Wicklee.
 > v0.15.0 is the `/v1` diagnostic surface on one host: what is loaded, what will run now, what is wrong and how to verify a fix. No account, no paid plans.
-> The hosted fleet backend was shut down on 2026-11-20. `wicklee.dev` serves only the site, the install scripts and these discovery files as static files — no API, no MCP endpoint, no Prometheus endpoint, no telemetry. Everything below describes the agent's own localhost surface.
+> Everything below describes the agent's own localhost surface. `wicklee.dev` serves only the site, the install scripts and these discovery files as static files.
 
 ---
 
 ## Architecture
 
-Wicklee consists of three components:
+Wicklee consists of two components:
 1. **Agent** — Single Rust binary per node. Runs as a system service (launchd/systemd).
-   Embeds a React dashboard at localhost:7700. Harvests hardware telemetry at 1 Hz.
-2. **Cloud Backend** — Rust/Axum on Railway. Receives telemetry from agents (2s push),
-   stores in Postgres, serves fleet dashboard via SSE at wicklee.dev.
-3. **Frontend** — React 19 + Vite + Tailwind. Dark mode. Two builds: agent-embedded
-   (localhost) and cloud-deployed (wicklee.dev).
+   Embeds a React dashboard at localhost:7700, serves the `/v1` diagnostic surface,
+   the CLI and an MCP endpoint, and harvests hardware telemetry at 1 Hz. It makes no
+   outbound connections.
+2. **Frontend** — React 19 + Vite + Tailwind. Dark mode. Two builds: the dashboard
+   embedded in the agent (localhost), and the static public site (wicklee.dev).
 
 ## Install
 
@@ -54,7 +54,7 @@ SSE stream. 1 Hz cadence. Returns `data: {MetricsPayload}\n\n` per tick.
 WebSocket. 1 Hz cadence. Same MetricsPayload as SSE. Fallback transport — browser tries WebSocket first, falls back to SSE if unavailable.
 
 ### GET /api/observations
-Returns 18 server-side observation patterns evaluated by the Rust agent against a 10-minute DuckDB buffer every 10 seconds. Patterns are pushed to the fleet cloud when paired.
+Returns 18 server-side observation patterns evaluated by the Rust agent against a 10-minute DuckDB buffer every 10 seconds.
 ```json
 { "observations": [{ "pattern_id": "thermal_drain", "severity": "warning", ... }] }
 ```
@@ -69,52 +69,6 @@ Inference Profiler — correlated timeline of TTFT, tok/s, KV cache %, queue dep
 Inference SLA Monitor — p50/p95/p99/max for TTFT, end-to-end latency, and TPOT, computed via DuckDB `quantile_cont()` over the per-request `inference_traces` table. Compliance percentage against `target_ttft_ms`, recent violations, and per-model breakdown. Window: 1–1440 minutes (24h hard ceiling — that's the trace retention). Optional `model` filter.
 ```json
 { "window_minutes": 60, "request_count": 412, "error_count": 3, "error_rate_pct": 0.7, "ttft": { "p50": 120, "p95": 340, "p99": 1240, "max": 2300 }, "e2e": { "p50": 1850, "p95": 8400, "p99": 15300, "max": 22100 }, "tpot": { "p50": 28, "p95": 45, "p99": 89, "max": 0 }, "sla": { "target_ttft_ms": 500, "compliance_pct": 98.4, "violations_count": 7, "violations": [{ "ts_ms": 1234, "model": "qwen2.5:32b", "ttft_ms": 2300, "latency_ms": 12400 }] }, "by_model": [{ "model": "llama3.1:8b", "count": 374, "p95_ttft_ms": 280, "p95_e2e_ms": 7200 }] }
-```
-
-### Threshold Webhooks (JWT auth)
-Push notifications for state transitions and threshold crossings. HMAC-SHA256 signed via `X-Wicklee-Signature: sha256=<hex>` header. Fire-and-forget delivery (5s timeout, no retries) so the telemetry-push path isn't blocked.
-
-Event types:
-- `thermal_state_changed` — fires on any thermal_state transition
-- `inference_state_changed` — fires on inference_state transition (idle/idle-spd/busy/live)
-- `wes_below` — fires when WES crosses below threshold (threshold required)
-- `wes_above` — fires when WES crosses above threshold (threshold required)
-
-```
-POST /api/v1/webhooks      → create subscription, returns secret ONCE
-GET /api/v1/webhooks       → list (no secrets)
-DELETE /api/v1/webhooks/:id
-POST /api/v1/webhooks/:id/test → fire synthetic payload
-```
-
-Create body: `{ "url": "...", "event_type": "wes_below", "node_id": "WK-X" /*opt*/, "tag": "env:prod" /*opt*/, "threshold": 1.0, "cooldown_s": 60 }` — `tag` scopes the subscription to nodes bearing that tag (comma-separated `nodes.tags`, matched case/space-insensitively; composes with node_id). Alert rules accept the same optional `tag`.
-
-Webhook payload (state-changed): `{ "event_type": "thermal_state_changed", "node_id": "...", "ts_ms": ..., "previous_state": "Normal", "current_state": "Fair", "context": { "tok_s": 18.5, "watts": 22.3, "thermal_state": "Fair", "active_model": "..." } }`
-
-Webhook payload (threshold-crossing): same shape but with `previous_value` / `current_value` / `threshold` numeric fields instead of state strings.
-
-### Alert Silences & Maintenance Windows (JWT auth)
-Suppress alert rules AND threshold webhooks while active — enforced inside both evaluator queries, so silenced conditions never fire. A silence targets any combination of `node_id`, `tag`, and `event_type` (NULL = all; event vocabulary is the union of rule + webhook types). `starts_at` in the future = scheduled maintenance window. Duration 1 min–30 days. Tenant-scoped (org members share silences); creation/deletion audit-logged.
-```
-POST /api/alerts/silences        → { node_id?, tag?, event_type?, reason?, starts_at?, duration_min }
-GET /api/alerts/silences         → { silences: [{ id, node_id, tag, event_type, reason, starts_at, ends_at, active }] }
-DELETE /api/alerts/silences/:id  → end early / cancel scheduled window
-```
-
-### SLOs & Error Budgets (JWT auth)
-Time-slice SLOs over sampled fleet telemetry: one verdict per 5-minute window, rolling 30-day error budget. Metrics: `ttft_p95_ms` (SLI ≤ threshold), `tok_s_p50` (≥), `wes_p50` (≥) — computed from metrics_raw via percentile_cont, filtered to active-inference samples (idle windows return no data and are not counted against the budget). Scope: whole fleet, `tag`, or `node_id`. Burn alerts fire once per 50/90/100% crossing to the SLO creator's notification channels (`slo_budget_burn` event), resetting as the rolling window recovers. ≤20 SLOs per fleet; create/delete audited (`slo.created`/`slo.deleted`).
-```
-POST /api/slo       → { name, metric, threshold, target_pct (50..99.99), tag?, node_id? }
-GET /api/slo        → { slos: [{ id, name, metric, threshold, target_pct, tag, node_id,
-                        windows_30d, bad_30d, compliance_pct, burn_pct,
-                        latest: { ts, sli, ok } }] }
-DELETE /api/slo/:id → removes the SLO and its window history
-```
-
-### GET /api/v1/thermal-budget?node_id=X
-Thermal Budget Calculator (cloud, requires JWT). Walks the 7-day metrics_5min Postgres rollup, identifies sustained Normal-thermal blocks and Normal→Fair transitions, and computes whether pushing a node harder backfires. Returns `sustainable_tps` (max during ≥30-min Normal blocks), `push_threshold_tps` (median tps in 10 min before transition), `time_to_fair_min` (avg duration before transition), `fair_penalized_tps` (push ÷ 1.25), confidence level (insufficient/low/medium/high), and a plain-English advice string comparing 1-hour token output of "stay sustainable" vs "push then drop to penalized."
-```json
-{ "node_id": "WK-XXX", "samples_analyzed": 1234, "transitions_detected": 8, "confidence": "high", "sustainable_tps": 40.2, "sustainable_watts": 25.0, "push_threshold_tps": 52.5, "push_threshold_watts": 38.0, "time_to_fair_min": 8.0, "fair_penalized_tps": 42.0, "advice": "Sustainable rate: 40 tok/s indefinitely at Normal thermal. Pushing to 53 tok/s triggers Fair thermal within ~8 min, dropping effective throughput to 42 tok/s. Net over 1 hour: pushing yields 4% fewer tokens than holding the sustainable rate." }
 ```
 
 ### GET /api/cost-by-model?hours=24&kwh_rate=0.12
@@ -159,8 +113,7 @@ isn't yet cached.
 
 **Privacy:** templates and system prompts can contain proprietary content.
 They live in the agent's local cache and are served only by this localhost
-endpoint to the localhost dashboard. The cloud telemetry push does NOT carry
-these fields.
+endpoint to the localhost dashboard. They never leave the machine.
 
 ```json
 {
@@ -193,8 +146,7 @@ levers: `density_scale` (evidence-window density every pattern derives from
 `min_density_5m`/`min_density_10m`), `evidence_ratio` (sustained-fraction gate,
 baseline 0.70), `min_confidence` (final emission filter). dedicated_server is
 the default and preserves the original baseline exactly. Node-local, no auth
-(localhost endpoint) — governs which observations this node raises, not
-fleet-wide alert rules.
+(localhost endpoint) — governs which observations this node raises.
 ```json
 {
   "profile": "dedicated_server",
@@ -205,8 +157,6 @@ fleet-wide alert rules.
   ]
 }
 ```
-
-**Fleet config management (cloud-side):** the cloud stores a desired profile per node (`nodes.desired_profile`). `PATCH /api/nodes/:id` `{ "desired_profile": "..." }` (empty clears) or `POST /api/fleet/config` `{ "tag": "env:prod", "desired_profile": "..." }` (applies to every node bearing the tag, returns `nodes_affected`). Delivery: every `/api/telemetry` response now carries `{ "desired_profile": ... }` (200+body, previously 204); the agent applies it within one 2s push cycle (shared state + config.toml) and injects its ACTUAL `deployment_profile` into every telemetry frame so dashboards show truth vs intent. Old agents ignore response bodies — the feature activates per node as agents upgrade. Bulk applies audited as `fleet_config.applied`.
 
 ### GET /api/history?node_id=WK-XXXX
 DuckDB metric history. 1-hour of raw samples.
@@ -236,12 +186,6 @@ Full data export. Supports `format=json` or `format=csv`.
 Ollama model tags (proxied from local Ollama instance).
 ```json
 { "models": [{ "name": "llama3.1:8b", "size": 5368709120 }] }
-```
-
-### GET /api/pair/status
-Pairing status with fleet.
-```json
-{ "status": "connected", "node_id": "WK-XXXX", "fleet_url": "https://wicklee.dev" }
 ```
 
 ### POST /api/insights/dismiss
@@ -425,15 +369,9 @@ MCP server discovery manifest. Returns server name, version, transport, and capa
 
 ---
 
-## The hosted backend is gone
-
-The hosted fleet backend was shut down on 2026-11-20. These routes no longer exist at
-`wicklee.dev`, which now serves static files only. If you run the control plane yourself,
-its routes are yours and not these.
-
 ## MetricsPayload Schema
 
-The full telemetry payload sent every 1-2 seconds. All fields are optional (null when unavailable).
+The telemetry payload the agent broadcasts every second over SSE and WebSocket. All fields are optional (null when unavailable).
 
 ### Hardware
 - `node_id`: string — Stable WK-XXXX identifier
@@ -504,15 +442,6 @@ The full telemetry payload sent every 1-2 seconds. All fields are optional (null
   cached RuntimeConfig. The full config payload is fetched on demand via
   `GET /api/runtime-config?model=<name>` to keep the 1Hz SSE small.
 
-### Cloud-side schema (v0.9.x)
-The cloud's `metrics_raw` and `metrics_5min` tables now include
-`ollama_active_model TEXT` (additive, `ADD COLUMN IF NOT EXISTS`,
-zero-downtime). Old rows stay NULL until new ingestion populates them.
-The 5-min rollup query carries the column forward as
-`(array_agg(ollama_active_model) FILTER (WHERE ollama_active_model IS NOT NULL))[1]`.
-This column is what powers the new fleet model-comparison / model-switches /
-cost-by-model endpoints.
-
 ### Agent
 - `agent_version`: string — "0.9.0"
 - `timestamp_ms`: u64 — Unix milliseconds
@@ -556,12 +485,10 @@ Four states, evaluated once per second as a pure function:
 
 ---
 
-## 20 Observation Patterns + 5 Fleet Alerts
+## Hardware Observation Patterns
 
 ### Agent-Evaluated (18 patterns)
 Evaluated by the Rust agent against a 10-minute DuckDB buffer every 10 seconds.
-Pushed to the fleet cloud when paired for fleet-wide visibility.
-
 All 18 are evaluated on every host; there is no gating.
 
 - **thermal_drain:** Sustained throttle reducing tok/s > 8% vs Normal baseline
@@ -587,18 +514,6 @@ All 18 are evaluated on every host; there is no gating.
   as physics, not pathology. Per-chip bandwidth lookup (Apple M-series, NVIDIA H100/H200/A100/RTX,
   DGX Spark/GB10). Recommends smaller quant for tok/s gain or larger batch to amortise baseline power.
 
-### Cloud-Evaluated (2 patterns)
-- **fleet_load_imbalance:** Node WES > 20% below best healthy peer
-- **wes_long_term_drift:** *(severity warning)* recent 24h avg WES ≥15% below 6-day baseline. Detects gradual degradation (dust, thermal paste, driver regression, background process creep). Evaluated every 6h against the 7-day Postgres rollup. Cooldown 24h. Mirror chart annotation in WESHistoryChart when 7d range is selected.
-
-### Fleet Alerts (5)
-Evaluated by the cloud backend every 60 seconds.
-- **zombied_engine:** Inference stuck in "busy" > 10 minutes
-- **thermal_redline:** Node in "Critical" thermal for 2+ consecutive ticks
-- **oom_warning:** Memory pressure > 95% for 2+ consecutive ticks
-- **wes_cliff:** WES < 35% of 24h baseline during active inference
-- **agent_version_mismatch:** Agent version differs from fleet majority
-
 ---
 
 ## Sampling Cadence
@@ -614,42 +529,29 @@ Evaluated by the cloud backend every 60 seconds.
 | vLLM harvester | 2s | GET /metrics (Prometheus gauges + histograms) |
 | WES thermal sampler | 2s | 30-sample rolling window |
 | DuckDB local store | 2s | Batch INSERT, WAL mode |
-| Cloud telemetry push | 2s | POST to fleet URL (~2 KB per push) |
 
 ---
 
 ## Sovereignty
 
 - Inference content (prompts, responses, conversations) NEVER leaves the machine
-- Only hardware telemetry (CPU%, GPU%, power, thermal, model name) is transmitted when paired
+- The agent makes no outbound connections; hardware telemetry stays on the machine
 - Agent runs as a system service with no external dependencies
 - All data visible in the Observability tab's Sovereignty section
-- Cloud relay is optional — localhost dashboard works fully offline
+- The localhost dashboard works fully offline
 
 ---
 
 ## Licensing
 
 - Agent and local dashboard (`agent/`, the `localhost:7700` UI, metric calculations including WES): open source, Apache 2.0.
-- Fleet control plane (`cloud/`, `src/cloud/`, `src/site/`, control-plane deployment files): source-available, FSL-1.1-Apache-2.0 — free to read, run, modify and self-host except to offer a competing fleet monitoring service; each release converts to Apache 2.0 after four years.
+- Website source (`src/site/`): source-available, FSL-1.1-Apache-2.0 — free to read, run and modify except to offer a competing product; each release converts to Apache 2.0 after four years.
 - "Wicklee" and the logo are trademarks, not covered by either licence.
 - Map: https://github.com/jeffgeiser/Wicklee/blob/main/LICENSING.md
 
 ## Pricing
 
-There are no paid plans today. The tiers introduced earlier are withdrawn
-pending a monetization plan grounded in actual usage (`docs/STRATEGY.md` §14),
-and the payment integration was removed with the rest of the hosted
-backend. Everything the agent does is open source under Apache 2.0 and needs no
-account.
-
-`community`, `pro`, `team`, `business` and `enterprise` remain valid
-`SubscriptionTier` values because existing accounts hold them. None is sold,
-and nothing in the v0.15.0 agent reads them.
-
-### Organization RBAC
-
-Shared fleets (Clerk Organizations) enforce role-based access from the signed session token's org role claim — never a client header. **Admin** (`org:admin`): everything, including node removal. **Member** (`org:member`, custom roles): day-to-day operations — pair/rename/tag nodes, alert rules & channels, webhooks, acknowledge/resolve observations, OTel config. **Viewer** (custom `org:viewer` Clerk role): read-only; every mutating endpoint returns 403 with `role_required`. Unknown roles map to Member, never Admin. Solo users (no org) have full control of their own resources.
+There are no paid plans and no account. Everything the agent does is open source under Apache 2.0.
 
 ---
 

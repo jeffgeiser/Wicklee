@@ -160,8 +160,9 @@ const DocsPage: React.FC<DocsPageProps> = ({ onNavigate }) => {
               Wicklee Docs
             </h1>
             <p className="text-gray-400 text-base max-w-2xl leading-relaxed">
-              Wicklee is a zero-config control plane for self-hosted AI inference.
-              One agent binary, live metrics across your entire fleet, sovereign by design.
+              Wicklee finds what is wrong with self-hosted AI inference, shows what will run
+              now without displacing a loaded model, and verifies whether a change helped.
+              One binary on your machine, over localhost, sovereign by design.
             </p>
           </div>
 
@@ -221,7 +222,7 @@ const DocsPage: React.FC<DocsPageProps> = ({ onNavigate }) => {
                 <span className="shrink-0 w-5 h-5 rounded-full bg-blue-500/15 border border-blue-500/30 flex items-center justify-center text-[10px] font-bold text-blue-400">3</span>
                 <p className="font-semibold text-white text-sm">Always-on monitoring — register as a system service</p>
               </div>
-              <p>Registers the agent with launchd (macOS) or systemd (Linux) so it starts automatically on every boot. This is the recommended setup for nodes in your fleet. The command self-promotes the binary from <code className="font-mono text-xs text-gray-300">~/.wicklee/bin/wicklee</code> to <code className="font-mono text-xs text-gray-300">/usr/local/bin/wicklee</code> as part of the install.</p>
+              <p>Registers the agent with launchd (macOS) or systemd (Linux) so it starts automatically on every boot. This is the recommended setup for an always-on host. The command self-promotes the binary from <code className="font-mono text-xs text-gray-300">~/.wicklee/bin/wicklee</code> to <code className="font-mono text-xs text-gray-300">/usr/local/bin/wicklee</code> as part of the install.</p>
               <div>
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">macOS / Linux</p>
                 <Code lang="shell">sudo ~/.wicklee/bin/wicklee --install-service</Code>
@@ -311,12 +312,8 @@ sudo ~/.wicklee/bin/wicklee --install-service   # re-install as daemon`}</Code>
                     <td className="py-3 text-gray-400 align-top">Start the agent. Dashboard at <code className="font-mono text-xs text-gray-300">localhost:7700</code>. Runs in the foreground — press <kbd className="text-xs bg-gray-700 text-gray-300 px-1.5 py-0.5 rounded">Ctrl+C</kbd> to stop.</td>
                   </tr>
                   <tr>
-                    <td className="py-3 pr-6 font-mono text-xs text-indigo-300 align-top">wicklee --pair</td>
-                    <td className="py-3 text-gray-400 align-top">Start the agent and generate a 6-digit code for pairing with the hosted fleet view. That service is being shut down, so the flag has no destination to pair with; nothing on a single host needs it.</td>
-                  </tr>
-                  <tr>
                     <td className="py-3 pr-6 font-mono text-xs text-indigo-300 align-top">wicklee --version</td>
-                    <td className="py-3 text-gray-400 align-top">Print the agent version and exit. Use this to confirm which build is running after an update.</td>
+                    <td className="py-3 text-gray-400 align-top">Print the agent version and exit. Use this to confirm which build is running after an upgrade.</td>
                   </tr>
                   <tr>
                     <td className="py-3 pr-6 font-mono text-xs text-indigo-300 align-top">wicklee --status</td>
@@ -329,10 +326,6 @@ sudo ~/.wicklee/bin/wicklee --install-service   # re-install as daemon`}</Code>
                   <tr>
                     <td className="py-3 pr-6 font-mono text-xs text-indigo-300 align-top whitespace-nowrap">sudo wicklee --uninstall-service</td>
                     <td className="py-3 text-gray-400 align-top">Stop and remove the background service. The binary is not deleted — you can re-register with <code className="font-mono text-xs text-gray-300">--install-service</code> at any time.</td>
-                  </tr>
-                  <tr>
-                    <td className="py-3 pr-6 font-mono text-xs text-indigo-300 align-top">wicklee --no-cloud</td>
-                    <td className="py-3 text-gray-400 align-top">Run this process with every outbound fleet request off: no telemetry push, no self-update, and the pairing routes answer 409. For an agent started by hand on a host that is already paired, which would otherwise be a second writer pushing under the installed node's identity. <code className="font-mono text-xs text-gray-300">PORT</code> isolates the listener, not the identity.</td>
                   </tr>
                   <tr>
                     <td className="py-3 pr-6 font-mono text-xs text-indigo-300 align-top">sudo wicklee</td>
@@ -360,11 +353,6 @@ sudo ~/.wicklee/bin/wicklee --install-service   # re-install as daemon`}</Code>
                       <td className="py-3 text-gray-400 align-top">Port the agent listens on. Change if 7700 conflicts with another service: <code className="font-mono text-xs text-gray-300">PORT=7701 wicklee</code>.</td>
                     </tr>
                     <tr>
-                      <td className="py-3 pr-6 font-mono text-xs text-amber-300 align-top">WICKLEE_CLOUD_URL</td>
-                      <td className="py-3 pr-6 font-mono text-xs text-gray-500 align-top">hosted wicklee.dev</td>
-                      <td className="py-3 text-gray-400 align-top">Override the fleet endpoint the agent pushes telemetry to. Only relevant to a paired node, and the hosted fleet view is being shut down.</td>
-                    </tr>
-                    <tr>
                       <td className="py-3 pr-6 font-mono text-xs text-amber-300 align-top">WICKLEE_OLLAMA_PORT</td>
                       <td className="py-3 pr-6 font-mono text-xs text-gray-500 align-top">11434</td>
                       <td className="py-3 text-gray-400 align-top">Which Ollama the harvester watches. Point a second agent at a private <code className="font-mono text-xs text-gray-300">ollama serve</code> to test against it without disturbing the one your service is already watching.</td>
@@ -388,7 +376,7 @@ sudo ~/.wicklee/bin/wicklee --install-service   # re-install as daemon`}</Code>
             accent="border-blue-500/20"
             title="Diagnostics — wicklee inspect and the /v1 surface"
           >
-            <p>Three questions about local inference, answered from the CLI, HTTP and MCP by the same functions: <strong className="text-white">what is happening</strong>, <strong className="text-white">which models can run safely right now</strong>, and <strong className="text-white">what could I change and how do I verify it</strong>. No fleet connection required.</p>
+            <p>Three questions about local inference, answered from the CLI, HTTP and MCP by the same functions: <strong className="text-white">what is happening</strong>, <strong className="text-white">which models can run safely right now</strong>, and <strong className="text-white">what could I change and how do I verify it</strong>. Nothing leaves the machine.</p>
 
             <Code>{`wicklee inspect`}</Code>
 
@@ -498,7 +486,7 @@ Not checked: cpu_split (this host has unified memory, so there is no accelerator
 {`WES = tok/s ÷ (Watts × PUE × ThermalPenalty)`}
               </pre>
               <p className="mt-3 text-xs text-gray-500 leading-relaxed">
-                Every WES surface — KPI hero, Fleet Status row, Model Fit Analysis, Summary Strip — uses this exact formula reading from the same shared smoothing buffer (4-sample moving average). Same node, same metric, identical value across every tab.
+                Every WES surface — KPI hero, Node row, Model Fit Analysis, Summary Strip — uses this exact formula reading from the same shared smoothing buffer (4-sample moving average). Same node, same metric, identical value across every tab.
               </p>
               <ul className="mt-2 text-xs text-gray-500 space-y-1 list-disc list-inside">
                 <li><strong className="text-gray-300">Watts</strong>: <code className="text-gray-400 font-mono text-[11px]">getNodePowerW(node)</code> — raw board power (NVIDIA → Apple SoC → CPU fallback). <strong className="text-gray-300">Never</strong> idle-subtracted: <code className="text-gray-400 font-mono text-[11px]">systemIdleW</code> is for active-inference cost displays only.</li>
@@ -621,7 +609,7 @@ Not checked: cpu_split (this host has unified memory, so there is no accelerator
             <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-4">
               <p className="text-xs font-bold text-amber-400 uppercase tracking-wider mb-2">Thermal Cost %</p>
               <p className="text-xs text-gray-400 leading-relaxed mb-2">
-                When thermal throttling is active, Wicklee shows a <code className="text-amber-300 font-mono">-N% thermal</code> badge below the WES score in the Fleet Status table. This is the Thermal Cost %: the fraction of potential efficiency lost to throttle state.
+                When thermal throttling is active, Wicklee shows a <code className="text-amber-300 font-mono">-N% thermal</code> badge below the WES score in the node table. This is the Thermal Cost %: the fraction of potential efficiency lost to throttle state.
               </p>
               <pre className="font-mono text-xs text-gray-300 bg-gray-900 rounded-lg px-4 py-3">
 {`Thermal Cost % = (Raw WES − Penalized WES) / Raw WES × 100`}
@@ -633,29 +621,13 @@ Not checked: cpu_split (this host has unified memory, so there is no accelerator
 
 
             {/* WES Alerting Behavior */}
-            <div className="bg-gray-900 border border-gray-700 rounded-xl p-5">
-              <p className="text-xs font-bold text-white uppercase tracking-wider mb-3">WES Cliff — Efficiency Collapse Alert</p>
-              <p className="text-xs text-gray-400 leading-relaxed mb-3">
-                The cloud evaluator monitors WES across your fleet and fires a <strong className="text-gray-300">WES Cliff</strong> observation when a node's efficiency collapses. To avoid noise from natural fluctuations, the alert has strict gating:
-              </p>
-              <div className="space-y-2 text-xs text-gray-400">
-                <p><strong className="text-gray-300">1. Active inference required</strong> — WES is only meaningful during inference. The alert only evaluates nodes in <code className="text-gray-300 font-mono text-[10px]">live</code> or <code className="text-gray-300 font-mono text-[10px]">idle-spd</code> state. Idle nodes are ignored.</p>
-                <p><strong className="text-gray-300">2. Absolute floor</strong> — Current WES must be below <span className="text-yellow-400 font-mono">3.0</span> (the bottom of the "Good" range). A node at WES 5.0 that dropped 70% from baseline is still performing acceptably — no alert.</p>
-                <p><strong className="text-gray-300">3. Relative drop</strong> — Current WES must also be below <span className="font-mono text-gray-300">35%</span> of the node's 24-hour baseline. This catches genuine collapses while ignoring normal variation.</p>
-                <p><strong className="text-gray-300">4. Cooldown</strong> — After resolving, the same node cannot re-fire WES Cliff for <span className="font-mono text-gray-300">4 hours</span>. This prevents hourly fire/resolve churn when a node hovers near the threshold.</p>
-              </div>
-              <p className="mt-3 text-[10px] text-gray-600 leading-relaxed">
-                Example: a node with a 24h WES baseline of 12.0 would need to drop below both 3.0 (absolute) and 4.2 (35% of 12.0) during active inference to trigger. The effective threshold is whichever is lower — in this case, WES &lt; 3.0.
-              </p>
-            </div>
-
             {/* tok/W */}
             <div className="bg-gray-900 border border-blue-500/20 rounded-xl p-5">
               <p className="text-xs font-bold text-blue-400 uppercase tracking-wider mb-3">tok/W — Tokens Per Watt</p>
               <pre className="font-mono text-sm text-white leading-loose">
 {`tok/W = tok/s ÷ Watts`}</pre>
               <p className="mt-3 text-xs text-gray-400 leading-relaxed">
-                Raw inference efficiency without thermal adjustment. When thermal state is Normal (penalty = 1.0), tok/W and WES are identical. When the node is thermally stressed, tok/W stays higher than WES — the gap between them is the thermal penalty. Displayed alongside WES in the Fleet Status table and as a summary tile on both localhost and cloud dashboards.
+                Raw inference efficiency without thermal adjustment. When thermal state is Normal (penalty = 1.0), tok/W and WES are identical. When the node is thermally stressed, tok/W stays higher than WES — the gap between them is the thermal penalty. Displayed alongside WES in the node table and as a summary tile on the localhost dashboard.
               </p>
               <p className="mt-2 text-xs text-gray-500 leading-relaxed">
                 tok/W uses the same color scale as WES: <span className="text-emerald-400">&gt; 10 Excellent</span> · <span className="text-green-300">3–10 Good</span> · <span className="text-yellow-400">1–3 Acceptable</span> · <span className="text-red-400">&lt; 1 Low</span>.
@@ -695,7 +667,7 @@ Not checked: cpu_split (this host has unified memory, so there is no accelerator
                 Big-iron GPUs (H100, A100, DGX Spark / GB10) running batch=1 small workloads will show <strong className="text-gray-200">persistently low WES</strong> because their idle baseline power dominates per-token energy cost. A Spark drawing ~64W idle on a 32B FP8 model decoded at the memory-bandwidth ceiling produces tok/W ≈ 0.10 — that's physics, not a misconfiguration.
               </p>
               <p className="text-xs text-gray-400 leading-relaxed mt-2">
-                The <code className="text-gray-300 font-mono text-[11px]">bandwidth_ceiling_reached</code> pattern fires an <em>info</em>-severity observation when a node is at the physics ceiling for its hardware/quant pair. The Model Fit Analysis fleet headline reflects the same nuance: low-efficiency rows are tagged "informational" — the red <strong className="text-red-400">"needs attention"</strong> bucket is reserved for genuine memory risk (OOM / swap pressure).
+                The <code className="text-gray-300 font-mono text-[11px]">bandwidth_ceiling_reached</code> pattern fires an <em>info</em>-severity observation when a node is at the physics ceiling for its hardware/quant pair. The Model Fit Analysis headline reflects the same nuance: low-efficiency rows are tagged "informational" — the red <strong className="text-red-400">"needs attention"</strong> bucket is reserved for genuine memory risk (OOM / swap pressure).
               </p>
             </div>
 
@@ -729,14 +701,9 @@ Not checked: cpu_split (this host has unified memory, so there is no accelerator
                       <Td>Displayed to 3 decimal places; shows <code className="text-gray-400">&lt; $0.001</code> for very efficient hardware (Apple Silicon at idle-speed inference). PUE applied when set.</Td>
                     </tr>
                     <tr>
-                      <Td><span className="font-medium text-white">W / 1k tokens</span></Td>
-                      <Td mono>fleet_watts ÷ (fleet_tok_s ÷ 1000)</Td>
-                      <Td>Only reachable nodes (last-seen within 30 s) contribute to <code className="text-gray-400">fleet_watts</code>. Offline nodes are excluded to prevent wattage inflation.</Td>
-                    </tr>
-                    <tr>
                       <Td><span className="font-medium text-white">Cost / Day</span></Td>
                       <Td mono>Σ (node_watts × 24 ÷ 1000) × kWh_rate</Td>
-                      <Td>Estimated daily electricity cost based on <strong className="text-gray-300">current instantaneous power draw</strong> projected over 24 hours. Uses each node's configured kWh rate (default $0.16/kWh). This is a <em>projection</em>, not metered consumption — if a node spikes to 200W for 1 hour then idles at 10W for 23 hours, the tile shows cost at whatever wattage is being read <em>right now</em>. Node Cost/Day (localhost) sums a single node; Fleet Cost/Day (cloud) sums all online nodes. PUE multiplier applied when configured in Settings.</Td>
+                      <Td>Estimated daily electricity cost based on <strong className="text-gray-300">current instantaneous power draw</strong> projected over 24 hours. Uses each node's configured kWh rate (default $0.16/kWh). This is a <em>projection</em>, not metered consumption — if a node spikes to 200W for 1 hour then idles at 10W for 23 hours, the tile shows cost at whatever wattage is being read <em>right now</em>. Cost/Day covers this node. PUE multiplier applied when configured in Settings.</Td>
                     </tr>
                     <tr>
                       <Td><span className="font-medium text-white">Throughput label</span></Td>
@@ -746,7 +713,7 @@ Not checked: cpu_split (this host has unified memory, so there is no accelerator
                     <tr>
                       <Td><span className="font-medium text-white">Display smoothing</span></Td>
                       <Td mono>rolling average</Td>
-                      <Td>Node tiles: 8-frame window. Fleet aggregates: 12-frame window. Prevents single-frame spikes from skewing dashboard readings.</Td>
+                      <Td>Node tiles: 8-frame window. Aggregates: 12-frame window. Prevents single-frame spikes from skewing dashboard readings.</Td>
                     </tr>
                   </tbody>
                 </table>
@@ -883,7 +850,7 @@ WES Version:     2
             </div>
 
             <NoteBox>
-              The <code className="font-mono text-xs text-gray-300">inference_state</code> field is frozen in the wire format — the agent sends it identically to the local WebSocket dashboard and the fleet cloud backend. The fleet dashboard must display this value directly and never attempt to re-derive it from other fields like <code className="font-mono text-xs text-gray-300">gpu_utilization_percent</code> or <code className="font-mono text-xs text-gray-300">ollama_inference_active</code>.
+              The <code className="font-mono text-xs text-gray-300">inference_state</code> field is frozen in the wire format — the agent sends it identically on the SSE stream and the WebSocket. The dashboard must display this value directly and never attempt to re-derive it from other fields like <code className="font-mono text-xs text-gray-300">gpu_utilization_percent</code> or <code className="font-mono text-xs text-gray-300">ollama_inference_active</code>.
             </NoteBox>
           </Section>
 
@@ -894,7 +861,7 @@ WES Version:     2
             title="Latency & TTFT"
           >
             <p>
-              Wicklee measures Time To First Token (TTFT) from three independent sources, each with different characteristics. Understanding which source is active helps interpret the values shown in the Fleet Status table and summary tiles.
+              Wicklee measures Time To First Token (TTFT) from three independent sources, each with different characteristics. Understanding which source is active helps interpret the values shown in the node table and summary tiles.
             </p>
 
             <div className="overflow-x-auto mt-4">
@@ -1059,7 +1026,7 @@ WES Version:     2
             <div className="mt-4">
               <p className="font-semibold text-white mb-3">API access</p>
               <p className="text-sm text-gray-400 leading-relaxed">
-                The <code className="text-gray-300 font-mono text-xs bg-gray-800 px-1.5 py-0.5 rounded">active_models</code> array is included in the SSE payload, WebSocket stream, and fleet telemetry when two or more models are loaded. Single-model deployments omit the field entirely — zero overhead. The existing <code className="text-gray-300 font-mono text-xs">ollama_active_model</code> and <code className="text-gray-300 font-mono text-xs">ollama_tokens_per_second</code> fields continue to report the primary (most active) model for backwards compatibility.
+                The <code className="text-gray-300 font-mono text-xs bg-gray-800 px-1.5 py-0.5 rounded">active_models</code> array is included in the SSE payload, and WebSocket stream when two or more models are loaded. Single-model deployments omit the field entirely — zero overhead. The existing <code className="text-gray-300 font-mono text-xs">ollama_active_model</code> and <code className="text-gray-300 font-mono text-xs">ollama_tokens_per_second</code> fields continue to report the primary (most active) model for backwards compatibility.
               </p>
             </div>
 
@@ -1075,7 +1042,7 @@ WES Version:     2
             title="Model Discovery & Hardware Fit"
           >
             <p>
-              Wicklee fetches GGUF models from HuggingFace and scores each quantization variant against your hardware. The fit score answers "will this model run well on my machine?" before you download anything. On the cloud dashboard, every online fleet node is scored simultaneously so you can see which nodes are the best match for any given model.
+              Wicklee fetches GGUF models from HuggingFace and scores each quantization variant against your hardware. The fit score answers "will this model run well on my machine?" before you download anything.
             </p>
 
             <div className="mt-4">
@@ -1116,7 +1083,6 @@ WES Version:     2
               <div className="mt-4 space-y-2 text-xs text-gray-500">
                 <p><strong className="text-gray-300">Quant quality factor:</strong> very low quants (IQ1, Q1, IQ2, Q2) get penalty multipliers (0.0–0.4) so a tiny quant of a huge model doesn't outscore a Q4 of a smaller one just because it leaves more VRAM headroom.</p>
                 <p><strong className="text-gray-300">Multi-part shard aggregation:</strong> large GGUF models published as multi-part shards (e.g. <code className="font-mono text-[11px] text-gray-400">model-Q4_K_M-00001-of-00003.gguf</code> + <code className="font-mono text-[11px] text-gray-400">00002-of-00003</code> + <code className="font-mono text-[11px] text-gray-400">00003-of-00003</code>) are aggregated into a single catalog variant with the <strong className="text-gray-300">total</strong> size summed across all shards.</p>
-                <p><strong className="text-gray-300">Fleet "all nodes" filter:</strong> the trending list defaults to showing only models scoring <strong className="text-green-400">Good (60+)</strong> on every online node. Tight or marginal models are filtered out — users browsing the trending list expect models that will run well, not barely fit.</p>
               </div>
             </div>
 
@@ -1180,7 +1146,7 @@ WES Version:     2
               <Code>{`cost_per_M = avg_watts × $/kWh ÷ (3600 × tok_s) × 1M`}</Code>
 
               <ul className="text-xs text-gray-500 mt-3 space-y-1 list-disc pl-5">
-                <li><code className="font-mono text-[11px] text-gray-400">avg_watts</code> — the fleet's measured average power draw during inference, computed from telemetry. Without telemetry there is no cost projection.</li>
+                <li><code className="font-mono text-[11px] text-gray-400">avg_watts</code> — this node's measured average power draw during inference, computed from telemetry. Without telemetry there is no cost projection.</li>
                 <li><code className="font-mono text-[11px] text-gray-400">$/kWh</code> — your configured power rate.</li>
                 <li><code className="font-mono text-[11px] text-gray-400">tok_s</code> — same projection used for the speed column, including theoretical fallback.</li>
               </ul>
@@ -1220,34 +1186,8 @@ WES Version:     2
             </div>
 
             <div className="mt-4">
-              <p className="font-semibold text-white mb-3">Tiered access</p>
-              <table className="w-full">
-                <thead>
-                  <tr className="text-left text-[10px] text-gray-500 uppercase tracking-widest border-b border-gray-700">
-                    <th className="pb-2 pr-4">Tier</th>
-                    <th className="pb-2 pr-4">Feature</th>
-                    <th className="pb-2">Endpoint</th>
-                  </tr>
-                </thead>
-                <tbody className="text-xs divide-y divide-gray-800/50">
-                  <tr>
-                    <td className="py-2 pr-4 text-gray-400">Local discovery — scored against this machine</td>
-                    <td className="py-2 text-gray-500 font-mono">GET /api/model-candidates</td>
-                  </tr>
-                  <tr>
-                    <td className="py-2 pr-4 text-gray-400">Fleet discovery — scored against every online node</td>
-                    <td className="py-2 text-gray-500 font-mono">GET /api/fleet/model-candidates (JWT)</td>
-                  </tr>
-                  <tr>
-                    <td className="py-2 pr-4 text-gray-400">Hardware simulation — "what if I had a 4090?"</td>
-                    <td className="py-2 text-gray-500 font-mono">GET /api/v1/models/discover?simulate_hw=</td>
-                  </tr>
-                  <tr>
-                    <td className="py-2 pr-4 text-gray-400">Fleet matching — which nodes can run this model?</td>
-                    <td className="py-2 text-gray-500 font-mono">GET /api/v1/models/discover?fleet=true</td>
-                  </tr>
-                </tbody>
-              </table>
+              <p className="font-semibold text-white mb-2">Endpoint</p>
+              <p className="text-xs text-gray-500">Discovery is scored against this machine: <code className="text-gray-300 font-mono text-[10px]">GET /api/model-candidates</code>.</p>
             </div>
           </Section>
 
@@ -1484,7 +1424,7 @@ WES Version:     2
             <div className="bg-gray-900 border border-emerald-500/20 rounded-xl p-4 space-y-2 mt-2">
               <p className="text-xs font-bold text-emerald-400 uppercase tracking-wider">Deployment Profiles</p>
               <p className="text-xs text-gray-400 leading-relaxed">
-                One intent selector in <strong className="text-white">Settings → Deployment Profile</strong> (localhost) coherently shifts how sensitively every pattern fires — no per-pattern knobs. Three levers move together: the evidence-window density, the sustained-fraction gate, and a confidence floor. Applied within ~10s and persisted to <code className="text-gray-300">config.toml</code>. Node-local — it governs which observations this node raises, not fleet-wide alert rules.
+                One intent selector in <strong className="text-white">Settings → Deployment Profile</strong> (localhost) coherently shifts how sensitively every pattern fires — no per-pattern knobs. Three levers move together: the evidence-window density, the sustained-fraction gate, and a confidence floor. Applied within ~10s and persisted to <code className="text-gray-300">config.toml</code>. Node-local — it governs which observations this node raises, not a global alert rule.
               </p>
               <ul className="text-xs text-gray-400 leading-relaxed list-disc pl-4 space-y-1">
                 <li><strong className="text-white">Sovereign Dev</strong> — laptop running inference alongside other work: high bar + confidence floor so mixed-use noise stays quiet.</li>
@@ -1528,7 +1468,7 @@ WES Version:     2
                   </tr>
                   <tr>
                     <Td><span className="text-gray-300 font-medium">Data source</span></Td>
-                    <Td>Fleet events from SSE stream (FleetStreamContext)</Td>
+                    <Td>Events derived from the agent's live metric stream</Td>
                     <Td>Alert quartet latch system (AIInsights)</Td>
                   </tr>
                   <tr>
@@ -1556,7 +1496,7 @@ WES Version:     2
             </div>
 
             <NoteBox>
-              The Fleet Event Timeline on the Observability tab is a third, separate surface — it shows persisted <code className="font-mono text-xs text-gray-300">node_events</code> from Postgres (cloud) or DuckDB (localhost) with 30-day retention. This is the permanent audit record. Live Activity and Recent Activity are session-scoped and intended for real-time operations, not compliance.
+              Persisted events live in the agent's DuckDB store (<code className="font-mono text-xs text-gray-300">GET /api/events/history</code>) with 30-day retention. That is the permanent record; Live Activity and Recent Activity are session-scoped and intended for real-time operations.
             </NoteBox>
           </Section>
 
@@ -1579,7 +1519,7 @@ WES Version:     2
               <li><strong className="text-white">llama.cpp:</strong> same pattern — <code className="font-mono text-[10px]">GET /props</code> first, then <code className="font-mono text-[10px]">ps aux</code> fallback.</li>
             </ul>
             <NoteBox>
-              <strong className="text-white">Privacy:</strong> templates and system prompts can carry proprietary content. They live in the agent's local cache and are served only by the <strong>localhost</strong> endpoint. The cloud telemetry push does NOT carry these fields — v0.9.0 is local-only by design.
+              <strong className="text-white">Privacy:</strong> templates and system prompts can carry proprietary content. They live in the agent's local cache and are served only by the <strong>localhost</strong> endpoint. Nothing leaves the machine.
             </NoteBox>
             <p className="text-xs text-gray-400">
               The MetricsPayload carries a single boolean — <code className="font-mono text-[10px]">runtime_config_available</code> — so the frontend can render the "Config" affordance without speculatively hitting the endpoint for every node. Two placements: a "Config" pill in the Diagnostics rail (single-model nodes), and a per-row link in the Active Models panel (multi-model nodes). Both open <code className="font-mono text-[10px]">RuntimeConfigModal</code> with a Copy-as-Markdown button.
@@ -1682,7 +1622,7 @@ WES Version:     2
                   </tr>
                   <tr>
                     <Td mono>GET /api/sla?window_min=60&amp;target_ttft_ms=500</Td>
-                    <Td>Inference SLA Monitor — p50/p95/p99/max for TTFT, E2E latency, TPOT. Compliance vs configurable target, per-model breakdown, recent violations. <span className="text-blue-400">Team</span></Td>
+                    <Td>Inference SLA Monitor — p50/p95/p99/max for TTFT, E2E latency, TPOT. Compliance vs configurable target, per-model breakdown, recent violations.</Td>
                   </tr>
                   <tr>
                     <Td mono>GET /api/cost-by-model?hours=24</Td>
@@ -1729,8 +1669,8 @@ WES Version:     2
                     <Td>Full export of local events and metrics as JSON or CSV (<code className="text-gray-400 text-xs">format=csv</code>)</Td>
                   </tr>
                   <tr>
-                    <Td mono>GET /api/pair/status</Td>
-                    <Td>Agent health — pairing state, node_id, fleet_url, agent version</Td>
+                    <Td mono>GET /api/health</Td>
+                    <Td>Agent health — node_id, agent version, whether the history store is healthy and which routes it gates</Td>
                   </tr>
                   <tr>
                     <Td mono>GET /api/tags</Td>
@@ -1777,17 +1717,17 @@ WES Version:     2
             </div>
 
             <Code lang="shell">{`# Discover your node ID
-curl -s http://localhost:7700/api/pair/status | jq .node_id
+curl -s http://localhost:7700/api/health | jq .node_id
 
 # Stream live metrics
 curl http://localhost:7700/api/metrics
 
 # Fetch 1h metric history (replace YOUR_NODE_ID)
-NODE_ID=$(curl -s http://localhost:7700/api/pair/status | jq -r .node_id)
+NODE_ID=$(curl -s http://localhost:7700/api/health | jq -r .node_id)
 curl "http://localhost:7700/api/history?node_id=$NODE_ID" | jq '.samples | length'`}</Code>
 
             <NoteBox>
-              The localhost API needs no account, no pairing and no internet connection. Ideal for local shell scripts, Ray clusters, or internal tools that need real-time node telemetry without data leaving the network.
+              The localhost API needs no account and no internet connection. Ideal for local shell scripts, Ray clusters, or internal tools that need real-time node telemetry without data leaving the network.
             </NoteBox>
           </Section>
 
@@ -1933,72 +1873,6 @@ notepad "$env:APPDATA\\Claude\\claude_desktop_config.json"`}
               </pre>
               <p className="text-gray-500 text-xs mt-1">All setups require Node.js for the mcp-remote bridge. Restart your IDE after configuration changes.</p>
             </div>
-
-            {/* Cloud MCP */}
-            <p className="text-xs font-bold text-cyan-400 uppercase tracking-wider mt-6">Cloud MCP Server</p>
-            <p className="text-xs text-gray-500 mb-2">
-              A fleet-aggregated MCP server also runs at <code className="text-gray-400 font-mono text-xs">wicklee.dev/mcp</code>. Unlike the local agent MCP (single-node), the cloud MCP provides multi-node fleet context — routing recommendations, cross-node WES comparison, and fleet-wide observations.
-            </p>
-
-            <div>
-              <p className="font-semibold text-white mb-2">Cloud MCP Tools (9)</p>
-              <table className="w-full text-xs">
-                <thead><tr className="border-b border-gray-700"><Th>Tool</Th><Th>Description</Th></tr></thead>
-                <tbody>
-                  <tr className="border-b border-gray-700"><Td>get_fleet_status</Td><Td>All nodes with online status, inference state, WES, tok/s, thermal</Td></tr>
-                  <tr className="border-b border-gray-700"><Td>get_fleet_wes</Td><Td>Compact WES scores for all fleet nodes</Td></tr>
-                  <tr className="border-b border-gray-700"><Td>get_node_detail</Td><Td>Full MetricsPayload for a specific node (requires node_id)</Td></tr>
-                  <tr className="border-b border-gray-700"><Td>get_best_route</Td><Td>Routing recommendation — best node by throughput and efficiency</Td></tr>
-                  <tr className="border-b border-gray-700"><Td>get_fleet_insights</Td><Td>Fleet health summary — online/total, avg WES, fleet tok/s, observation count</Td></tr>
-                  <tr className="border-b border-gray-700"><Td>get_fleet_observations</Td><Td>Active and resolved observations across the fleet (tier-filtered)</Td></tr>
-                  <tr className="border-b border-gray-700"><Td>get_inference_profile</Td><Td>Correlated profiler snapshot — TTFT, KV cache, thermal, power</Td></tr>
-                  <tr className="border-b border-gray-700"><Td>explain_slowdown</Td><Td>Hardware context for root cause analysis of slow requests</Td></tr>
-                  <tr className="border-b border-gray-700"><Td>get_fleet_model_fit</Td><Td>Score a HuggingFace GGUF model against every online fleet node — Memory Fit, WES Efficiency, Context Runway, Quant Sweet Spot per node</Td></tr>
-                </tbody>
-              </table>
-            </div>
-
-            <div className="mt-3">
-              <p className="font-semibold text-white mb-2">Cloud MCP Resources (2)</p>
-              <table className="w-full text-xs">
-                <thead><tr className="border-b border-gray-700"><Th>URI</Th><Th>Description</Th></tr></thead>
-                <tbody>
-                  <tr className="border-b border-gray-700"><Td>wicklee://fleet/status</Td><Td>Fleet summary: online count, total nodes, avg WES</Td></tr>
-                  <tr className="border-b border-gray-700"><Td>wicklee://fleet/thermal</Td><Td>Per-node thermal states + WES penalty values</Td></tr>
-                </tbody>
-              </table>
-            </div>
-
-            <div className="mt-3">
-              <p className="font-semibold text-white mb-2">Example: Reading a Resource</p>
-              <pre className="bg-gray-800 rounded-lg p-3 text-xs font-mono overflow-x-auto">
-{`curl -X POST https://wicklee.dev/mcp \\
-  -H "Authorization: Bearer <jwt>" \\
-  -H "Content-Type: application/json" \\
-  -d '{"jsonrpc":"2.0","method":"resources/read","params":{"uri":"wicklee://fleet/status"},"id":1}'
-
-# Response:
-# {"result":{"contents":[{"uri":"wicklee://fleet/status",
-#   "mimeType":"application/json",
-#   "text":"{\"online\":3,\"total\":5,\"avg_wes\":8.4}"}]}}`}
-              </pre>
-            </div>
-
-            <div className="mt-3">
-              <p className="font-semibold text-white mb-2">Example: Calling a Tool</p>
-              <pre className="bg-gray-800 rounded-lg p-3 text-xs font-mono overflow-x-auto">
-{`curl -X POST https://wicklee.dev/mcp \\
-  -H "Authorization: Bearer <jwt>" \\
-  -H "Content-Type: application/json" \\
-  -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"get_best_route","arguments":{}},"id":2}'
-
-# Response:
-# {"result":{"content":[{"type":"text",
-#   "text":"{\"latency\":{\"node\":\"WK-A1B2\",\"tok_s\":45.2},
-#            \"efficiency\":{\"node\":\"WK-C3D4\",\"wes\":12.1}}"}]}}`}
-              </pre>
-              <p className="text-gray-500 text-xs mt-1">Manifest at <code className="text-gray-400 font-mono text-xs">GET wicklee.dev/mcp/manifest</code>.</p>
-            </div>
           </Section>
 
           {/* ── Inline Proxy ── */}
@@ -2113,12 +1987,11 @@ sudo systemctl restart wicklee`}
 
             <div>
               <p className="font-semibold text-white mb-2">Dashboard settings (UI)</p>
-              <p>Open the <strong className="text-white">Settings</strong> tab from your fleet dashboard to configure:</p>
+              <p>Open the <strong className="text-white">Settings</strong> tab in the local dashboard to configure:</p>
               <ul className="mt-2 space-y-1 list-none">
                 {[
                   ['kWh rate', 'Local electricity rate (default $0.16/kWh). Used to calculate Cost/Day and Cost/1K TKN.'],
                   ['PUE multiplier', 'Power Usage Effectiveness for data center / rack overhead.'],
-                  ['Per-node overrides', 'Different kWh rates and labels per node — useful for mixed-location fleets.'],
                   ['Temperature units', '°C or °F display preference.'],
                 ].map(([label, desc]) => (
                   <li key={label} className="flex gap-2 text-sm">
@@ -2141,26 +2014,24 @@ sudo systemctl restart wicklee`}
             title="Sovereignty"
           >
             <p>
-              Wicklee is built on a single design constraint: <strong className="text-white">inference content never leaves the machine that runs it.</strong> The Observability tab in your dashboard shows this in real time — telemetry destination, outbound connection manifest, and a live connection event log.
+              Wicklee is built on a single design constraint: <strong className="text-white">inference content never leaves the machine that runs it.</strong> The agent makes no outbound connections to Wicklee or anyone else, and there is no hosted service to send anything to. The Observability tab in your dashboard shows what it reads and what it talks to.
             </p>
 
             <div className="mt-4">
-              <p className="font-semibold text-white mb-3">What is transmitted to the fleet</p>
+              <p className="font-semibold text-white mb-3">What leaves the machine</p>
               <table className="w-full">
                 <thead>
                   <tr className="text-left text-[10px] text-gray-500 uppercase tracking-widest border-b border-gray-700">
                     <th className="pb-2 pr-4">Data</th>
-                    <th className="pb-2 pr-4">Destination</th>
-                    <th className="pb-2">Transmitted</th>
+                    <th className="pb-2">Leaves the machine</th>
                   </tr>
                 </thead>
                 <tbody className="text-sm divide-y divide-gray-800/50">
-                  <tr><td className="py-2 pr-4 text-gray-300">CPU / GPU / memory metrics</td><td className="py-2 pr-4 text-gray-500 font-mono text-xs">fleet URL</td><td className="py-2 text-indigo-400">Yes — when paired</td></tr>
-                  <tr><td className="py-2 pr-4 text-gray-300">WES score + thermal state</td><td className="py-2 pr-4 text-gray-500 font-mono text-xs">fleet URL</td><td className="py-2 text-indigo-400">Yes — when paired</td></tr>
-                  <tr><td className="py-2 pr-4 text-gray-300">Active model name</td><td className="py-2 pr-4 text-gray-500 font-mono text-xs">fleet URL</td><td className="py-2 text-indigo-400">Yes — when paired</td></tr>
-                  <tr><td className="py-2 pr-4 text-gray-300">Inference content / prompts</td><td className="py-2 pr-4 text-gray-500 font-mono text-xs">—</td><td className="py-2 text-green-400 font-semibold">Never</td></tr>
-                  <tr><td className="py-2 pr-4 text-gray-300">Request payloads / responses</td><td className="py-2 pr-4 text-gray-500 font-mono text-xs">—</td><td className="py-2 text-green-400 font-semibold">Never</td></tr>
-                  <tr><td className="py-2 pr-4 text-gray-300">User conversations</td><td className="py-2 pr-4 text-gray-500 font-mono text-xs">—</td><td className="py-2 text-green-400 font-semibold">Never</td></tr>
+                  <tr><td className="py-2 pr-4 text-gray-300">CPU / GPU / memory metrics, WES, thermal state</td><td className="py-2 text-green-400 font-semibold">Never</td></tr>
+                  <tr><td className="py-2 pr-4 text-gray-300">Model names, findings, receipts, baselines</td><td className="py-2 text-green-400 font-semibold">Never</td></tr>
+                  <tr><td className="py-2 pr-4 text-gray-300">Inference content / prompts</td><td className="py-2 text-green-400 font-semibold">Never — not read at all</td></tr>
+                  <tr><td className="py-2 pr-4 text-gray-300">Request payloads / responses</td><td className="py-2 text-green-400 font-semibold">Never</td></tr>
+                  <tr><td className="py-2 pr-4 text-gray-300">User conversations</td><td className="py-2 text-green-400 font-semibold">Never</td></tr>
                 </tbody>
               </table>
             </div>
@@ -2232,12 +2103,6 @@ sudo systemctl restart wicklee`}
                     <td className="py-2 pr-4 text-gray-400">Writes tok/s, GPU%, power, memory, swap, TTFT to local metrics_raw table (1-hour buffer)</td>
                     <td className="py-2 text-gray-500">Low — batch INSERT, WAL mode</td>
                   </tr>
-                  <tr>
-                    <td className="py-2 pr-4 text-gray-300">Cloud telemetry push</td>
-                    <td className="py-2 pr-4 text-gray-400 font-mono">2s</td>
-                    <td className="py-2 pr-4 text-gray-400">POST to fleet URL with full MetricsPayload. State-change bypass: immediate push on inference state transitions.</td>
-                    <td className="py-2 text-gray-500">~2 KB per push. Only when paired.</td>
-                  </tr>
                 </tbody>
               </table>
             </div>
@@ -2254,18 +2119,13 @@ sudo systemctl restart wicklee`}
                 </thead>
                 <tbody className="text-sm divide-y divide-gray-800/50">
                   <tr><td className="py-2 pr-4 text-gray-300">Ollama probe</td><td className="py-2 pr-4 text-gray-500 font-mono text-xs">localhost:11434</td><td className="py-2 text-gray-400">Local only — 20-token throughput sample, at most every 10 min, loaded models only (<code>[probe]</code> in config.toml)</td></tr>
-                  <tr><td className="py-2 pr-4 text-gray-300">Fleet telemetry</td><td className="py-2 pr-4 text-gray-500 font-mono text-xs">your fleet URL</td><td className="py-2 text-gray-400">System metrics + WES — paired nodes only</td></tr>
-                  <tr><td className="py-2 pr-4 text-gray-300">Clerk auth</td><td className="py-2 pr-4 text-gray-500 font-mono text-xs">api.clerk.dev</td><td className="py-2 text-gray-400">Session JWT — cloud dashboard only</td></tr>
+                  <tr><td className="py-2 pr-4 text-gray-300">vLLM harvester</td><td className="py-2 pr-4 text-gray-500 font-mono text-xs">localhost (vLLM port)</td><td className="py-2 text-gray-400">Local only — reads the runtime's own metrics endpoint</td></tr>
                 </tbody>
               </table>
             </div>
 
-            <NoteBox>
-              The Observability tab in your fleet dashboard shows a live version of this manifest, updated in real time from your active pairing state. The connection event log records every node connect and disconnect for the current session.
-            </NoteBox>
-
             <p className="mt-4 text-sm text-gray-400">
-              Unpaired nodes running only the local agent at <code className="text-gray-300">localhost:7700</code> make zero outbound connections. All metrics remain on-device. The fleet pairing is opt-in and can be revoked at any time from <strong className="text-white">Settings → Account & Data</strong>.
+              The agent at <code className="text-gray-300">localhost:7700</code> makes zero outbound connections. All metrics remain on-device. See the <button type="button" onClick={() => onNavigate?.('/trust')} className="text-blue-400 hover:text-blue-300 underline underline-offset-2">Trust page</button> for the short version.
             </p>
           </Section>
 
@@ -2305,24 +2165,6 @@ sudo systemctl restart wicklee`}
                     <td className="py-2 text-gray-400">Local dashboard — fallback transport. Same payload, same cadence. Browser tries WebSocket first, falls back to SSE if unavailable.</td>
                   </tr>
                   <tr>
-                    <td className="py-2 pr-4 text-gray-300">Agent → Cloud</td>
-                    <td className="py-2 pr-4 text-gray-400 font-mono">HTTP POST <code className="text-[10px]">/api/telemetry</code></td>
-                    <td className="py-2 pr-4 text-gray-400 font-mono">2s</td>
-                    <td className="py-2 text-gray-400">Fleet telemetry push. ~2 KB per push. State-change bypass: immediate push on inference state transitions. Only when paired.</td>
-                  </tr>
-                  <tr>
-                    <td className="py-2 pr-4 text-gray-300">Cloud → Fleet Browser</td>
-                    <td className="py-2 pr-4 text-gray-400 font-mono">SSE <code className="text-[10px]">GET /api/fleet/stream</code></td>
-                    <td className="py-2 pr-4 text-gray-400 font-mono">2s</td>
-                    <td className="py-2 text-gray-400">Fleet dashboard. Cloud reads from in-memory cache (populated by agent push), serves all nodes to authenticated browser.</td>
-                  </tr>
-                  <tr>
-                    <td className="py-2 pr-4 text-gray-300">Cloud → Postgres</td>
-                    <td className="py-2 pr-4 text-gray-400 font-mono">Batch INSERT</td>
-                    <td className="py-2 pr-4 text-gray-400 font-mono">30s</td>
-                    <td className="py-2 text-gray-400">Metrics writer task flushes in-memory buffer to <code className="text-[10px]">metrics_raw</code> (1000 rows/chunk). 5-min rollups to <code className="text-[10px]">metrics_5min</code>.</td>
-                  </tr>
-                  <tr>
                     <td className="py-2 pr-4 text-gray-300">Agent → DuckDB</td>
                     <td className="py-2 pr-4 text-gray-400 font-mono">INSERT</td>
                     <td className="py-2 pr-4 text-gray-400 font-mono">2s</td>
@@ -2335,7 +2177,7 @@ sudo systemctl restart wicklee`}
             <div className="mt-4">
               <p className="font-semibold text-white mb-3">How the broadcast loop works</p>
               <p className="text-sm text-gray-400">
-                The agent runs a single 1 Hz broadcast loop that assembles a <code className="text-gray-300 font-mono text-xs">MetricsPayload</code> from all harvester shared state (CPU, GPU, memory, power, inference, observations). This single JSON object is serialized once per tick and pushed to both the SSE stream and all connected WebSocket clients simultaneously. The same payload — byte-for-byte — is what the cloud push sends every 2 seconds when paired. There is no separate high-frequency path.
+                The agent runs a single 1 Hz broadcast loop that assembles a <code className="text-gray-300 font-mono text-xs">MetricsPayload</code> from all harvester shared state (CPU, GPU, memory, power, inference, observations). This single JSON object is serialized once per tick and pushed to both the SSE stream and all connected WebSocket clients simultaneously. There is no separate high-frequency path.
               </p>
             </div>
 
@@ -2345,14 +2187,11 @@ sudo systemctl restart wicklee`}
   └─▶ Broadcast loop (1 Hz) ──▶ MetricsPayload JSON
         ├─▶ SSE  /api/metrics    → Local browser dashboard
         ├─▶ WS   /ws             → Local browser dashboard (fallback)
-        ├─▶ DuckDB INSERT (2s)   → Local pattern evaluation + Intelligence endpoints
-        └─▶ HTTP POST (2s)       → wicklee.dev/api/telemetry (when paired)
-                                      ├─▶ In-memory cache → SSE /api/fleet/stream → Fleet browser
-                                      └─▶ Postgres batch (30s) → metrics_raw → metrics_5min rollup`}</pre>
+        └─▶ DuckDB INSERT (2s)   → Local pattern evaluation + Intelligence endpoints`}</pre>
             </div>
 
             <NoteBox>
-              Both the local SSE and WebSocket streams deliver identical data at 1 Hz. The WebSocket is not a higher-frequency channel — it exists as a transport fallback. The cloud path is HTTP POST (not WebSocket), sent every 2 seconds by the agent's <code className="font-mono text-xs text-gray-300">cloud_push</code> task.
+              Both the local SSE and WebSocket streams deliver identical data at 1 Hz. The WebSocket is not a higher-frequency channel — it exists as a transport fallback.
             </NoteBox>
           </Section>
 
@@ -2425,7 +2264,7 @@ sudo systemctl restart wicklee`}
                 <p><span className="text-gray-400">¹ Apple Silicon VRAM</span> — Apple Silicon has no dedicated VRAM. The GPU shares the unified memory pool. The dashboard shows available headroom against the <em>wired memory budget</em> (<code className="text-gray-400">iogpu.wired_limit_mb</code>), which is the maximum macOS will wire for GPU access — typically ~75% of physical RAM. On a 24 GB M2, expect a ~18 GB GPU budget, not 24 GB. Loading a model larger than the available headroom will trigger compression and swap, degrading throughput.</p>
                 <p><span className="text-gray-400">² Linux NVIDIA</span> — VRAM metrics require the <strong className="text-gray-300">GPU-enabled build</strong>. The default install script auto-detects an NVIDIA GPU (<code className="text-gray-400">nvidia-smi</code>) and downloads the glibc binary with NVML enabled. If you installed before this was added, re-run <code className="text-gray-400">curl -fsSL https://wicklee.dev/install.sh | bash</code> followed by <code className="text-gray-400">sudo ~/.wicklee/bin/wicklee --install-service</code>.</p>
                 <p><span className="text-gray-400">⁴ ARM64 NVIDIA unified memory (GB10 / Grace Blackwell)</span> — The NVIDIA GB10 SoC (DGX Spark) uses LPDDR5x unified memory shared between the Grace CPU and Blackwell GPU. NVML reports <code className="text-gray-400">[N/A]</code> for <code className="text-gray-400">memory.total</code> because there is no dedicated framebuffer. Wicklee tracks VRAM usage via <strong className="text-gray-300">process residency</strong> — the sum of GPU memory reported by all running compute processes — which is the same accounting nvidia-smi uses internally. The capacity figure is system RAM (the full unified pool). The dashboard shows a <strong className="text-gray-300">Unified Memory</strong> badge on these nodes to distinguish them from discrete-VRAM GPUs.</p>
-                <p><span className="text-gray-400">³ Inference VRAM threshold</span> — Wicklee only counts GPU devices with <strong className="text-gray-300">≥ 1 GB</strong> of reported VRAM toward fleet totals, the VRAM column, model-fit scoring, and memory-exhaustion alerts. Devices below this threshold — onboard BMC/IPMI video chips (ASPEED AST), motherboard framebuffers, and headless server display adapters — are excluded. This prevents ghost entries from inflating fleet capacity on bare-metal servers that have no inference-capable GPU.</p>
+                <p><span className="text-gray-400">³ Inference VRAM threshold</span> — Wicklee only counts GPU devices with <strong className="text-gray-300">≥ 1 GB</strong> of reported VRAM toward totals, the VRAM column, model-fit scoring, and memory-exhaustion alerts. Devices below this threshold — onboard BMC/IPMI video chips (ASPEED AST), motherboard framebuffers, and headless server display adapters — are excluded. This prevents ghost entries from inflating capacity on bare-metal servers that have no inference-capable GPU.</p>
               </div>
             </div>
 

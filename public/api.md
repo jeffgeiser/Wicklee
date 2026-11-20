@@ -10,25 +10,22 @@ without an inbound token, and the refusal names the key to set.
 |--------|----------|-------------|
 | GET | /api/metrics | SSE stream — 1 Hz telemetry with full MetricsPayload |
 | GET | /ws | WebSocket — 1 Hz live telemetry (same payload as SSE, fallback transport) |
-| GET | /api/observations | 18 agent-evaluated patterns with routing_hint per observation + node-level routing_hint/routing_hint_source. (2 additional cloud-evaluated patterns are queryable via the cloud Observations endpoint.) |
+| GET | /api/observations | 18 agent-evaluated patterns with routing_hint per observation + node-level routing_hint/routing_hint_source. |
 | GET | /api/history?node_id=WK-XXXX | Metric history — 1h raw samples |
 | GET | /api/profile?minutes=60 | Inference Profiler — correlated TTFT/KV/queue/thermal/power timeline |
 | GET | /api/sla?window_min=60&target_ttft_ms=500 | Inference SLA Monitor — p50/p95/p99 for TTFT, E2E latency, TPOT plus compliance vs target |
-| GET | /api/v1/thermal-budget?node_id=X | Thermal Budget Calculator (cloud) — sustainable rate, push threshold, time-to-Fair, penalized rate, plain-English advice |
-| POST/GET/DELETE | /api/v1/webhooks[/:id[/test]] | Threshold Webhooks (cloud) — push notifications on thermal/inference state changes and WES threshold crossings. HMAC-SHA256 signed |
-| GET | /api/health (localhost) | Agent diagnostic — agent version, build target, DuckDB store health, list of routes available/unavailable when store init failed. One-curl debug for "why are my routes missing?" |
+| GET | /api/health | Agent diagnostic — agent version, build target, node id, DuckDB store health, list of routes available/unavailable when store init failed. One-curl debug for "why are my routes missing?" |
 | GET | /api/cost-by-model?hours=24 | Cost attribution per model — daily power cost breakdown |
 | GET | /api/explain-slowdown?ts_ms=N | Slowdown explainer — root cause analysis for a slow request |
 | GET | /api/model-comparison?hours=168 | Model comparison — side-by-side efficiency for every model that has run |
 | GET | /api/model-switches?hours=24 | Model switching cost — swap frequency, idle gap per transition |
 | GET | /api/model-candidates?search=llama&limit=20 | Model discovery — GGUF models from HuggingFace scored against local hardware |
-| GET | /api/runtime-config?model=X | Runtime Config Surface (v0.9.0) — cached launch-time config for a named model (Ollama, vLLM, llama.cpp). 200 with JSON, 400 if `?model=` missing, 404 if not yet cached. Templates and system prompts stay local — never pushed to the fleet. |
+| GET | /api/runtime-config?model=X | Runtime Config Surface (v0.9.0) — cached launch-time config for a named model (Ollama, vLLM, llama.cpp). 200 with JSON, 400 if `?model=` missing, 404 if not yet cached. Templates and system prompts never leave the machine. |
 | GET | /api/traces | Proxy inference traces |
 | GET | /api/events/history | Node event log |
 | GET | /api/events/recent | Recent in-memory events |
 | GET | /api/export?format=json\|csv | Data export |
 | GET | /api/tags | Ollama model tags |
-| GET | /api/pair/status | Pairing status |
 | POST | /api/insights/dismiss | Permanently dismiss a pattern |
 | GET | /api/insights/dismissed | List dismissed patterns |
 | POST | /mcp | MCP (Model Context Protocol) JSON-RPC 2.0 endpoint |
@@ -213,99 +210,11 @@ curl -X POST http://localhost:7700/mcp \
   -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"get_inference_state"},"id":1}'
 ```
 
-## The hosted backend is gone
-
-The hosted fleet backend was shut down on 2026-11-20. `wicklee.dev` now serves only the
-site, the install scripts and these discovery files as static files — it runs no API, no
-MCP endpoint and no Prometheus endpoint, and holds no telemetry. Everything Wicklee does
-is on the agent's own localhost surface, documented above. If you run the control plane
-yourself, its routes are yours and not these.
+## Response Examples
 
 ## Response Examples
 
-### GET /api/v1/fleet/wes
-```json
-{
-  "nodes": [
-    { "node_id": "WK-XXXX", "online": true, "wes": 15.0 },
-    { "node_id": "WK-99E9", "online": true, "wes": 3.2 }
-  ]
-}
-```
-
-### GET /api/v1/route/best
-```json
-{
-  "latency":    { "node": "WK-99E9", "tok_s": 31.9, "wes": 3.3, "reason": "Highest throughput" },
-  "efficiency": { "node": "WK-XXXX", "tok_s": 19.5, "wes": 15.0, "reason": "Highest WES" },
-  "default":    "efficiency"
-}
-```
-
-### GET /api/runtime-config?model=llama3.1:8b
-```json
-{
-  "model": "llama3.1:8b",
-  "runtime": "ollama",
-  "captured_at_ms": 1774622475195,
-  "context_length": 131072,
-  "n_gpu_layers": 33,
-  "quantization": "Q4_K_M",
-  "parameter_count": 8030261312,
-  "template": "{{ if .System }}<|system|>{{ .System }}{{ end }}...",
-  "system_prompt": "You are a helpful assistant."
-}
-```
-
-### GET /api/v1/fleet/model-comparison?hours=168
-```json
-{
-  "models": [
-    { "model": "llama3.1:70b", "hours_active": 18.3, "avg_tok_s": 22.5, "avg_watts": 95.0, "wes": 0.24, "avg_ttft_ms": 245, "cost_per_hour": 0.0152, "total_cost": 0.278, "sample_count": 219 },
-    { "model": "phi3:mini",    "hours_active": 42.0, "avg_tok_s": 85.1, "avg_watts": 12.0, "wes": 7.09, "avg_ttft_ms":  34, "cost_per_hour": 0.0019, "total_cost": 0.081, "sample_count": 504 }
-  ]
-}
-```
-
-### GET /api/v1/fleet/model-switches?hours=24
-```json
-{
-  "swaps": [
-    { "ts_ms": 1774621630223, "node_id": "WK-XXXX", "from_model": "llama3.1:70b", "to_model": "phi3:mini", "gap_ms": 3200 }
-  ],
-  "total_swaps": 14,
-  "total_gap_ms": 480000,
-  "total_gap_minutes": 8.0
-}
-```
-
-### GET /api/v1/fleet/cost-by-model?hours=24
-```json
-{
-  "models": [
-    { "model": "llama3.1:70b", "hours_active": 6.2, "avg_watts": 95.0, "cost_usd": 0.0942, "tok_s_avg": 22.5, "sample_count": 744 }
-  ],
-  "total_cost_usd": 0.221
-}
-```
-
-### GET /api/v1/insights/latest
-```json
-{
-  "generated_at_ms": 1774624251478,
-  "fleet": { "online_count": 3, "total_count": 3, "avg_wes": 9.9, "fleet_tok_s": 79.0 },
-  "findings": [{
-    "node_id": "WK-99E9",
-    "hostname": "spark-c559",
-    "severity": "low",
-    "pattern": "wes_below_baseline",
-    "title": "WES below fleet average",
-    "detail": "WES 3.3 vs fleet average 9.9",
-    "value": 3.3,
-    "unit": "WES"
-  }]
-}
-```
+See the `/v1` sections above and [llms-full.txt](https://wicklee.dev/llms-full.txt) for example bodies.
 
 ## Key Metrics
 

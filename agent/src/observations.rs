@@ -4,8 +4,7 @@
 use super::*;
 
 /// Shared cache of the latest evaluated observations.  Written by the 10 s
-/// observation evaluator task; read by cloud_push (embed in telemetry) and
-/// handle_observations (GET /api/observations).
+/// observation evaluator task; read by handle_observations (GET /api/observations).
 #[cfg(not(target_env = "musl"))]
 pub(crate) type ObservationCache = Arc<Mutex<Vec<LocalObservation>>>;
 
@@ -286,8 +285,8 @@ pub(crate) fn evaluate_local_observations(
             let avg_watts: f64 = phantom_samples.iter()
                 .filter_map(|s| s.gpu_power_w.or(s.cpu_power_w))
                 .sum::<f64>() / phantom_samples.len().max(1) as f64;
-            // Cost estimate: $/day at the fleet-wide default rate. Keep in
-            // sync with cloud DEFAULT_KWH_RATE_USD and the frontend's
+            // Cost estimate: $/day at the default rate. Keep in
+            // sync with the frontend's
             let kwh_rate = 0.16;
             let cost_per_day = (avg_watts / 1000.0) * 24.0 * kwh_rate;
             let model_name = phantom_samples.last()

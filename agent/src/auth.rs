@@ -2,9 +2,8 @@
 //!
 //! Step 0 verification item V8 found that the agent had **no** inbound
 //! authentication and no peer-address plumbing at all: zero hits for
-//! `ConnectInfo` or `SocketAddr` in `agent/src`. `session_token` in
-//! `config.toml` is the *outbound* cloud credential, not an inbound one. With
-//! `bind_address = "0.0.0.0"`, `/api/pair/claim` and `/mcp` were reachable by
+//! `ConnectInfo` or `SocketAddr` in `agent/src`. With
+//! `bind_address = "0.0.0.0"`, every route, including `/mcp`, was reachable by
 //! anything on the network. This module is the fix.
 //!
 //! Two decisions live here, both as pure functions so they can be tested
@@ -126,8 +125,8 @@ pub(crate) fn evaluate_startup(
             format!(
                 "{OVERRIDE_KEY} is set and no {TOKEN_KEY} is configured. Every endpoint \
                  on this agent — hardware, loaded models, operating conditions — is \
-                 readable by anything that can reach {bind}, and /api/pair/claim and \
-                 /mcp accept writes. Set {TOKEN_KEY} instead."
+                 readable by anything that can reach {bind}, and /mcp and the \
+                 write routes accept changes. Set {TOKEN_KEY} instead."
             ),
         ),
         (None, false) => StartupDecision::Refuse(
@@ -135,7 +134,7 @@ pub(crate) fn evaluate_startup(
                 format!("refusing to start: bind_address is not loopback and no {TOKEN_KEY} is set."),
                 String::new(),
                 "This agent reports hardware, loaded models and operating conditions, and".into(),
-                "/api/pair/claim and /mcp accept writes. Binding it to the network without a".into(),
+                "/mcp and the write routes accept changes. Binding it to the network without a".into(),
                 "credential exposes all of that.".into(),
                 String::new(),
                 "Fix one of these in config.toml (both are top-level keys):".into(),
@@ -557,8 +556,8 @@ mod tests {
         assert_eq!(get.status(), 200, "loopback GET must not be challenged");
         assert_eq!(get.text().await.unwrap(), "reached");
 
-        // POST too: /api/pair/claim and /mcp are POSTs, and the pairing flow
-        // and MCP stdio bridge both call them over loopback.
+        // POST too: /mcp and the /v1 write routes are POSTs, and the CLI and
+        // MCP stdio bridge both call them over loopback.
         let post = client.post(format!("http://{addr}/probe")).send().await.unwrap();
         assert_eq!(post.status(), 200, "loopback POST must not be challenged");
 

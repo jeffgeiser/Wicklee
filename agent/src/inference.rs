@@ -79,8 +79,8 @@ pub(crate) enum InferenceState {
 }
 
 impl InferenceState {
-    /// Wire-format string. These values are FROZEN — shared with the cloud
-    /// backend and React frontend. Do not rename.
+    /// Wire-format string. These values are FROZEN — shared with the React
+    /// frontend and the CLI output. Do not rename.
     pub(crate) fn as_str(&self) -> &'static str {
         match self {
             InferenceState::Live    => "live",

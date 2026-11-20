@@ -1,16 +1,14 @@
 /**
  * useEventHistory — paginated DuckDB-backed event history for the Observability tab.
  *
- * Fetches persisted Live Activity events from:
- *   - Cockpit (localhost):  GET /api/events/history
- *   - Fleet   (wicklee.dev): GET /api/fleet/events/history
+ * Fetches persisted Live Activity events from the local agent:
+ *   GET /api/events/history
  *
  * Cursor-based pagination via the `before` parameter (ts_ms of the last event).
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react';
 import type { EventHistoryRecord } from '../types';
-import { CLOUD_URL } from '../utils/cloudUrl';
 
 interface UseEventHistoryOptions {
   /** Max events per page (default 50, max 200). */
@@ -19,11 +17,7 @@ interface UseEventHistoryOptions {
   eventType?: string;
   /** Filter by node_id. */
   nodeId?: string;
-  /** If true, fetch from wicklee.dev fleet endpoint; else localhost agent. */
-  isFleet?: boolean;
-  /** Auth token for fleet mode. */
-  token?: string;
-  /** Skip fetching (e.g. while waiting for auth token). */
+  /** Skip fetching. */
   skip?: boolean;
 }
 
@@ -40,7 +34,6 @@ const PAGE_SIZE_DEFAULT = 50;
 
 export function useEventHistory(opts: UseEventHistoryOptions = {}): UseEventHistoryReturn {
   const limit    = opts.limit ?? PAGE_SIZE_DEFAULT;
-  const isFleet  = opts.isFleet ?? false;
 
   const [events,  setEvents]  = useState<EventHistoryRecord[]>([]);
   const [loading, setLoading] = useState(false);
@@ -48,9 +41,6 @@ export function useEventHistory(opts: UseEventHistoryOptions = {}): UseEventHist
   const [hasMore, setHasMore] = useState(true);
 
   const lastFetchFailed = useRef(false);
-
-  const tokenRef = useRef(opts.token);
-  tokenRef.current = opts.token;
 
   const fetchPage = useCallback(async (before?: number) => {
     setLoading(true);
@@ -63,14 +53,7 @@ export function useEventHistory(opts: UseEventHistoryOptions = {}): UseEventHist
       if (opts.eventType)  params.set('event_type', opts.eventType);
       if (opts.nodeId)     params.set('node_id', opts.nodeId);
 
-      const baseUrl = isFleet ? CLOUD_URL : '';
-      const path    = isFleet ? '/api/fleet/events/history' : '/api/events/history';
-      const headers: Record<string, string> = {};
-      if (isFleet && tokenRef.current) {
-        headers['Authorization'] = `Bearer ${tokenRef.current}`;
-      }
-
-      const res = await fetch(`${baseUrl}${path}?${params}`, { headers });
+      const res = await fetch(`/api/events/history?${params}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
       const data = await res.json();
@@ -90,7 +73,7 @@ export function useEventHistory(opts: UseEventHistoryOptions = {}): UseEventHist
     } finally {
       setLoading(false);
     }
-  }, [limit, opts.eventType, opts.nodeId, isFleet]);
+  }, [limit, opts.eventType, opts.nodeId]);
 
   useEffect(() => {
     if (opts.skip) return;

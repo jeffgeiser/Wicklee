@@ -18,23 +18,18 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Database, Clock, RefreshCw, Filter, Activity, Download,
-  Shield, Lock, Globe, Radio,
-  ArrowUpRight, CheckCircle,
+  Shield, Lock,
+  CheckCircle,
   Cpu, Zap, Server, AlertTriangle,
-  ChevronDown, ChevronRight, Copy, Check, FileDown,
-  EyeOff, Wifi} from 'lucide-react';
+  ChevronDown, ChevronRight} from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer} from 'recharts';
 import { TrendingUp } from 'lucide-react';
-import { NodeAgent, TraceRecord, PairingInfo, HistorySample, HistoryResponse, EventHistoryRecord, SentinelMetrics, SubscriptionTier } from '../types';
-import { CLOUD_URL } from '../utils/cloudUrl';
-import { useFleetStream } from '../contexts/FleetStreamContext';
+import { NodeAgent, TraceRecord, HistorySample, HistoryResponse, EventHistoryRecord, SentinelMetrics } from '../types';
 import { useEventHistory } from '../hooks/useEventHistory';
 import { fmtAgo } from '../utils/time';
-import { tierRank } from '../utils/tier';
-import { RANGE_CONFIG } from '../cloud/utils/historyRange';
 
-import { IS_LOCAL_HOST as isLocalHost, IS_AGENT } from '../utils/buildTarget';
+import { IS_LOCAL_HOST as isLocalHost } from '../utils/buildTarget';
 
 function useProxyStatus() {
   const [status, setStatus] = useState<{
@@ -70,9 +65,6 @@ import type { NodeEffectiveSettings } from '../hooks/useSettings';
 interface TracesViewProps {
   nodes: NodeAgent[];
   tenantId: string;
-  pairingInfo: PairingInfo | null;
-  getToken?: () => Promise<string | null>;
-  subscriptionTier?: SubscriptionTier;
   getNodeSettings?: (nodeId: string) => NodeEffectiveSettings;
   /** Cross-nav params from Insights → Observability (node_id + time filter). */
   navParams?: import('../types').ObservabilityNavParams;
@@ -81,24 +73,12 @@ interface TracesViewProps {
 }
 
 const SovereigntySection: React.FC<{
-  pairingInfo: PairingInfo | null;
   proxyActive: boolean;
   proxyListenPort: number | null;
   proxyTargetPort: number | null;
   runtimeOverrides: string | null;
-}> = ({ pairingInfo, proxyActive, proxyListenPort, proxyTargetPort, runtimeOverrides }) => {
-  const { fleetEvents, connectionState } = useFleetStream();
+}> = ({ proxyActive, proxyListenPort, proxyTargetPort, runtimeOverrides }) => {
   const [expanded, setExpanded] = useState(false);
-
-  const isPaired = isLocalHost
-    ? pairingInfo?.status === 'connected'
-    : connectionState === 'connected' || connectionState === 'degraded';
-  const fleetUrl   = pairingInfo?.fleet_url ?? (isPaired ? 'wicklee.dev' : null);
-  const nodeId     = pairingInfo?.node_id ?? null;
-
-  const connectionEvents = fleetEvents
-    .filter(e => e.type === 'node_online' || e.type === 'node_offline')
-    .slice(0, 8);
 
   const manifest = [
     proxyActive ? {
@@ -111,18 +91,6 @@ const SovereigntySection: React.FC<{
       endpoint: 'localhost:11434',
       data:     'Metric only — tok/s sample (20 tokens)',
       status:   'local' as const,
-    },
-    {
-      purpose:  'Fleet telemetry',
-      endpoint: fleetUrl ?? '—',
-      data:     'System metrics + WES scores',
-      status:   isPaired ? 'active' as const : 'inactive' as const,
-    },
-    {
-      purpose:  'Clerk authentication',
-      endpoint: 'api.clerk.dev',
-      data:     'Session JWT — no inference data',
-      status:   isLocalHost ? 'inactive' as const : 'active' as const,
     },
   ];
 
@@ -140,7 +108,7 @@ const SovereigntySection: React.FC<{
           <div className="text-left">
             <h2 className="text-sm font-bold text-white">Sovereignty</h2>
             <p className="text-xs text-gray-500">
-              {expanded ? 'Structural proof that inference data never left your network' : 'All local · No inference data transmitted'}
+              {expanded ? 'The agent makes no outbound connections; here is everything it talks to' : 'All local · Nothing leaves this machine'}
             </p>
           </div>
         </div>
@@ -154,7 +122,6 @@ const SovereigntySection: React.FC<{
 
       {expanded && (
       <div className="px-5 pb-5 space-y-4 border-t border-gray-100 dark:border-gray-700 pt-4">
-
       <div className="grid md:grid-cols-2 gap-4">
 
         <div className="bg-gray-800 border border-gray-700 rounded-2xl p-5 space-y-4">
@@ -163,92 +130,44 @@ const SovereigntySection: React.FC<{
           </p>
 
           <div className="flex items-start gap-3">
-            <div className={`mt-0.5 w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${
-              isPaired
-                ? 'bg-indigo-500/10 border border-indigo-500/20'
-                : isLocalHost
-                  ? 'bg-green-500/10 border border-green-500/20'
-                  : 'bg-gray-700 border border-gray-700'
-            }`}>
-              {isPaired
-                ? <Globe className="w-4 h-4 text-indigo-400" />
-                : isLocalHost
-                  ? <Lock className="w-4 h-4 text-green-400" />
-                  : <Radio className="w-4 h-4 text-gray-500" />}
+            <div className="mt-0.5 w-8 h-8 rounded-xl flex items-center justify-center shrink-0 bg-green-500/10 border border-green-500/20">
+              <Lock className="w-4 h-4 text-green-400" />
             </div>
             <div className="min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
-                <span className="font-mono text-sm text-white">
-                  {isPaired
-                    ? (fleetUrl ?? 'wicklee.dev')
-                    : isLocalHost
-                      ? 'localhost:7700'
-                      : '—'}
-                </span>
-                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-widest ${
-                  isPaired
-                    ? 'bg-indigo-500/10 border border-indigo-500/20 text-indigo-400'
-                    : isLocalHost
-                      ? 'bg-green-500/10 border border-green-500/20 text-green-400'
-                      : 'bg-gray-700 border border-gray-700 text-gray-500'
-                }`}>
-                  {isPaired ? 'Fleet connected' : isLocalHost ? 'Local only' : 'No nodes'}
+                <span className="font-mono text-sm text-white">localhost:7700</span>
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-widest bg-green-500/10 border border-green-500/20 text-green-400">
+                  Local only
                 </span>
               </div>
               <p className="text-xs text-gray-500 mt-1 leading-relaxed">
-                {isPaired
-                  ? 'Each node transmits only system metrics and WES scores. Inference content is processed on-device and never leaves the node.'
-                  : isLocalHost
-                    ? 'No outbound telemetry. All inference data stays on this machine.'
-                    : 'No nodes connected yet. Add a node to see its telemetry routing details here.'}
+                No outbound telemetry. Everything the agent measures stays on this machine.
               </p>
-              {isPaired && nodeId && (
-                <p className="font-mono text-[11px] text-gray-600 mt-1.5">{nodeId}</p>
-              )}
             </div>
           </div>
 
-          <div className="border-t border-gray-700 pt-4 space-y-3">
-            <div>
-              <p className="text-[10px] text-gray-500 uppercase tracking-widest font-semibold mb-2">
-                {isLocalHost ? 'Transmitted to fleet' : 'Each node transmits'}
-              </p>
-              <div className="space-y-1.5">
-                {[
-                  'CPU / GPU / memory metrics',
-                  'WES score + thermal state',
-                  'Active model name',
-                ].map(label => (
-                  <div key={label} className="flex items-center gap-2">
-                    <ArrowUpRight className="w-3 h-3 text-indigo-400 shrink-0" />
-                    <span className="text-xs text-gray-400">{label}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div>
-              <p className="text-[10px] text-gray-500 uppercase tracking-widest font-semibold mb-2">
-                {isLocalHost ? 'Never leaves this machine' : 'Never leaves the node'}
-              </p>
-              <div className="space-y-1.5">
-                {[
-                  'Inference content / prompts',
-                  'Request payloads / responses',
-                  'User conversations',
-                ].map(label => (
-                  <div key={label} className="flex items-center gap-2">
-                    <CheckCircle className="w-3 h-3 text-green-400 shrink-0" />
-                    <span className="text-xs text-green-400/70">{label}</span>
-                  </div>
-                ))}
-              </div>
+          <div className="border-t border-gray-700 pt-4">
+            <p className="text-[10px] text-gray-500 uppercase tracking-widest font-semibold mb-2">
+              Never leaves this machine
+            </p>
+            <div className="space-y-1.5">
+              {[
+                'Hardware and inference metrics',
+                'Inference content / prompts',
+                'Request payloads / responses',
+              ].map(label => (
+                <div key={label} className="flex items-center gap-2">
+                  <CheckCircle className="w-3 h-3 text-green-400 shrink-0" />
+                  <span className="text-xs text-green-400/70">{label}</span>
+                </div>
+              ))}
             </div>
           </div>
         </div>
 
         <div className="bg-gray-800 border border-gray-700 rounded-2xl p-5 space-y-3">
           <p className="text-[10px] font-bold uppercase tracking-widest text-gray-500">
-            Outbound Connection Manifest
+            Connection Manifest
           </p>
           <div className="divide-y divide-gray-800/60">
             {manifest.map((row, idx) => (
@@ -258,9 +177,7 @@ const SovereigntySection: React.FC<{
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-xs font-semibold text-gray-300">{row.purpose}</span>
                       <span className={`inline-flex px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider ${
-                        row.status === 'local'    ? 'bg-green-500/10 text-green-400'   :
-                        row.status === 'active'   ? 'bg-indigo-500/10 text-indigo-400' :
-                                                    'bg-gray-500/10 text-gray-500'
+                        row.status === 'local' ? 'bg-green-500/10 text-green-400' : 'bg-indigo-500/10 text-indigo-400'
                       }`}>
                         {row.status}
                       </span>
@@ -279,58 +196,10 @@ const SovereigntySection: React.FC<{
           </div>
           <div className="border-t border-gray-700 pt-3">
             <p className="text-[11px] text-gray-600 leading-relaxed">
-              <span className="text-green-400/70 font-semibold">No inference data</span>{' '}
-              appears in any outbound connection. The Ollama probe issues 3 tokens to measure throughput — the content is discarded. Prompts and responses are processed entirely on-device.
+              Both connections are to inference runtimes on this machine. The Ollama probe issues a few tokens to measure throughput — the content is discarded. Prompts and responses are processed entirely on-device.
             </p>
           </div>
         </div>
-      </div>
-
-      <div className="bg-gray-800 border border-gray-700 rounded-2xl overflow-hidden">
-        <div className="px-5 py-3 border-b border-gray-700 flex items-center justify-between">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-gray-500">
-            Connection Event Log
-          </p>
-          <div className="flex items-center gap-1.5">
-            <div className={`w-1.5 h-1.5 rounded-full ${
-              connectionState === 'connected' ? 'bg-green-400 animate-pulse' : 'bg-gray-600'
-            }`} />
-            <span className="text-[10px] text-gray-600">Live</span>
-          </div>
-        </div>
-
-        {connectionEvents.length > 0 ? (
-          <div className="divide-y divide-gray-800/50">
-            {connectionEvents.map(evt => (
-              <div key={evt.id} className="px-5 py-3 flex items-center gap-4">
-                <span className="font-mono text-[11px] text-gray-600 shrink-0 w-[4.5rem]">
-                  {new Date(evt.ts).toLocaleTimeString([], {
-                    hour:   '2-digit',
-                    minute: '2-digit',
-                    second: '2-digit',
-                  })}
-                </span>
-                <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                  evt.type === 'node_online' ? 'bg-green-400' : 'bg-gray-500'
-                }`} />
-                <span className="text-xs text-gray-400">
-                  <span className="font-mono text-gray-300">
-                    {evt.hostname ?? evt.nodeId}
-                  </span>
-                  {evt.type === 'node_online'
-                    ? ' connected to fleet'
-                    : ' disconnected from fleet'}
-                  {evt.detail ? ` · ${evt.detail}` : ''}
-                </span>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="px-5 py-10 text-center">
-            <Radio className="w-5 h-5 text-gray-700 mx-auto mb-2" />
-            <p className="text-xs text-gray-600">No connection events in this session</p>
-          </div>
-        )}
       </div>
       </div>
       )}
@@ -598,9 +467,6 @@ const MetricHistoryPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
 };
 
 const AgentHealthPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
-  const isLocalHost = IS_AGENT;
-
-  const fleetStream = useFleetStream();
   const [localAgentOk, setLocalAgentOk]         = useState(false);
   const [localLastMs, setLocalLastMs]            = useState<number | null>(null);
   const [dbStatus, setDbStatus] = useState<'ok' | 'unavailable' | 'checking'>('checking');
@@ -637,11 +503,9 @@ const AgentHealthPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
     sseProbe();
   }, [nodeId]);
 
-  const connectionState = isLocalHost
-    ? (localAgentOk ? 'connected' : 'disconnected')
-    : fleetStream.connectionState;
-  const lastTelemetryMs = isLocalHost ? localLastMs : fleetStream.lastTelemetryMs;
-  const transport       = isLocalHost ? (localAgentOk ? 'http' : null) : fleetStream.transport;
+  const connectionState = localAgentOk ? 'connected' : 'disconnected';
+  const lastTelemetryMs = localLastMs;
+  const transport       = localAgentOk ? 'http' : null;
 
   const relTelemetry = lastTelemetryMs
     ? (() => {
@@ -652,17 +516,8 @@ const AgentHealthPanel: React.FC<{ nodeId: string }> = ({ nodeId }) => {
       })()
     : '—';
 
-  const connDot =
-    connectionState === 'connected'    ? 'bg-green-400 animate-pulse' :
-    connectionState === 'degraded'     ? 'bg-amber-400 animate-pulse' :
-    connectionState === 'idle'         ? 'bg-yellow-400'              :
-                                         'bg-red-500';
-
-  const connLabel =
-    connectionState === 'connected'    ? 'Connected'    :
-    connectionState === 'degraded'     ? 'Degraded'     :
-    connectionState === 'idle'         ? 'Idle'         :
-                                         'Disconnected';
+  const connDot   = connectionState === 'connected' ? 'bg-green-400 animate-pulse' : 'bg-red-500';
+  const connLabel = connectionState === 'connected' ? 'Connected' : 'Disconnected';
 
   const m = liveMetrics;
   const connected = connectionState === 'connected';
@@ -1128,652 +983,22 @@ const EventHistoryPanel: React.FC = () => {
   );
 };
 
-/** Fields synced to the cloud, grouped by category. */
-const SYNCED_FIELD_GROUPS: { label: string; fields: string[] }[] = [
-  { label: 'Identity', fields: ['node_id', 'hostname', 'os', 'arch', 'agent_version'] },
-  { label: 'CPU & Memory', fields: ['cpu_usage_percent', 'total_memory_mb', 'used_memory_mb', 'available_memory_mb', 'cpu_core_count', 'memory_pressure_percent'] },
-  { label: 'GPU / Accelerator', fields: ['gpu_name', 'gpu_utilization_percent', 'nvidia_gpu_utilization_percent', 'nvidia_vram_used_mb', 'nvidia_vram_total_mb', 'nvidia_gpu_temp_c', 'nvidia_power_draw_w'] },
-  { label: 'Power', fields: ['apple_soc_power_w', 'apple_gpu_power_w', 'cpu_power_w', 'gpu_wired_limit_mb'] },
-  { label: 'Inference State', fields: ['inference_state', 'ollama_tokens_per_second', 'vllm_tokens_per_sec', 'llamacpp_tokens_per_sec', 'ollama_active_model', 'vllm_model_name'] },
-  { label: 'Thermal & Efficiency', fields: ['thermal_state', 'penalty_avg', 'penalty_peak', 'swap_write_mb_s', 'clock_throttle_pct'] },
-];
-
-const LOCAL_ONLY_FIELDS = [
-  'Prompt / system messages',
-  'Generated response text',
-  'Request payloads / HTTP bodies',
-  'Conversation history',
-  'API keys or tokens',
-  'User files or documents',
-];
-
-/** Inline field inspector for a single node — rendered inside the expanded table row. */
-const NodeFieldInspector: React.FC<{ metrics: SentinelMetrics }> = ({ metrics }) => {
-  const [copied, setCopied] = useState(false);
-  const handleCopy = useCallback(() => {
-    navigator.clipboard.writeText(JSON.stringify(metrics, null, 2));
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  }, [metrics]);
-
-  return (
-    <div className="px-5 py-4 bg-gray-900/50">
-      <div className="flex items-center justify-between mb-3">
-        <span className="text-[9px] font-semibold uppercase tracking-wide text-gray-500">Telemetry Fields</span>
-        <button
-          onClick={handleCopy}
-          className="flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-semibold text-gray-500 hover:text-gray-300 hover:bg-gray-700 transition-colors"
-        >
-          {copied ? <><Check size={10} className="text-green-400" /> Copied</> : <><Copy size={10} /> Copy JSON</>}
-        </button>
-      </div>
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div>
-          <div className="flex items-center gap-1.5 mb-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-            <span className="text-[9px] font-semibold uppercase tracking-wide text-emerald-400">Synced to Cloud</span>
-          </div>
-          <div className="space-y-2">
-            {SYNCED_FIELD_GROUPS.map(group => {
-              const activeFields = group.fields.filter(f => (metrics as unknown as Record<string, unknown>)[f] != null);
-              if (activeFields.length === 0) return null;
-              return (
-                <div key={group.label}>
-                  <p className="text-[8px] font-semibold uppercase tracking-wide text-gray-600 mb-0.5">{group.label}</p>
-                  <div className="space-y-0">
-                    {activeFields.map(f => {
-                      const v = (metrics as unknown as Record<string, unknown>)[f];
-                      const display = typeof v === 'number' ? (Number.isInteger(v) ? String(v) : v.toFixed(2)) : String(v);
-                      return (
-                        <div key={f} className="flex items-center justify-between gap-2 py-px">
-                          <span className="text-[10px] font-mono text-gray-500 truncate">{f}</span>
-                          <span className="text-[10px] font-telin tabular-nums text-emerald-300 shrink-0">{display}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-        <div>
-          <div className="flex items-center gap-1.5 mb-2">
-            <EyeOff className="w-3 h-3 text-gray-600" />
-            <span className="text-[9px] font-semibold uppercase tracking-wide text-gray-600">Never Transmitted</span>
-          </div>
-          <div className="space-y-1">
-            {LOCAL_ONLY_FIELDS.map(f => (
-              <div key={f} className="flex items-center gap-2 py-px">
-                <Lock size={9} className="text-gray-700 shrink-0" />
-                <span className="text-[10px] text-gray-600 line-through">{f}</span>
-              </div>
-            ))}
-          </div>
-          <p className="mt-3 text-[9px] text-gray-600 leading-relaxed">
-            Inference content is processed on-device. The cloud receives only system metrics — never prompts or responses.
-          </p>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-const FleetSovereigntyGuard: React.FC<{
-  nodes: NodeAgent[];
-  getNodeSettings?: (nodeId: string) => NodeEffectiveSettings;
-}> = ({ nodes: _nodes, getNodeSettings }) => {
-  const { allNodeMetrics, connectionState } = useFleetStream();
-  const [tick, setTick] = useState(0);
-  const [expandedNode, setExpandedNode] = useState<string | null>(null);
-
-  useEffect(() => {
-    const iv = setInterval(() => setTick(t => t + 1), 5000);
-    return () => clearInterval(iv);
-  }, []);
-
-  const entries = Object.values(allNodeMetrics);
-  const now = Date.now();
-
-  return (
-    <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-sm dark:shadow-none overflow-hidden">
-      <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-gray-700">
-        <div className="flex items-center gap-2">
-          <Shield className="w-4 h-4 text-emerald-400" />
-          <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Sovereignty</h3>
-          {connectionState === 'connected' && (
-            <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/10">
-              <span className="relative flex h-1.5 w-1.5">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" style={{ animationDuration: '2s' }} />
-                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500" />
-              </span>
-              <span className="text-[9px] font-semibold text-emerald-400 uppercase tracking-wide">Live</span>
-            </span>
-          )}
-        </div>
-        <span className="text-[10px] text-gray-400">
-          {entries.length} node{entries.length !== 1 ? 's' : ''} connected · telemetry only · click a node to inspect fields
-        </span>
-      </div>
-
-      {entries.length === 0 ? (
-        <div className="px-6 py-10 text-center">
-          <Wifi className="w-6 h-6 mx-auto text-gray-600 mb-2" />
-          <p className="text-sm text-gray-500">No nodes connected to fleet.</p>
-          <p className="text-xs text-gray-600 mt-1">Pair a node via Management to see live telemetry.</p>
-        </div>
-      ) : (
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-gray-100 dark:border-gray-700">
-              <th className="text-left px-4 py-2.5 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 w-8" />
-              <th className="text-left px-3 py-2.5 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">Hostname</th>
-              <th className="text-left px-3 py-2.5 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">Node ID</th>
-              <th className="text-left px-3 py-2.5 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">Agent</th>
-              <th className="text-right px-4 py-2.5 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">Last Seen</th>
-              <th className="w-6" />
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
-            {entries.map(m => {
-              const ageSec = Math.round((now - (m.timestamp_ms ?? now)) / 1000);
-              const statusColor = ageSec < 10 ? 'bg-emerald-500' : ageSec < 30 ? 'bg-amber-500' : 'bg-red-500';
-              const ageLabel = ageSec < 5 ? 'just now' : ageSec < 60 ? `${ageSec}s ago` : `${Math.round(ageSec / 60)}m ago`;
-              const isExpanded = expandedNode === m.node_id;
-              void tick;
-              return (
-                <React.Fragment key={m.node_id}>
-                  <tr
-                    className="hover:bg-gray-50/50 dark:hover:bg-gray-700/30 transition-colors cursor-pointer"
-                    onClick={() => setExpandedNode(isExpanded ? null : m.node_id)}
-                  >
-                    <td className="px-4 py-2.5"><span className={`inline-block w-2 h-2 rounded-full ${statusColor}`} /></td>
-                    <td className="px-3 py-2.5 text-xs font-semibold text-gray-900 dark:text-white">
-                      {getNodeSettings?.(m.node_id)?.locationLabel || m.hostname || '—'}
-                    </td>
-                    <td className="px-3 py-2.5 text-[11px] font-mono text-gray-400">{m.node_id}</td>
-                    <td className="px-3 py-2.5 text-[11px] text-gray-500">{m.agent_version || '—'}</td>
-                    <td className="px-4 py-2.5 text-right text-[11px] font-telin tabular-nums text-gray-500">{ageLabel}</td>
-                    <td className="px-2 py-2.5 text-center">
-                      {isExpanded ? <ChevronDown size={12} className="text-gray-500" /> : <ChevronRight size={12} className="text-gray-500" />}
-                    </td>
-                  </tr>
-                  {isExpanded && (
-                    <tr>
-                      <td colSpan={6} className="p-0">
-                        <NodeFieldInspector metrics={m} />
-                      </td>
-                    </tr>
-                  )}
-                </React.Fragment>
-              );
-            })}
-          </tbody>
-        </table>
-      )}
-    </div>
-  );
-};
-
-const EVENT_TYPE_FILTERS = [
-  'startup', 'update', 'model_swap', 'thermal_change',
-  'node_offline', 'node_online', 'observation', 'error',
-] as const;
-const EVENT_LEVEL_DOT: Record<string, string> = {
-  info: 'bg-gray-400', warn: 'bg-amber-400', warning: 'bg-amber-400', error: 'bg-red-500',
-};
-const EVENT_TYPE_BADGE: Record<string, string> = {
-  startup: 'text-emerald-400 bg-emerald-500/10',
-  update: 'text-blue-400 bg-blue-500/10',
-  model_swap: 'text-cyan-400 bg-cyan-500/10',
-  thermal_change: 'text-amber-400 bg-amber-500/10',
-  node_offline: 'text-red-400 bg-red-500/10',
-  node_online: 'text-emerald-400 bg-emerald-500/10',
-  error: 'text-red-400 bg-red-500/10',
-  zombied_engine: 'text-red-400 bg-red-500/10',
-  thermal_redline: 'text-orange-400 bg-orange-500/10',
-  oom_warning: 'text-amber-400 bg-amber-500/10',
-  wes_cliff: 'text-purple-400 bg-purple-500/10',
-  agent_version_mismatch: 'text-yellow-400 bg-yellow-500/10',
-  fleet_load_imbalance: 'text-orange-400 bg-orange-500/10',
-  zombied_engine_resolved: 'text-emerald-400 bg-emerald-500/10',
-  thermal_redline_resolved: 'text-emerald-400 bg-emerald-500/10',
-  oom_warning_resolved: 'text-emerald-400 bg-emerald-500/10',
-  wes_cliff_resolved: 'text-emerald-400 bg-emerald-500/10',
-  agent_version_mismatch_resolved: 'text-emerald-400 bg-emerald-500/10',
-  fleet_load_imbalance_resolved: 'text-emerald-400 bg-emerald-500/10',
-};
-const OBSERVATION_EVENT_TYPES = new Set([
-  'zombied_engine', 'thermal_redline', 'oom_warning', 'wes_cliff', 'agent_version_mismatch', 'fleet_load_imbalance',
-  'zombied_engine_resolved', 'thermal_redline_resolved', 'oom_warning_resolved',
-  'wes_cliff_resolved', 'agent_version_mismatch_resolved', 'fleet_load_imbalance_resolved',
-]);
-
-const FleetEventTimeline: React.FC<{
-  nodes: NodeAgent[];
-  getToken: () => Promise<string | null>;
-  getNodeSettings?: (nodeId: string) => NodeEffectiveSettings;
-  /** Pre-select a node via cross-nav from Insights tab. */
-  initialNodeId?: string;
-}> = ({ nodes, getToken, getNodeSettings, initialNodeId }) => {
-  const [selectedNode, setSelectedNode] = useState<string>(initialNodeId ?? '');
-  const [selectedType, setSelectedType] = useState<string>('');
-  const [token, setToken] = useState<string | null>(null);
-  const [tokenReady, setTokenReady] = useState(false);
-
+/** The agent's own node id, from /api/health. */
+function useLocalNodeId(): string {
+  const [id, setId] = useState('');
   useEffect(() => {
     let cancelled = false;
-    const resolve = () => getToken().then(t => { if (!cancelled) { setToken(t); setTokenReady(true); } });
-    resolve();
-    const iv = setInterval(resolve, 50_000);
-    return () => { cancelled = true; clearInterval(iv); };
-  }, [getToken]);
-
-  const serverEventType = selectedType && selectedType !== 'observation' ? selectedType : undefined;
-  const { events: rawEvents, loading, error, hasMore, loadMore, refresh } = useEventHistory({
-    isFleet: true,
-    token: token ?? undefined,
-    eventType: serverEventType,
-    nodeId: selectedNode || undefined,
-    limit: 50,
-    skip: !tokenReady,
-  });
-  const events = selectedType === 'observation'
-    ? rawEvents.filter(ev => ev.event_type != null && OBSERVATION_EVENT_TYPES.has(ev.event_type))
-    : rawEvents;
-
-  const handleExport = useCallback(async (format: 'csv' | 'json') => {
-    const t = await getToken();
-    const params = new URLSearchParams({ format });
-    if (selectedNode) params.set('node_id', selectedNode);
-    const res = await fetch(`${CLOUD_URL}/api/fleet/export?${params}`, {
-      headers: t ? { Authorization: `Bearer ${t}` } : {},
-    });
-    if (!res.ok) return;
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `wicklee-events-${selectedNode || 'fleet'}.${format}`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  }, [getToken, selectedNode]);
-
-  const hostnameMap = React.useMemo(() => {
-    const map: Record<string, string> = {};
-    nodes.forEach(n => {
-      const label = getNodeSettings?.(n.id)?.locationLabel;
-      map[n.id] = label || n.hostname || n.id;
-    });
-    return map;
-  }, [nodes, getNodeSettings]);
-
-  return (
-    <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-sm dark:shadow-none overflow-hidden">
-      <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-gray-700">
-        <div className="flex items-center gap-2">
-          <Activity className="w-4 h-4 text-indigo-400" />
-          <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Fleet Event Timeline</h3>
-          <span className="text-[10px] text-gray-400 bg-gray-100 dark:bg-gray-700 px-2 py-0.5 rounded-full">
-            node_events · 30d
-          </span>
-          {events.length > 0 && (
-            <span className="text-[10px] text-gray-500 tabular-nums">
-              {events.length}{hasMore ? '+' : ''} events
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => handleExport('csv')}
-            className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-gray-500 hover:text-gray-300 hover:bg-gray-700 transition-colors"
-            title="Export events as CSV"
-          >
-            <FileDown className="w-3 h-3" /> CSV
-          </button>
-          <button
-            onClick={() => handleExport('json')}
-            className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-gray-500 hover:text-gray-300 hover:bg-gray-700 transition-colors"
-            title="Export events as JSON"
-          >
-            <FileDown className="w-3 h-3" /> JSON
-          </button>
-          <button onClick={refresh} className="p-1.5 rounded-lg text-gray-500 hover:text-gray-300 hover:bg-gray-700 transition-colors">
-            <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
-          </button>
-        </div>
-      </div>
-
-      <div className="px-5 py-3 flex items-center gap-3 flex-wrap border-b border-gray-100 dark:border-gray-700">
-        <select
-          value={selectedNode}
-          onChange={e => setSelectedNode(e.target.value)}
-          className="text-xs bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-gray-300 cursor-pointer focus:border-cyan-500/40 focus:outline-none [&>option]:bg-gray-800 [&>option]:text-gray-300"
-        >
-          <option value="">All Nodes</option>
-          {nodes.map(n => <option key={n.id} value={n.id}>{n.hostname || n.id}</option>)}
-        </select>
-        <div className="flex items-center gap-1.5">
-          {EVENT_TYPE_FILTERS.map(t => (
-            <button
-              key={t}
-              onClick={() => setSelectedType(prev => prev === t ? '' : t)}
-              className={`px-2 py-0.5 rounded-full text-[10px] font-semibold transition-colors ${
-                selectedType === t
-                  ? EVENT_TYPE_BADGE[t] ?? 'text-gray-300 bg-gray-700'
-                  : 'text-gray-500 hover:text-gray-300 bg-gray-100 dark:bg-gray-700'
-              }`}
-            >
-              {t.replaceAll('_', ' ')}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="max-h-[400px] overflow-y-auto">
-        {error && <div className="px-5 py-4 text-sm text-red-400">{error}</div>}
-        {!error && events.length === 0 && !loading && (
-          <div className="px-6 py-10 text-center text-sm text-gray-500">No events recorded yet.</div>
-        )}
-        {events.map((ev, i) => {
-          const d = new Date(ev.ts_ms);
-          const isOldEvent = Date.now() - ev.ts_ms > 24 * 60 * 60 * 1000;
-          const timeLabel = isOldEvent
-            ? d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' +
-              d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-            : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-          const dotCls = EVENT_LEVEL_DOT[ev.level] ?? 'bg-gray-500';
-          const badgeCls = EVENT_TYPE_BADGE[ev.event_type ?? ''] ?? 'text-gray-400 bg-gray-500/10';
-          return (
-            <div key={`${ev.ts_ms}-${i}`} className="flex items-start gap-3 px-5 py-2.5 hover:bg-gray-50/50 dark:hover:bg-gray-700/20 transition-colors border-b border-gray-50 dark:border-gray-700/50 last:border-0">
-              <span className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${dotCls}`} />
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-[10px] font-telin tabular-nums text-gray-500 whitespace-nowrap">{timeLabel}</span>
-                  <span className="text-[10px] font-semibold text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded">
-                    {hostnameMap[ev.node_id] ?? ev.node_id}
-                  </span>
-                  <span className="text-xs text-gray-300 truncate">{ev.message}</span>
-                </div>
-              </div>
-              {ev.event_type && (
-                <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded shrink-0 ${badgeCls}`}>
-                  {ev.event_type.replaceAll('_', ' ')}
-                </span>
-              )}
-            </div>
-          );
-        })}
-        {loading && <div className="px-5 py-3 text-center text-xs text-gray-500"><RefreshCw size={12} className="inline animate-spin mr-1" /> Loading…</div>}
-      </div>
-
-      {hasMore && events.length > 0 && !loading && (
-        <div className="px-5 py-3 border-t border-gray-100 dark:border-gray-700">
-          <button onClick={loadMore} className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
-            Load older events
-          </button>
-        </div>
-      )}
-    </div>
-  );
-};
-
-type FleetMetricRange = '1h' | '24h' | '7d' | '30d';
-
-interface FleetMetricPoint {
-  ts_ms: number;
-  tok_s: number | null;
-  tok_s_p95: number | null;
-  watts: number | null;
-  gpu_pct: number | null;
-  mem_pct: number | null;
-  cpu_pct: number | null;
-  swap_write: number | null;
-  duty_pct: number | null;
-  ttft_ms: number | null;
-  wes_score: number | null;
+    fetch('/api/health')
+      .then(r => (r.ok ? r.json() : null))
+      .then((d: { node_id?: string } | null) => { if (!cancelled && d?.node_id) setId(d.node_id); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+  return id;
 }
 
-interface FleetMetricsNode {
-  node_id: string;
-  hostname: string;
-  points: FleetMetricPoint[];
-}
-
-const FLEET_CHART_CONFIG: { key: keyof FleetMetricPoint; label: string; unit: string; color: string; gradId: string }[] = [
-  { key: 'tok_s',      label: 'Tok/s',         unit: 'tok/s', color: '#6366f1', gradId: 'fmcToks' },
-  { key: 'watts',      label: 'Power',         unit: 'W',     color: '#f59e0b', gradId: 'fmcWatt' },
-  { key: 'gpu_pct',    label: 'GPU Util',      unit: '%',     color: '#06b6d4', gradId: 'fmcGpu' },
-  { key: 'cpu_pct',    label: 'CPU Usage',     unit: '%',     color: '#3b82f6', gradId: 'fmcCpu' },
-  { key: 'mem_pct',    label: 'Mem Pressure',  unit: '%',     color: '#93c5fd', gradId: 'fmcMem' },
-  { key: 'swap_write', label: 'Swap Write',    unit: 'MB/s',  color: '#f43f5e', gradId: 'fmcSwap' },
-  { key: 'duty_pct',   label: 'Duty Cycle',    unit: '%',     color: '#10b981', gradId: 'fmcDuty' },
-  { key: 'ttft_ms',    label: 'TTFT',          unit: 'ms',    color: '#a855f7', gradId: 'fmcTtft' },
-  { key: 'wes_score',  label: 'WES Score',     unit: '',      color: '#14b8a6', gradId: 'fmcWes'  },
-];
-
-const FLEET_METRIC_RANGES: FleetMetricRange[] = ['1h', '24h', '7d', '30d'];
-const allowedFleetRanges = (tier: SubscriptionTier): FleetMetricRange[] =>
-  FLEET_METRIC_RANGES.filter(r => tierRank(tier) >= tierRank(RANGE_CONFIG[r].minTier));
-
-const FleetMetricsMini: React.FC<{
-  nodes: NodeAgent[];
-  getToken: () => Promise<string | null>;
-  subscriptionTier: SubscriptionTier;
-  /** Pre-select a node via cross-nav from Insights tab. */
-  initialNodeId?: string;
-}> = ({ nodes, getToken, subscriptionTier, initialNodeId }) => {
-  const [range, setRange] = useState<FleetMetricRange>('1h');
-  const [selectedNode, setSelectedNode] = useState<string>(initialNodeId ?? '');
-  const [data, setData] = useState<FleetMetricsNode[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const allowedRanges = allowedFleetRanges(subscriptionTier);
-
-  const fetchData = useCallback(async (r: FleetMetricRange) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const token = await getToken();
-      const params = new URLSearchParams({ range: r });
-      if (selectedNode) params.set('node_id', selectedNode);
-      const res = await fetch(`${CLOUD_URL}/api/fleet/metrics-history?${params}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await res.json();
-      setData(json.nodes ?? []);
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Unknown error');
-    } finally {
-      setLoading(false);
-    }
-  }, [getToken, selectedNode]);
-
-  useEffect(() => { fetchData(range); }, [range, selectedNode, fetchData]);
-
-  const chartPoints: FleetMetricPoint[] = React.useMemo(() => {
-    if (data.length === 0) return [];
-    if (data.length === 1) return data[0].points;
-    const byTs = new Map<number, FleetMetricPoint[]>();
-    data.forEach(n => n.points.forEach(p => {
-      const arr = byTs.get(p.ts_ms) ?? [];
-      arr.push(p);
-      byTs.set(p.ts_ms, arr);
-    }));
-    return Array.from(byTs.entries())
-      .sort((a, b) => a[0] - b[0])
-      .map(([ts_ms, pts]) => {
-        const avg = (key: keyof FleetMetricPoint) => {
-          const vals = pts.map(p => p[key]).filter((v): v is number => v != null);
-          return vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
-        };
-        return { ts_ms, tok_s: avg('tok_s'), tok_s_p95: avg('tok_s_p95'), watts: avg('watts'), gpu_pct: avg('gpu_pct'), mem_pct: avg('mem_pct'), cpu_pct: avg('cpu_pct'), swap_write: avg('swap_write'), duty_pct: avg('duty_pct'), ttft_ms: avg('ttft_ms'), wes_score: avg('wes_score') };
-      });
-  }, [data]);
-
-  const handleCsvExport = useCallback(() => {
-    if (chartPoints.length === 0) return;
-    const header = 'timestamp,tok_s,watts,gpu_pct,cpu_pct,mem_pct,swap_write';
-    const rows = chartPoints.map(p =>
-      `${new Date(p.ts_ms).toISOString()},${p.tok_s ?? ''},${p.watts ?? ''},${p.gpu_pct ?? ''},${p.cpu_pct ?? ''},${p.mem_pct ?? ''},${p.swap_write ?? ''}`
-    );
-    const csv = [header, ...rows].join('\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `wicklee-fleet-metrics-${selectedNode || 'all'}-${range}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  }, [chartPoints, range, selectedNode]);
-
-  return (
-    <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-sm dark:shadow-none overflow-hidden">
-      <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-gray-700">
-        <div className="flex items-center gap-2">
-          <Database className="w-4 h-4 text-blue-400" />
-          <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Fleet Metric History</h3>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1">
-            {(['1h', '24h', '7d', '30d'] as const).map(r => {
-              const allowed = allowedRanges.includes(r);
-              return (
-                <button
-                  key={r}
-                  onClick={() => allowed && setRange(r)}
-                  disabled={!allowed}
-                  className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-colors ${
-                    range === r
-                      ? 'text-indigo-400 bg-indigo-500/10'
-                      : allowed
-                        ? 'text-gray-500 hover:text-gray-300 hover:bg-gray-700'
-                        : 'text-gray-600 opacity-40 cursor-not-allowed'
-                  }`}
-                >
-                  {r.toUpperCase()}
-                  {!allowed && <Lock size={8} className="inline ml-0.5" />}
-                </button>
-              );
-            })}
-          </div>
-          <div className="flex items-center gap-1 border-l border-gray-700 pl-2 ml-1">
-            <button
-              onClick={() => setSelectedNode('')}
-              className={`px-2.5 py-1 rounded-lg text-[10px] font-medium whitespace-nowrap transition-colors ${
-                !selectedNode ? 'bg-gray-700 text-white' : 'text-gray-600 hover:text-gray-400'
-              }`}
-            >
-              All Nodes
-            </button>
-            {nodes.map(n => (
-              <button
-                key={n.id}
-                onClick={() => setSelectedNode(n.id)}
-                className={`px-2.5 py-1 rounded-lg text-[10px] font-medium whitespace-nowrap transition-colors ${
-                  selectedNode === n.id ? 'bg-gray-700 text-white' : 'text-gray-600 hover:text-gray-400'
-                }`}
-              >
-                {n.hostname || n.id}
-              </button>
-            ))}
-          </div>
-          {chartPoints.length > 0 && (
-            <button onClick={handleCsvExport} className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-gray-500 hover:text-gray-300 hover:bg-gray-700 transition-colors" title="Export CSV">
-              <FileDown className="w-3 h-3" /> CSV
-            </button>
-          )}
-          <button onClick={() => fetchData(range)} className="p-1.5 rounded-lg text-gray-500 hover:text-gray-300 hover:bg-gray-700 transition-colors">
-            <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
-          </button>
-        </div>
-      </div>
-
-      {error ? (
-        <div className="px-5 py-8 text-center text-sm text-red-400">{error}</div>
-      ) : chartPoints.length === 0 && !loading ? (
-        <div className="px-6 py-10 text-center">
-          <Database className="w-6 h-6 mx-auto text-gray-600 mb-2" />
-          <p className="text-sm text-gray-500">No metric history in this window.</p>
-          <p className="text-xs text-gray-600 mt-1">Run inference to start collecting fleet metrics.</p>
-        </div>
-      ) : (
-        <div className="grid grid-cols-2 lg:grid-cols-3 divide-x divide-y divide-gray-100 dark:divide-gray-800">
-          {FLEET_CHART_CONFIG.map(cfg => {
-            const peak = chartPoints.reduce((max, p) => {
-              const v = p[cfg.key];
-              return typeof v === 'number' && v > (max ?? 0) ? v : max;
-            }, null as number | null);
-            return (
-              <div key={cfg.key} className="px-4 py-3">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-[10px] font-semibold text-gray-500">{cfg.label}</span>
-                  {peak != null && (
-                    <span className="text-[10px] font-telin tabular-nums" style={{ color: cfg.color }}>
-                      peak {cfg.key === 'tok_s' ? peak.toFixed(1) : Math.round(peak)} {cfg.unit}
-                    </span>
-                  )}
-                </div>
-                <ResponsiveContainer width="100%" height={90}>
-                  <AreaChart data={chartPoints} margin={{ top: 2, right: 4, bottom: 0, left: 4 }}>
-                    <defs>
-                      <linearGradient id={cfg.gradId} x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor={cfg.color} stopOpacity={0.3} />
-                        <stop offset="95%" stopColor={cfg.color} stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <XAxis
-                      dataKey="ts_ms"
-                      tickFormatter={v => {
-                        const d = new Date(v as number);
-                        if (range === '1h') return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-                        if (range === '24h') return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                        return `${d.getMonth()+1}/${d.getDate()} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
-                      }}
-                      tick={{ fontSize: 9, fill: '#6b7280' }}
-                      axisLine={false}
-                      tickLine={false}
-                      minTickGap={40}
-                      height={16}
-                    />
-                    <YAxis hide domain={[0, 'auto']} />
-                    <Tooltip
-                      contentStyle={{ background: '#1a1a2e', border: '1px solid #374151', borderRadius: '8px', fontSize: '11px' }}
-                      labelFormatter={v => new Date(v as number).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      formatter={(v: number) => [`${cfg.key === 'tok_s' ? v.toFixed(1) : Math.round(v)} ${cfg.unit}`, cfg.label]}
-                    />
-                    <Area
-                      type="monotone"
-                      dataKey={cfg.key}
-                      stroke={cfg.color}
-                      strokeWidth={1.5}
-                      fill={`url(#${cfg.gradId})`}
-                      connectNulls
-                      dot={false}
-                      isAnimationActive={false}
-                    />
-                  </AreaChart>
-                </ResponsiveContainer>
-                {loading && <div className="text-center text-[10px] text-gray-600 mt-1"><RefreshCw size={10} className="inline animate-spin mr-1" />Loading…</div>}
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-};
-
-const TracesView: React.FC<TracesViewProps> = ({ nodes: _nodes, tenantId, pairingInfo, getToken, subscriptionTier, getNodeSettings, navParams, onNavConsumed }) => {
-  const { allNodeMetrics } = useFleetStream();
-  const wsNodeId = Object.keys(allNodeMetrics)[0] ?? '';
-  const nodeId = pairingInfo?.node_id || wsNodeId;
+const TracesView: React.FC<TracesViewProps> = ({ tenantId, navParams, onNavConsumed }) => {
+  const nodeId = useLocalNodeId();
   const { proxyActive, listenPort: proxyListenPort, targetPort: proxyTargetPort, runtimeOverrides } = useProxyStatus();
 
   useEffect(() => {
@@ -1785,19 +1010,11 @@ const TracesView: React.FC<TracesViewProps> = ({ nodes: _nodes, tenantId, pairin
 
   return (
     <div className="space-y-8">
-      {!isLocalHost && (
-        <>
-          <FleetSovereigntyGuard nodes={_nodes} getNodeSettings={getNodeSettings} />
-          {getToken && <FleetEventTimeline nodes={_nodes} getToken={getToken} getNodeSettings={getNodeSettings} initialNodeId={navParams?.nodeId} />}
-          {getToken && subscriptionTier && <FleetMetricsMini nodes={_nodes} getToken={getToken} subscriptionTier={subscriptionTier} initialNodeId={navParams?.nodeId} />}
-        </>
-      )}
-
-      {isLocalHost && <SovereigntySection pairingInfo={pairingInfo} proxyActive={proxyActive} proxyListenPort={proxyListenPort} proxyTargetPort={proxyTargetPort} runtimeOverrides={runtimeOverrides} />}
-      {isLocalHost && nodeId && <MetricHistoryPanel nodeId={nodeId} />}
-      {isLocalHost && <TraceTable tenantId={tenantId} proxyActive={proxyActive} proxyListenPort={proxyListenPort} proxyTargetPort={proxyTargetPort} />}
-      {isLocalHost && <EventHistoryPanel />}
-      {isLocalHost && nodeId && <AgentHealthPanel   nodeId={nodeId} />}
+      <SovereigntySection proxyActive={proxyActive} proxyListenPort={proxyListenPort} proxyTargetPort={proxyTargetPort} runtimeOverrides={runtimeOverrides} />
+      {nodeId && <MetricHistoryPanel nodeId={nodeId} />}
+      <TraceTable tenantId={tenantId} proxyActive={proxyActive} proxyListenPort={proxyListenPort} proxyTargetPort={proxyTargetPort} />
+      <EventHistoryPanel />
+      {nodeId && <AgentHealthPanel nodeId={nodeId} />}
     </div>
   );
 };

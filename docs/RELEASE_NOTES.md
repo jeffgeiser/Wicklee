@@ -15,6 +15,24 @@ written notes.
 
 ---
 
+## Unreleased — removals
+
+No tag yet. The hosted fleet view and everything behind it are gone, so a
+future release changes what the agent does, not only what it adds:
+
+- Removed the fleet pairing flow (`--pair`, `/api/pair/*`), telemetry push, the
+  `--no-cloud` flag (there is nothing left for it to turn off) and the
+  self-update, which only ever ran for paired agents and depended on an endpoint
+  that no longer exists. Upgrade by re-running the install script.
+- `/api/health` now reports `node_id`, and `wicklee --status` and the MCP stdio
+  bridge use it instead of `/api/pair/status`.
+- An existing `config.toml` that still carries `fleet_url` or `session_token`
+  keeps working; the keys are ignored.
+- Removed the control-plane code, its deployment files and the Prometheus,
+  OpenTelemetry and webhook paths that went with it.
+
+---
+
 ## v0.15.0 — Phase 1 complete: `wicklee inspect`
 
 **Install:**

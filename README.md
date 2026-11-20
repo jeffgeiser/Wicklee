@@ -1,10 +1,10 @@
 # Wicklee
 
-[![Agent: Apache 2.0](https://img.shields.io/badge/Agent-Apache--2.0-blue.svg)](LICENSE) [![Control plane: FSL-1.1-Apache-2.0](https://img.shields.io/badge/Control%20plane-FSL--1.1--Apache--2.0-lightgrey.svg)](cloud/LICENSE)
+[![Agent: Apache 2.0](https://img.shields.io/badge/Agent-Apache--2.0-blue.svg)](LICENSE) [![Website: FSL-1.1-Apache-2.0](https://img.shields.io/badge/Website-FSL--1.1--Apache--2.0-lightgrey.svg)](src/site/LICENSE)
 [![Rust](https://img.shields.io/badge/Rust-1.85%2B-orange.svg)](https://www.rust-lang.org/)
 [![Build](https://img.shields.io/github/actions/workflow/status/jeffgeiser/Wicklee/release.yml?label=nightly)](https://github.com/jeffgeiser/Wicklee/actions)
 
-**Sovereign-first GPU fleet monitor for local AI inference.**
+**The evidence layer for self-hosted AI inference.**
 
 One Rust binary per node. Live hardware dashboard at `localhost:7700`. No proxy in the inference path by default — your models run untouched.
 
@@ -163,7 +163,7 @@ When thermals degrade, WES penalizes the score — surfacing efficiency loss bef
 
 ## Observation Patterns
 
-20 hardware-aware patterns continuously evaluated against live telemetry (18 on the node, 2 in the fleet cloud):
+18 hardware-aware patterns continuously evaluated against live telemetry on the node:
 
 - **Thermal:** Thermal Drain, NVIDIA Thermal Ceiling
 - **Power:** Phantom Load, Power-GPU Decoupling, Power Jitter
@@ -171,7 +171,6 @@ When thermals degrade, WES penalizes the score — surfacing efficiency loss bef
 - **Inference:** TTFT Regression, Latency Spike, vLLM Queue Saturation, KV Cache Saturation
 - **Hardware:** Bandwidth Saturation, Bandwidth Ceiling Reached, Clock Drift, PCIe Lane Degradation *(NVIDIA only, no root required)*
 - **Efficiency:** WES Velocity Drop, Efficiency Penalty Drag
-- **Fleet (cloud-evaluated):** Fleet Load Imbalance, WES Long-Term Drift
 
 Each pattern produces actionable observations with severity, evidence, and routing hints (`steer_away` / `reduce_batch` / `monitor`).
 
@@ -192,8 +191,6 @@ For each model it gives you the exact Ollama pull command for the best-fitting q
 ```bash
 ollama pull hf.co/bartowski/Qwen2.5-14B-Instruct-GGUF:Q4_K_M
 ```
-
-Fleet mode scores every model against every online node simultaneously.
 
 ---
 
@@ -289,7 +286,7 @@ wicklee (single binary)
 └── Optional: transparent proxy (port 11434)
 ```
 
-**Sovereign by default.** Nothing leaves the machine until you explicitly pair with a fleet.
+**Sovereign by default.** The agent makes no outbound connections. There is no hosted service, account or telemetry. Update by re-running the install script.
 
 ---
 
@@ -301,7 +298,7 @@ wicklee (single binary)
 git clone https://github.com/jeffgeiser/Wicklee.git
 cd Wicklee
 
-# Build frontend (agent mode — no Clerk); Vite writes straight into agent/frontend/dist
+# Build frontend (agent mode); Vite writes straight into agent/frontend/dist
 npm ci && npm run build:agent
 
 # Build agent → agent/target/release/wicklee-agent
@@ -327,7 +324,7 @@ cd agent && cargo build --release
 Wicklee is licensed by directory. [LICENSING.md](LICENSING.md) has the full map.
 
 - **The agent and local dashboard are open source under [Apache 2.0](LICENSE).** That is everything that runs on your nodes: `agent/`, the dashboard at `localhost:7700`, and the metric calculations including WES.
-- **The fleet control plane is source-available under [FSL-1.1-Apache-2.0](cloud/LICENSE).** That is `cloud/`, `src/cloud/`, `src/site/` and the control-plane deployment files. You can read, run, modify and self-host it for anything except offering a competing fleet monitoring service; each release converts to Apache 2.0 after four years.
+- **The website in `src/site/` is source-available under [FSL-1.1-Apache-2.0](src/site/LICENSE).** You can read, run and modify it for anything except offering a competing product or service; each release converts to Apache 2.0 after four years.
 
 "Wicklee" and the Wicklee logo are trademarks and are not covered by either licence. Forks must use a different name.
 

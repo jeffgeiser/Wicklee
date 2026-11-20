@@ -1,19 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Boxes, ChevronRight, ChevronDown } from 'lucide-react';
-import { FleetNode, ModelLiveMetrics, SentinelMetrics } from '../types';
+import { ModelLiveMetrics, SentinelMetrics } from '../types';
 import { wesColorClass } from '../utils/wes';
-import { CLOUD_URL } from '../utils/cloudUrl';
-import { useFleetStream } from '../contexts/FleetStreamContext';
 import { useLocalMetricsStream } from '../hooks/useLocalMetricsStream';
 import ModelDiscoveryCard from './insights/ModelDiscoveryCard';
-import FleetModelDiscovery from '../cloud/insights/FleetModelDiscovery';
-import { IS_AGENT } from '../utils/buildTarget';
 
 interface ModelsPageProps {
-  isLocalHost: boolean;
-  getToken?: () => Promise<string | null>;
-  nodes: FleetNode[];
-  /** Deep-link into Insights → Performance (fleet efficiency, planning, cost governance). */
+  /** Deep-link into Insights → Performance. */
   onNavigateToInsightsPerformance?: () => void;
 }
 
@@ -69,33 +62,9 @@ interface LoadedModelRow {
   active: boolean;
 }
 
-const LoadedSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<string | null> }> = ({ isLocalHost, getToken }) => {
+const LoadedSection: React.FC = () => {
   const [localSentinel, setLocalSentinel] = useState<SentinelMetrics | null>(null);
-  const [fleetNodes, setFleetNodes] = useState<Array<{ node_id: string; metrics: SentinelMetrics | null; display_name?: string | null }>>([]);
-
-  useLocalMetricsStream(setLocalSentinel, isLocalHost);
-
-  const { allNodeMetrics, lastSeenMsMap } = useFleetStream();
-  useEffect(() => {
-    if (isLocalHost || !getToken) return;
-    let cancelled = false;
-    const fetchOnce = async () => {
-      try {
-        const token = await getToken();
-        if (!token || cancelled) return;
-        const res = await fetch(`${CLOUD_URL}/api/fleet`, {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        if (!res.ok || cancelled) return;
-        const data = await res.json();
-        if (cancelled) return;
-        setFleetNodes(data.nodes || []);
-      } catch { }
-    };
-    fetchOnce();
-    const id = setInterval(fetchOnce, 30_000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [isLocalHost, getToken]);
+  useLocalMetricsStream(setLocalSentinel, true);
 
   const rows: LoadedModelRow[] = useMemo(() => {
     const out: LoadedModelRow[] = [];
@@ -141,27 +110,10 @@ const LoadedSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
       }
     };
 
-    if (isLocalHost) {
-      const s = localSentinel;
+    const s = localSentinel;
       if (s) collectFromSentinel(s, s.hostname || s.node_id);
-    } else {
-      const streamHasFrame = Object.keys(lastSeenMsMap).length > 0;
-      const seen = new Set<string>();
-      for (const node of fleetNodes) {
-        if (streamHasFrame && !(node.node_id in lastSeenMsMap)) continue;
-        seen.add(node.node_id);
-        const live = allNodeMetrics[node.node_id];
-        if (live) { collectFromSentinel(live, live.hostname || node.node_id); continue; }
-        if (!node.metrics) continue;
-        const label = node.display_name || node.metrics.hostname || node.node_id;
-        collectFromSentinel(node.metrics, label);
-      }
-      for (const [nodeId, live] of Object.entries(allNodeMetrics)) {
-        if (!seen.has(nodeId)) collectFromSentinel(live, live.hostname || nodeId);
-      }
-    }
     return out;
-  }, [isLocalHost, localSentinel, fleetNodes, allNodeMetrics, lastSeenMsMap]);
+  }, [localSentinel]);
 
   const nodeCount = useMemo(() => {
     const seen = new Set(rows.map(r => r.node_id));
@@ -189,7 +141,6 @@ const LoadedSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
           <div className="overflow-x-auto">
             <table className="w-full text-sm table-fixed">
               <colgroup>
-                {!isLocalHost && <col className="w-[18%]" />}{}
                 <col />
                 <col className="w-[12%]" />
                 <col className="w-[16%]" />
@@ -197,7 +148,6 @@ const LoadedSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
               </colgroup>
               <thead>
                 <tr className="text-[10px] uppercase tracking-widest text-gray-500 border-b border-gray-700">
-                  {!isLocalHost && <th className="text-left font-medium px-3 py-2">Node</th>}
                   <th className="text-left font-medium px-3 py-2">Model</th>
                   <th className="text-left font-medium px-3 py-2">Quant</th>
                   <th className="text-right font-medium px-3 py-2" title="GPU VRAM when available, else model file size in system memory">Memory</th>
@@ -225,7 +175,6 @@ const LoadedSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
 
                   return (
                     <tr key={`${r.node_id}-${r.model.model}-${i}`} className="border-b border-gray-700/50 last:border-0 hover:bg-gray-800/30">
-                      {!isLocalHost && <td className="px-3 py-2 text-gray-300 text-xs truncate" title={r.node_label}>{r.node_label}</td>}
                       <td className="px-3 py-2 font-mono text-xs text-white truncate" title={r.model.model}>{r.model.model}</td>
                       <td className="px-3 py-2 font-mono text-[10px] text-gray-500">{r.model.quantization ?? '—'}</td>
                       <td className="px-3 py-2 text-right font-mono text-xs text-gray-200 whitespace-nowrap"
@@ -264,26 +213,16 @@ interface ComparisonRow {
   sample_count: number;
 }
 
-const RecentSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<string | null> }> = ({ isLocalHost, getToken }) => {
+const RecentSection: React.FC = () => {
   const [rows, setRows] = useState<ComparisonRow[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [sortBy, setSortBy] = useState<'wes' | 'tok_s' | 'cost'>('wes');
 
   useEffect(() => {
-    if (!isLocalHost && !getToken) return;
     let cancelled = false;
     const fetchData = async () => {
       try {
-        const url = isLocalHost
-          ? '/api/model-comparison?hours=168'
-          : `${CLOUD_URL}/api/v1/fleet/model-comparison?hours=168`;
-        const headers: Record<string, string> = {};
-        if (!isLocalHost && getToken) {
-          const token = await getToken();
-          if (!token) { setLoaded(true); return; }
-          headers['Authorization'] = `Bearer ${token}`;
-        }
-        const res = await fetch(url, { headers });
+        const res = await fetch('/api/model-comparison?hours=168');
         if (!res.ok) { setLoaded(true); return; }
         const data = await res.json();
         if (cancelled) return;
@@ -296,7 +235,7 @@ const RecentSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
     fetchData();
     const id = setInterval(fetchData, 60_000);
     return () => { cancelled = true; clearInterval(id); };
-  }, [isLocalHost, getToken]);
+  }, []);
 
   const sortedRows = useMemo(() => {
     const copy = [...rows];
@@ -311,8 +250,8 @@ const RecentSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
   const meta = !loaded
     ? 'loading'
     : sortedRows.length === 0
-      ? (isLocalHost ? 'no data yet' : 'fleet aggregation pending')
-      : `${sortedRows.length} model${sortedRows.length === 1 ? '' : 's'} · last 7 days${isLocalHost ? '' : ' · fleet'}`;
+      ? 'no data yet'
+      : `${sortedRows.length} model${sortedRows.length === 1 ? '' : 's'} · last 7 days`;
 
   return (
     <Section eyebrow="Recent" meta={meta}>
@@ -320,9 +259,7 @@ const RecentSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
         <EmptyState>Loading…</EmptyState>
       ) : sortedRows.length === 0 ? (
         <EmptyState>
-          {isLocalHost
-            ? 'No models tracked in the past 7 days.'
-            : 'No models tracked yet — fleet aggregation needs a few hours of telemetry under the new schema. Local nodes have full data via the localhost dashboard.'}
+          No models tracked in the past 7 days.
         </EmptyState>
       ) : (
         <Card>
@@ -379,25 +316,15 @@ const RecentSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<s
 interface SwapEntry { ts_ms: number; node_id?: string; from_model: string | null; to_model: string | null; gap_ms: number; }
 interface SwapsResponse { swaps: SwapEntry[]; total_swaps: number; total_gap_ms: number; total_gap_minutes: number; }
 
-const SwapsSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<string | null> }> = ({ isLocalHost, getToken }) => {
+const SwapsSection: React.FC = () => {
   const [data, setData] = useState<SwapsResponse | null>(null);
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    if (!isLocalHost && !getToken) return;
     let cancelled = false;
     const fetchData = async () => {
       try {
-        const url = isLocalHost
-          ? '/api/model-switches?hours=24'
-          : `${CLOUD_URL}/api/v1/fleet/model-switches?hours=24`;
-        const headers: Record<string, string> = {};
-        if (!isLocalHost && getToken) {
-          const token = await getToken();
-          if (!token) { setLoaded(true); return; }
-          headers['Authorization'] = `Bearer ${token}`;
-        }
-        const res = await fetch(url, { headers });
+        const res = await fetch('/api/model-switches?hours=24');
         if (!res.ok) { setLoaded(true); return; }
         const json = await res.json();
         if (!cancelled) { setData(json); setLoaded(true); }
@@ -408,7 +335,7 @@ const SwapsSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<st
     fetchData();
     const id = setInterval(fetchData, 60_000);
     return () => { cancelled = true; clearInterval(id); };
-  }, [isLocalHost, getToken]);
+  }, []);
 
   const fmtTime = (ms: number) => {
     const d = new Date(ms);
@@ -422,8 +349,8 @@ const SwapsSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<st
   const meta = !loaded
     ? 'loading'
     : !data || data.swaps.length === 0
-      ? (isLocalHost ? 'no swaps · last 24h' : 'fleet aggregation pending')
-      : `${data.total_swaps} swap${data.total_swaps === 1 ? '' : 's'} · ${data.total_gap_minutes.toFixed(1)} min idle · last 24h${isLocalHost ? '' : ' · fleet'}`;
+      ? 'no swaps · last 24h'
+      : `${data.total_swaps} swap${data.total_swaps === 1 ? '' : 's'} · ${data.total_gap_minutes.toFixed(1)} min idle · last 24h`;
 
   return (
     <Section eyebrow="Swaps" meta={meta}>
@@ -431,9 +358,7 @@ const SwapsSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<st
         <EmptyState>Loading…</EmptyState>
       ) : !data || data.swaps.length === 0 ? (
         <EmptyState>
-          {isLocalHost
-            ? 'No model swaps in the past 24 hours. Each swap costs idle time while VRAM is reallocated — fewer is better.'
-            : 'No model swaps tracked yet — fleet aggregation needs a few hours of telemetry under the new schema. Local nodes have full data via the localhost dashboard.'}
+          No model swaps in the past 24 hours. Each swap costs idle time while VRAM is reallocated — fewer is better.
         </EmptyState>
       ) : (
         <Card>
@@ -442,7 +367,6 @@ const SwapsSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<st
               <thead>
                 <tr className="text-[10px] uppercase tracking-widest text-gray-500 border-b border-gray-700">
                   <th className="text-left font-medium px-4 py-3">Time</th>
-                  {!isLocalHost && <th className="text-left font-medium px-4 py-3">Node</th>}
                   <th className="text-left font-medium px-4 py-3">From</th>
                   <th className="text-left font-medium px-4 py-3">To</th>
                   <th className="text-right font-medium px-4 py-3">Idle gap</th>
@@ -452,7 +376,6 @@ const SwapsSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<st
                 {data.swaps.map((s, i) => (
                   <tr key={`${s.ts_ms}-${i}`} className="border-b border-gray-700/50 last:border-0 hover:bg-gray-800/30">
                     <td className="px-4 py-3 font-mono text-xs text-gray-300">{fmtTime(s.ts_ms)}</td>
-                    {!isLocalHost && <td className="px-4 py-3 font-mono text-xs text-gray-300">{s.node_id ?? '—'}</td>}
                     <td className="px-4 py-3 font-mono text-xs text-gray-200">{s.from_model ?? '—'}</td>
                     <td className="px-4 py-3 font-mono text-xs text-white">{s.to_model ?? '—'}</td>
                     <td className="px-4 py-3 text-right font-mono text-xs text-yellow-300">{fmtGap(s.gap_ms)}</td>
@@ -467,23 +390,15 @@ const SwapsSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<st
   );
 };
 
-const BrowseSection: React.FC<{ isLocalHost: boolean; getToken?: () => Promise<string | null> }> = ({ isLocalHost, getToken }) => (
+const BrowseSection: React.FC = () => (
   <Section eyebrow="Browse" meta="HuggingFace GGUF catalog scored against your hardware">
-    {isLocalHost ? (
-      <ModelDiscoveryCard isLocalHost={isLocalHost} />
-    ) : !IS_AGENT && getToken ? (
-      <FleetModelDiscovery getToken={getToken} />
-    ) : (
-      <EmptyState>Sign in to use Fleet Model Discovery.</EmptyState>
-    )}
+    <ModelDiscoveryCard isLocalHost />
   </Section>
 );
 
 const PastActivityFooter: React.FC<{
-  isLocalHost: boolean;
-  getToken?: () => Promise<string | null>;
   onNavigateToInsightsPerformance?: () => void;
-}> = ({ isLocalHost, getToken, onNavigateToInsightsPerformance }) => {
+}> = ({ onNavigateToInsightsPerformance }) => {
   const [openSection, setOpenSection] = useState<'recent' | 'swaps' | null>(null);
 
   const ToggleButton: React.FC<{ id: 'recent' | 'swaps'; label: string; hint: string }> = ({ id, label, hint }) => {
@@ -508,10 +423,10 @@ const PastActivityFooter: React.FC<{
       <ToggleButton id="recent" label="7-day model performance comparison" hint="WES, tok/s, watts, TTFT, cost per model" />
       {openSection === 'recent' && (
         <>
-          <RecentSection isLocalHost={isLocalHost} getToken={getToken} />
+          <RecentSection />
           {onNavigateToInsightsPerformance && (
             <p className="text-[11px] text-gray-600 px-1">
-              Cost attribution by team, capacity planning, and idle-waste recovery live on{' '}
+              Efficiency trends and cost live on{' '}
               <button
                 onClick={onNavigateToInsightsPerformance}
                 className="text-blue-400 hover:text-blue-300 underline decoration-blue-500/40 underline-offset-2 transition-colors"
@@ -523,12 +438,12 @@ const PastActivityFooter: React.FC<{
         </>
       )}
       <ToggleButton id="swaps" label="Model swap activity" hint="last 24h · transitions and idle gaps" />
-      {openSection === 'swaps' && <SwapsSection isLocalHost={isLocalHost} getToken={getToken} />}
+      {openSection === 'swaps' && <SwapsSection />}
     </div>
   );
 };
 
-const ModelsPage: React.FC<ModelsPageProps> = ({ isLocalHost, getToken, onNavigateToInsightsPerformance }) => {
+const ModelsPage: React.FC<ModelsPageProps> = ({ onNavigateToInsightsPerformance }) => {
   return (
     <div className="space-y-6 p-4 sm:p-6 max-w-7xl mx-auto">
       <header className="flex items-start gap-3 pb-2">
@@ -538,11 +453,11 @@ const ModelsPage: React.FC<ModelsPageProps> = ({ isLocalHost, getToken, onNaviga
         <div>
           <h1 className="text-2xl font-bold text-white">Models</h1>
           <p className="text-sm text-gray-400 mt-1">
-            What's loaded and where, what each model ran and cost, and what you could add.
-            Live node telemetry is on Intelligence
+            What's loaded, what each model ran and cost, and what you could add.
+            Live node telemetry is on Overview
             {onNavigateToInsightsPerformance ? (
               <>
-                ; fleet efficiency, planning, and cost governance live on{' '}
+                ; efficiency and cost trends live on{' '}
                 <button
                   onClick={onNavigateToInsightsPerformance}
                   className="text-blue-400 hover:text-blue-300 underline decoration-blue-500/40 underline-offset-2 transition-colors"
@@ -551,18 +466,18 @@ const ModelsPage: React.FC<ModelsPageProps> = ({ isLocalHost, getToken, onNaviga
                 </button>.
               </>
             ) : (
-              '; fleet efficiency, planning, and cost governance live on Insights → Performance.'
+              '; efficiency and cost trends live on Insights → Performance.'
             )}
           </p>
         </div>
       </header>
 
       {/* Two primary sections answering "what's running" and "what could I run". */}
-      <LoadedSection isLocalHost={isLocalHost} getToken={getToken} />
-      <BrowseSection isLocalHost={isLocalHost} getToken={getToken} />
+      <LoadedSection />
+      <BrowseSection />
 
       {/* Demoted secondary views — collapsed by default, expand for deep history. */}
-      <PastActivityFooter isLocalHost={isLocalHost} getToken={getToken} onNavigateToInsightsPerformance={onNavigateToInsightsPerformance} />
+      <PastActivityFooter onNavigateToInsightsPerformance={onNavigateToInsightsPerformance} />
     </div>
   );
 };

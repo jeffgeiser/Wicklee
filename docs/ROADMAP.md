@@ -30,8 +30,9 @@ with `--json`. No account, no tier, no network call you did not ask for.
 
 The paid tiers are withdrawn (`docs/STRATEGY.md` §14) pending a monetization
 plan grounded in actual usage. The hosted backend, its database and the payment
-integration served that product, and they are being shut down rather than left
-running; `docs/TRANSITION_PLAN.md` holds the order and the owner of each step.
+integration served that product, and they were shut down on 2026-11-20. The
+code behind them was deleted the same day and is in git history;
+`docs/TRANSITION_PLAN.md` holds the order and the owner of each step.
 
 This file used to be 613 lines, most of them a dashboard, a hosted fleet view,
 a tier ladder and the GTM and enterprise-readiness programs built around them.
@@ -42,11 +43,11 @@ kept because it is the index to the tags.
 ### Release history
 
 Agent versions are tagged by hand; `install.sh` serves the nightly build of
-`main`, and self-update follows the newest tag.
+`main`. There is no self-update; re-run the install script to upgrade.
 
 | Version | Date | Content |
 | --- | --- | --- |
-| v0.15.0 | pending | Phase 1 steps 5 to 10, the musl build repaired, the tiers removed from the public docs. See `docs/RELEASE_NOTES.md` |
+| v0.15.0 | 2026-11-16 | Phase 1 steps 5 to 10, the musl build repaired, the tiers removed from the public docs. See `docs/RELEASE_NOTES.md` |
 | v0.14.0 | 2026-11-14 | Phase 1 steps 0 to 4 |
 | v0.13.1 | 2026-11-14 | ARM64 NVIDIA self-update fix — `agent_platform()` had no aarch64 NVML branch, so those builds reported a name that did not match the asset they were published as. **Correction, 2026-11-14:** the original note said those nodes "lost GPU metrics silently." They did not. `nvml-wrapper` is target-gated, so both Linux assets per arch are the same build under different names. The fix is naming correctness, not a capability repair |
 | v0.13.0 | 2026-11-14 | Phase 1 steps 0 to 3. Release pipeline repairs: macOS runner pin, both NVIDIA Linux assets moved to the glibc 2.31 floor, musl build added to CI |
@@ -250,7 +251,6 @@ Each of these is blocked on something outside the code.
 | Four acceptance rows | A day of normal use, a >5% fix lever that 16 GB cannot provide, and three other machines |
 | `baseline_regression` on the musl build | The rule reads the store, and musl has none. The in-memory receipt buffer added in v0.15.0 could carry it; `inspect` currently reports it as not checked, with the reason |
 | A v0.15.0 tag | Steps 5 to 10 are untagged. The tag also publishes the two-asset Linux matrix |
-| The frozen cloud code | `cloud/`, `src/cloud/`, `cloud_push.rs`, `pairing.rs` and the control-plane deployment files have no deployment to talk to once Railway stops. Delete or keep as the Stage 4 starting point — `docs/TRANSITION_PLAN.md` step 7 |
 
 ---
 

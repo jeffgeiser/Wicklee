@@ -519,15 +519,15 @@ pub(crate) struct MetricsPayload {
     pub(crate) agent_version: String,
     /// Authoritative inference state, computed once by compute_inference_state().
     /// "idle-spd" | "live" | "busy" | "idle"
-    /// Sent to both the local WebSocket and the cloud telemetry API so both
-    /// surfaces always display the same label — no frontend re-computation needed.
+    /// Sent over the local WebSocket so every surface displays the same
+    /// label — no frontend re-computation needed.
     pub(crate) inference_state: String,
 }
 
 /// Spawns a 1 s broadcast loop that serialises MetricsPayload and broadcasts
 /// the JSON string to every active WebSocket subscriber.
 /// 1 Hz keeps the display-layer rolling windows (8–12 samples) covering 8–12 s,
-/// matching the effective smoothing depth of the cloud fleet dashboard.
+/// covering the display-layer smoothing depth.
 /// The broadcast channel has capacity 64 — lagged subscribers simply skip frames.
 /// Shared per-model baseline cache. Updated by the broadcast loop when model changes.
 /// Tuple: (baseline_tps, baseline_wes, sample_count).

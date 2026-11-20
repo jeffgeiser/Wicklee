@@ -1,18 +1,9 @@
-//! Shared model-fit scoring math — SINGLE SOURCE OF TRUTH.
-//!
-//! ── DO NOT EDIT agent/src/scoring.rs or cloud/src/scoring.rs DIRECTLY ──
-//!
-//! Canonical file: shared/scoring.rs. Both binaries carry byte-identical
-//! mirrors maintained by `node scripts/sync-scoring.mjs` (CI enforces with
-//! `--check`). The mirror-and-sync approach exists because a cargo path
-//! dependency can't work here: the cloud's Railway Docker build context is
-//! `cloud/` only, so `../shared` would be invisible to its deploys. Same
-//! pattern as perplexity_baseline.json.
+//! Model-fit scoring math — single source of truth for the agent.
 //!
 //! History: these functions were hand-duplicated between the binaries and
 //! drifted twice — the working-set overhead (10% vs 30%) and the won't-fit
 //! hard gate existed in one binary but not the other, so the same model
-//! graded differently on the cloud fleet view vs the localhost dashboard.
+//! graded differently in the two places.
 
 #![allow(dead_code)]
 

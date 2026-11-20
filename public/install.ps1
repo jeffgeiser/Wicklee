@@ -76,7 +76,7 @@ Write-Host "  Or run manually:"
 Write-Host "    wicklee" -ForegroundColor White
 Write-Host ""
 Write-Host "  Your dashboard:       http://localhost:7700"
-Write-Host "  Pair with your fleet: https://wicklee.dev"
+Write-Host "  Then check it:        wicklee inspect"
 Write-Host ""
 Write-Dim  "  Installed to: $BinPath"
 Write-Dim  "  PATH updated for current user (restart your shell to pick it up)."

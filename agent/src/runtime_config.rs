@@ -16,9 +16,9 @@
 //! flag so the frontend knows whether to render the "Config" affordance.
 //!
 //! Privacy note: system prompts and templates can contain proprietary content.
-//! v0.9.0 keeps this data local-only — the cloud push path will NOT ship the
-//! `template` or `system_prompt` fields by default. Users who want to share
-//! full configs across the fleet can opt in via config.toml.
+//! this data is local-only — nothing leaves the node, so the `template`
+//! and `system_prompt` fields are readable only by whoever can reach the
+//! agent's own port.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -50,10 +50,10 @@ pub(crate) struct RuntimeConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parameter_count: Option<u64>,
 
-    /// Prompt template — Ollama only. Stays local; not pushed to cloud.
+    /// Prompt template — Ollama only. Stays local.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub template: Option<String>,
-    /// System prompt — Ollama only. Stays local; not pushed to cloud.
+    /// System prompt — Ollama only. Stays local.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system_prompt: Option<String>,
 

@@ -149,7 +149,7 @@ The gap is a component that tells the software layer the truth about its hardwar
 
 Wicklee is an adoption-first open-source project rather than a validated commercial business, and it is being run that way on purpose. Paid tiers introduced earlier this year have been withdrawn pending a monetization plan grounded in actual usage.
 
-The agent is Apache 2.0. Hosted fleet components and the site carry a source-available license. Local use will never require a Wicklee-operated cloud service, and the planned coordination layer for multiple hosts is designed to be self-hostable.
+The agent is Apache 2.0. The website carries a source-available license. There is no Wicklee-operated cloud service, local use will never require one, and the planned coordination layer for multiple hosts is designed to be self-hostable.
 
 Plausible future revenue sits in fleet coordination, enterprise administration, support and compliance-oriented operations — but the sequence matters. Commercial priorities should come from organizations already relying on the project, not from a pricing page written in advance of usage.
 

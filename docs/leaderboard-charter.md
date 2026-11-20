@@ -4,7 +4,7 @@
 > 2026-06, which is before the November 2026 strategy revision
 > (`docs/STRATEGY.md`). Nothing here is built. Two of its premises have since
 > changed: the public write endpoint and the Deployment Planner assume a hosted
-> backend that is being shut down (`docs/TRANSITION_PLAN.md`), and the
+> backend that was shut down on 2026-11-20 (`docs/TRANSITION_PLAN.md`), and the
 > logged-in surfaces assume the paid tiers, which are withdrawn. The dataset
 > idea and the measured-vs-synthetic rule below are the parts worth keeping,
 > and WES is still measured by the agent on every host. Read it as thinking to

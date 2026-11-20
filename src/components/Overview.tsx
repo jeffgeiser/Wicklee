@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { Thermometer, Database, Zap, Activity, Download, Terminal, Plus, ChevronDown, Check, DollarSign, AlertTriangle, ExternalLink, Cpu, Lock, Fingerprint, Clock} from 'lucide-react';
+import { Thermometer, Database, Zap, Activity, ChevronDown, Check, DollarSign, AlertTriangle, Cpu, Lock, Clock} from 'lucide-react';
 import { computeWES, computeRawWES, thermalCostPct, thermalSourceLabel, formatWES, wesColorClass } from '../utils/wes';
 import { computeModelFitScore } from '../utils/modelFit';
 import { calculateFleetHealthPct, calculateTotalVramMb, calculateTotalVramCapacityMb, fleetVramSubtitle, calculateCostPer1kTokens, WES_TOOLTIP, INFERENCE_VRAM_THRESHOLD_MB, ELECTRICITY_RATE_USD_PER_KWH } from '../utils/efficiency';
@@ -8,7 +8,7 @@ import { getNodePowerW, hasPowerData } from '../utils/power';
 import { pushAndGetSmoothed, pruneBuffers } from '../utils/sharedSmoothing';
 
 import { NODE_REACHABLE_MS, fmtAgo } from '../utils/time';
-import { NodeAgent, PairingInfo, SentinelMetrics, ObservabilityNavParams } from '../types';
+import { NodeAgent, SentinelMetrics, ObservabilityNavParams } from '../types';
 import ModelFitSummaryStrip from './insights/ModelFitSummaryStrip';
 import { useFleetStream } from '../contexts/FleetStreamContext';
 import { useNodeRollingMetrics, useRollingBuffer, FLEET_ROLLING_WINDOW, FLEET_ROW_ROLLING_WINDOW, NODE_ROLLING_WINDOW } from '../hooks/useRollingMetrics';
@@ -68,9 +68,6 @@ interface OverviewProps {
   nodes: NodeAgent[];
   /** True while the initial /api/fleet fetch is in-flight. Suppresses EmptyFleetState flash on refresh. */
   nodesLoading?: boolean;
-  pairingInfo?: PairingInfo | null;
-  onOpenPairing?: () => void;
-  onAddNode?: () => void;
   onUpgrade?: () => void;
   getNodeSettings?: (nodeId: string) => { pue: number; kwhRate: number; currency: string };
   fleetKwhRate?: number;
@@ -890,48 +887,14 @@ const FleetCard: React.FC<{
   </div>
 );
 
-const EmptyFleetState: React.FC<{ onAddNode?: () => void }> = ({ onAddNode }) => (
-  <div className="flex flex-col items-center justify-center py-24 text-center space-y-10 animate-in fade-in duration-500">
-    <div className="space-y-3 max-w-sm">
-      <h2 className="text-2xl font-bold text-white">Add your first node</h2>
-      <p className="text-sm text-gray-500">Install the Wicklee agent on any machine, generate a pairing code, then enter it below.</p>
-    </div>
-    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 w-full max-w-2xl text-left">
-      {[
-        {
-          step: '1', icon: Download, title: 'Install the agent',
-          body: (
-            <code className="block mt-2 text-[11px] font-mono bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-blue-300 whitespace-pre-wrap break-all">
-              curl -fsSL https://wicklee.dev/install.sh | bash
-            </code>
-          ),
-        },
-        {
-          step: '2', icon: Terminal, title: 'Open your local dashboard',
-          body: <p className="mt-2 text-xs text-gray-500">Visit <span className="text-gray-300 font-mono">localhost:7700</span> on the machine where you installed the agent. Click <span className="text-gray-300">"Connect to Cloud"</span> to generate a 6-digit code.</p>,
-        },
-        {
-          step: '3', icon: Plus, title: 'Enter the code here',
-          body: <p className="mt-2 text-xs text-gray-500">Click <span className="text-gray-300">"+ Add Node"</span> below and enter the 6-digit code.</p>,
-        },
-      ].map(({ step, icon: Icon, title, body }) => (
-        <div key={step} className="bg-gray-800 border border-gray-700 rounded-2xl p-5 space-y-1">
-          <div className="flex items-center gap-2 mb-2">
-            <span className="flex items-center justify-center w-6 h-6 rounded-full bg-blue-600/20 border border-blue-500/30 text-[11px] font-bold text-blue-400">{step}</span>
-            <Icon className="w-4 h-4 text-gray-500" />
-          </div>
-          <h3 className="text-sm font-semibold text-white">{title}</h3>
-          {body}
-        </div>
-      ))}
-    </div>
-    <button
-      onClick={onAddNode}
-      className="flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl transition-all shadow-lg shadow-blue-500/20"
-    >
-      <Plus className="w-4 h-4" />
-      Add Node
-    </button>
+const EmptyFleetState: React.FC = () => (
+  <div className="flex flex-col items-center justify-center py-24 text-center space-y-4 animate-in fade-in duration-500">
+    <h2 className="text-2xl font-bold text-white">No local agent data</h2>
+    <p className="text-sm text-gray-500 max-w-sm">
+      This dashboard reads from the Wicklee agent on this machine. Install it with
+      <code className="mx-1 text-[11px] font-mono bg-gray-900 border border-gray-700 rounded px-2 py-1 text-blue-300">curl -fsSL https://wicklee.dev/install.sh | bash</code>
+      and open <span className="text-gray-300 font-mono">localhost:7700</span>.
+    </p>
   </div>
 );
 
@@ -1149,7 +1112,7 @@ const DiagnosticRail: React.FC<{
   );
 };
 
-const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairingInfo, onOpenPairing, onAddNode, onUpgrade, getNodeSettings, fleetKwhRate = ELECTRICITY_RATE_USD_PER_KWH, onNavigateToObservability, onNavigateToInsights }) => {
+const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, onUpgrade, getNodeSettings, fleetKwhRate = ELECTRICITY_RATE_USD_PER_KWH, onNavigateToObservability, onNavigateToInsights }) => {
   const {
     allNodeMetrics: cloudMetrics,
     lastSeenMsMap: cloudLastSeen,
@@ -1332,7 +1295,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
   }
 
   if (!isLocalHost && nodes.length === 0) {
-    return <EmptyFleetState onAddNode={onAddNode} />;
+    return <EmptyFleetState />;
   }
 
   const liveMetrics: SentinelMetrics[] = Object.values(allNodeMetrics);
@@ -2356,27 +2319,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
 
       {isLocalMode ? (
         <div className="space-y-4">
-          {pairingInfo?.status !== 'connected' && (
-            <div className="bg-gray-800/60 border border-gray-700 rounded-2xl p-5 flex flex-col sm:flex-row items-center justify-between gap-4">
-              <div>
-                <p className="text-sm font-semibold text-gray-200">
-                  Monitor from anywhere
-                </p>
-                <p className="text-xs text-gray-500 mt-0.5">
-                  Pair this node with Fleet View to monitor it remotely and see all your machines in one dashboard.
-                </p>
-              </div>
-              <a
-                href="https://wicklee.dev"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="shrink-0 flex items-center gap-2 px-4 py-2 border border-indigo-500/40 hover:border-indigo-500/70 text-indigo-400 hover:text-indigo-300 text-sm font-semibold rounded-xl transition-all"
-              >
-                Open Fleet Dashboard
-                <ExternalLink className="w-3.5 h-3.5" />
-              </a>
-            </div>
-          )}
           {sentinel && (
             <ModelFitSummaryStrip
               node={sentinel}
@@ -2663,96 +2605,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, pairin
         })()}
       </div>
       )} {}
-
-      {isLocalHost && (
-        <div className="flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl border border-gray-700 bg-gray-800/50 text-[11px] flex-wrap">
-
-          {(!pairingInfo || pairingInfo.status === 'unpaired') && (
-            <div className="flex items-center gap-2 text-gray-500">
-              <Fingerprint className="w-3.5 h-3.5 text-gray-600 shrink-0" />
-              <span className="font-mono text-gray-400">{pairingInfo?.node_id ?? '—'}</span>
-              <span className="text-gray-700">·</span>
-              <span>Not paired to fleet</span>
-            </div>
-          )}
-
-          {pairingInfo?.status === 'pending' && (
-            <div className="flex items-center gap-2 text-amber-400/80">
-              <span className="relative flex h-2 w-2 shrink-0">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-60" />
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500" />
-              </span>
-              <span className="font-mono text-gray-400">{pairingInfo.node_id ?? '—'}</span>
-              <span className="text-gray-700">·</span>
-              <span>Pairing code:&nbsp;
-                <span className="font-mono font-bold text-amber-300 tracking-widest">
-                  {pairingInfo.code ? `${pairingInfo.code.slice(0, 3)} ${pairingInfo.code.slice(3)}` : '——'}
-                </span>
-              </span>
-              {pairingInfo.expires_at && (
-                <>
-                  <span className="text-gray-700">·</span>
-                  <span className="tabular-nums text-amber-500/70">
-                    expires in {Math.max(0, Math.floor((pairingInfo.expires_at - Date.now()) / 1000))}s
-                  </span>
-                </>
-              )}
-            </div>
-          )}
-
-          {pairingInfo?.status === 'connected' && (
-            <div className="flex items-center gap-2 text-gray-400">
-              <span className="relative flex h-2 w-2 shrink-0">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-40" style={{ animationDuration: '3s' }} />
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
-              </span>
-              <span className="text-green-400 font-medium">Connected to Fleet</span>
-              <span className="text-gray-700">·</span>
-              <span className="font-mono text-gray-500">{pairingInfo.node_id}</span>
-              <span className="text-gray-700">·</span>
-              <span className="text-gray-600">wicklee.dev</span>
-            </div>
-          )}
-
-          {(!pairingInfo || pairingInfo.status === 'unpaired') && (
-            <button
-              onClick={onOpenPairing}
-              className="px-3 py-1 bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/30 text-indigo-400 hover:text-indigo-300 font-medium rounded-lg transition-all"
-            >
-              Connect to Cloud →
-            </button>
-          )}
-
-          {pairingInfo?.status === 'pending' && (
-            <button
-              onClick={onOpenPairing}
-              className="px-3 py-1 border border-amber-500/30 text-amber-400/70 hover:text-amber-300 font-medium rounded-lg transition-all"
-            >
-              Cancel
-            </button>
-          )}
-
-          {pairingInfo?.status === 'connected' && (
-            <div className="flex items-center gap-2">
-              <a
-                href="https://wicklee.dev"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="px-3 py-1 bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/30 text-indigo-400 hover:text-indigo-300 font-medium rounded-lg transition-all"
-              >
-                View Fleet →
-              </a>
-              <button
-                onClick={onOpenPairing}
-                className="px-3 py-1 border border-gray-700 hover:border-red-500/40 text-gray-600 hover:text-red-400 font-medium rounded-lg transition-all"
-              >
-                Disconnect
-              </button>
-            </div>
-          )}
-
-        </div>
-      )}
 
       {runtimeConfigModel && (
         <RuntimeConfigModal

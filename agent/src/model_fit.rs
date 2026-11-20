@@ -118,8 +118,7 @@ pub(crate) fn parse_quant_from_filename(filename: &str) -> Option<String> {
 /// quantized 27B variants. Without this filter the small file gets
 /// picked as the "best fit" because it trivially fits the VRAM budget —
 /// every model in the repo shows up as "F32 · 1.7 GB · Excellent" no
-/// matter the actual parameter count. Match cloud's parallel filter at
-/// cloud/src/main.rs ~line 4609.
+/// matter the actual parameter count.
 pub(crate) fn is_auxiliary_gguf(filename: &str) -> bool {
     let lower = filename.to_lowercase();
     lower.contains("mmproj")

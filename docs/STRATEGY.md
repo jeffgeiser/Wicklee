@@ -471,7 +471,9 @@ Its foundational utility should not be compromised to create speculative subscri
 
 Potential future offerings include managed or self-hostable fleet coordination, enterprise administration, support, compliance-oriented operations, or integration services. Commercial priorities should emerge from organizations already relying on Wicklee.
 
-The running infrastructure follows that decision. The Stage 1 product is a single binary reached over localhost, so it needs a static site and a binary distribution channel and nothing else. The hosted backend, its database and the payment integration exist to serve a product that has been withdrawn, and they are being shut down rather than left running — a frozen codebase and a running service are separate decisions. `docs/PHASE1_SPEC.md` holds the component-by-component sequence.
+The running infrastructure follows that decision. The Stage 1 product is a single binary reached over localhost, so it needs a static site and a binary distribution channel and nothing else. The hosted backend, its database and the payment integration served a product that has been withdrawn, and they were shut down on 2026-11-20. `docs/PHASE1_SPEC.md` holds the component-by-component sequence.
+
+**Decision, 2026-11-20: the frozen cloud code is deleted.** `cloud/`, `src/cloud/`, `deploy/helm/`, `deploy/self-hosted/`, `deploy/grafana/`, the agent's `cloud_push.rs` and `pairing.rs`, and the self-update that depended on the backend are removed from the repository. With Railway closed they had no deployment to talk to. They remain in git history (`git show 68ca72f:cloud/`). If the self-hostable coordinator described in Stage 4 is ever built, it starts fresh from that history rather than from a dormant codebase carrying the withdrawn product's assumptions.
 
 **The immediate objective is meaningful usage, measurable technical value and external adoption, not short-term revenue.**
 

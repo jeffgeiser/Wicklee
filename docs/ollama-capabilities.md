@@ -1,5 +1,7 @@
 # Ollama Capabilities — Verified on a Real Host
 
+> **Note, 2026-11-20.** The agent no longer has `/api/pair/*` routes or a `--no-cloud` flag; the fleet pairing code was removed. References to them below are a record of how the measurements were taken.
+
 Phase 1, step 0. Answers V1 to V9 from `docs/PHASE1_SPEC.md` against a real
 Ollama install. Nothing here is taken from documentation: every answer below
 came out of a response this host actually returned.

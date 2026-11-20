@@ -58,7 +58,7 @@ export default class ErrorBoundary extends Component<Props, State> {
             Something went wrong rendering this view
           </h1>
           <p style={{ color: '#9ca3af', fontSize: '0.875rem', lineHeight: 1.6, marginBottom: '1.5rem' }}>
-            The dashboard hit an unexpected error. Your fleet and agents are unaffected —
+            The dashboard hit an unexpected error. Your agent is unaffected —
             this is a display issue. Try again, or reload the page.
           </p>
           <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center' }}>

@@ -48,7 +48,7 @@ pub(crate) async fn handle_mcp_manifest() -> Json<serde_json::Value> {
         "schema_version": "2024-11-05",
         "name": "wicklee-agent",
         "version": env!("CARGO_PKG_VERSION"),
-        "description": "Sovereign GPU fleet monitor for local AI inference. Hardware telemetry and inference state, plus what is loaded on this host, whether a model can run without displacing another, and findings about slow or unstable inference with the evidence behind each one.",
+        "description": "Local diagnostics for self-hosted AI inference. Hardware telemetry and inference state, plus what is loaded on this host, whether a model can run without displacing another, and findings about slow or unstable inference with the evidence behind each one.",
         "transport": { "type": "http", "url": "/mcp" },
         "capabilities": {
             "tools": true,
@@ -626,7 +626,7 @@ pub(crate) async fn run_mcp_stdio() {
     let url = format!("http://127.0.0.1:{port}/mcp");
     let client = reqwest::Client::new();
 
-    match client.get(format!("http://127.0.0.1:{port}/api/pair/status")).send().await {
+    match client.get(format!("http://127.0.0.1:{port}/api/health")).send().await {
         Ok(r) if r.status().is_success() => {}
         _ => {
             let err = serde_json::json!({

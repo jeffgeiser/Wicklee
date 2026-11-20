@@ -87,11 +87,6 @@ impl ProbeConfig {
 #[derive(Serialize, Deserialize, Default)]
 pub(crate) struct WickleeConfig {
     pub(crate) node_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) fleet_url: Option<String>,
-    /// Cloud session token — persisted so telemetry push resumes after restart.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) session_token: Option<String>,
     /// Optional transparent Ollama proxy configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) ollama_proxy: Option<OllamaProxyConfig>,
@@ -120,32 +115,6 @@ pub(crate) struct WickleeConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) allow_unauthenticated: Option<bool>,
 }
-
-#[derive(Clone)]
-pub(crate) enum PairingStatus {
-    Unpaired,
-    Pending { code: String, expires_at: u64 },
-    Connected { fleet_url: String },
-}
-
-pub(crate) struct PairingState {
-    pub(crate) status:               PairingStatus,
-    pub(crate) node_id:              String,
-    /// Session token returned by the cloud backend after a successful claim.
-    /// Present only while paired; used to authenticate telemetry pushes.
-    pub(crate) cloud_session_token:  Option<String>,
-}
-
-#[derive(Serialize)]
-pub(crate) struct PairingStatusResponse {
-    pub(crate) status: &'static str,
-    pub(crate) node_id: String,
-    pub(crate) code: Option<String>,
-    pub(crate) expires_at: Option<u64>,
-    pub(crate) fleet_url: Option<String>,
-}
-
-// ── Fleet Pairing Helpers ─────────────────────────────────────────────────────
 
 pub(crate) fn now_ms() -> u64 {
     std::time::SystemTime::now()
@@ -214,10 +183,8 @@ pub(crate) fn legacy_config_path() -> Option<PathBuf> {
 /// That made the step 4 rules untestable without the maintainer's password.
 ///
 /// It moves state only. `config_path()` stays where it is, deliberately: the
-/// node identity and session token are shared on purpose (see its doc
-/// comment), and a second identity is the problem that path exists to
-/// prevent. Pair this with `--no-cloud`, which stops the hand-started agent
-/// pushing telemetry under the installed node's id.
+/// node identity is shared on purpose (see its doc comment), and a
+/// second identity is the problem that path exists to prevent.
 #[cfg(not(target_env = "musl"))]
 pub(crate) fn wicklee_dir() -> PathBuf {
     data_dir_from(std::env::var("WICKLEE_DATA_DIR").ok().as_deref())
@@ -316,7 +283,7 @@ pub(crate) fn fnv1a_64(s: &str) -> u64 {
 /// Priority:
 ///   1. Hardware platform ID (machine-id / IOPlatformUUID / MachineGuid),
 ///      hashed to 64 bits — deterministic, so it survives reinstalls,
-///      upgrades, and re-pairings on the same machine.
+///      and upgrades on the same machine.
 ///   2. Random 64-bit fallback when the platform ID is unavailable
 ///      (containers, live ISOs, some CI). Random, not timestamp-based, so
 ///      two nodes booting in the same millisecond can't collide.
@@ -330,7 +297,7 @@ pub(crate) fn fnv1a_64(s: &str) -> u64 {
 /// made unrelated customers' machines collide on the shared PK at ~300 nodes.
 ///
 /// `load_or_create_config()` only calls this on first run (no existing
-/// config.toml), so already-paired nodes keep their existing `WK-XXXX` id.
+/// config.toml), so existing nodes keep their `WK-XXXX` id.
 pub(crate) fn generate_node_id() -> String {
     if let Some(hw_id) = hardware_machine_id() {
         return format!("WK-{:016X}", fnv1a_64(&hw_id));
@@ -358,7 +325,7 @@ pub(crate) fn load_or_create_config() -> WickleeConfig {
                 return cfg;
             }
 
-    let cfg = WickleeConfig { node_id: generate_node_id(), fleet_url: None, session_token: None, ollama_proxy: None, runtime_ports: None, bind_address: None, deployment_profile: None, probe: None, auth_token: None, allow_unauthenticated: None };
+    let cfg = WickleeConfig { node_id: generate_node_id(), ollama_proxy: None, runtime_ports: None, bind_address: None, deployment_profile: None, probe: None, auth_token: None, allow_unauthenticated: None };
     save_config(&cfg);
     cfg
 }
@@ -394,11 +361,9 @@ pub(crate) static CONFIG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Atomically load → mutate → save the config under [`CONFIG_LOCK`].
 ///
-/// The pairing/disconnect handlers each do `load → set a few fields → save`;
-/// run concurrently (e.g. a user clicks "generate code" then "disconnect")
-/// they could interleave and clobber each other's fields, silently dropping
-/// the session token. Funnelling every mutation through here makes the whole
-/// sequence atomic. Poison-tolerant: a panic elsewhere shouldn't wedge config
+/// Callers each do `load → set a few fields → save`; run concurrently they
+/// could interleave and clobber each other's fields. Funnelling every mutation
+/// through here makes the whole sequence atomic. Poison-tolerant: a panic elsewhere shouldn't wedge config
 /// saves forever.
 pub(crate) fn update_config(mutate: impl FnOnce(&mut WickleeConfig)) {
     let _guard = CONFIG_LOCK.lock().unwrap_or_else(|p| p.into_inner());

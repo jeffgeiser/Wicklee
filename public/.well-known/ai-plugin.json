@@ -3,7 +3,7 @@
   "name_for_human": "Wicklee",
   "name_for_model": "wicklee",
   "description_for_human": "The evidence layer for self-hosted AI inference. Ask one host what is loaded, what will run right now, and what is wrong — with the evidence behind every answer.",
-  "description_for_model": "Wicklee monitors local AI inference fleets and answers questions about the models on a host. Hardware and efficiency: GPU health, WES (Wicklee Efficiency Score = tok/s / watts / thermal_penalty), inference state (live/idle-spd/busy/idle), thermal status, power draw, TTFT, queue depth across Ollama and vLLM. Models and readiness, on a localhost agent: GET /v1/state for what is installed and loaded with the context each model is running at; GET /v1/readiness before starting a task, to see whether a model can run without displacing another (a requires_loading answer carrying coexistence: \"unverified\" fits by memory accounting only and must not be treated as safe — measurement showed the runtime still evicting a resident model in 5 of 6 such cases); GET /v1/inspect for findings about slow or unstable inference. Every statement carries a label — observed, inferred or verified — and the evidence behind it, and anything that could not be checked is listed rather than omitted, so an empty result never means a clean bill of health. POST /v1/receipts to hand back your runtime's own final-response metadata; it stores metadata only and refuses a payload carrying prompt, response, messages or context. The agent is localhost-only and needs no authentication when bound to loopback. There is no hosted API.",
+  "description_for_model": "Wicklee answers questions about the local AI inference running on a host. Hardware and efficiency: GPU health, WES (Wicklee Efficiency Score = tok/s / watts / thermal_penalty), inference state (live/idle-spd/busy/idle), thermal status, power draw, TTFT, queue depth across Ollama and vLLM. Models and readiness, on a localhost agent: GET /v1/state for what is installed and loaded with the context each model is running at; GET /v1/readiness before starting a task, to see whether a model can run without displacing another (a requires_loading answer carrying coexistence: \"unverified\" fits by memory accounting only and must not be treated as safe — measurement showed the runtime still evicting a resident model in 5 of 6 such cases); GET /v1/inspect for findings about slow or unstable inference. Every statement carries a label — observed, inferred or verified — and the evidence behind it, and anything that could not be checked is listed rather than omitted, so an empty result never means a clean bill of health. POST /v1/receipts to hand back your runtime's own final-response metadata; it stores metadata only and refuses a payload carrying prompt, response, messages or context. The agent is localhost-only and needs no authentication when bound to loopback. There is no hosted API.",
   "auth": {
     "type": "none"
   },
@@ -13,5 +13,5 @@
   },
   "logo_url": "https://wicklee.dev/icon-512.png",
   "contact_email": "jeff@wicklee.dev",
-  "legal_info_url": "https://wicklee.dev/legal"
+  "legal_info_url": "https://wicklee.dev/terms"
 }

@@ -17,7 +17,7 @@ fn config_path_hint() -> &'static str {
     { "config.toml" }
 }
 
-pub(crate) async fn run_startup_diagnostics(node_id: &str, pairing_status: &str, port: u16, cfg_ref: &WickleeConfig) {
+pub(crate) async fn run_startup_diagnostics(node_id: &str, port: u16, cfg_ref: &WickleeConfig) {
     // Format one 64-column box row: ║   KEY     VALUE (padded/truncated to fit)  ║
     // v0.8.2: widened from 48 → 64 cols so longer Ollama / vLLM status lines
     // ("running (no model loaded)", "not detected → set runtime_ports.vllm in
@@ -46,7 +46,6 @@ pub(crate) async fn run_startup_diagnostics(node_id: &str, pairing_status: &str,
 
     // ── Identity ─────────────────────────────────────────────────────────────
     println!("{}", row("Node", node_id));
-    println!("{}", row("Pairing", pairing_status));
 
     // ── Platform rows (only what's relevant on this OS) ───────────────────────
     let mut platform_rows: Vec<String> = Vec::new();

@@ -42,12 +42,11 @@ This policy covers:
 
 Out of scope:
 - Third-party dependencies (report upstream)
-- Self-hosted modifications
+- Modified or forked builds
 
-There is no hosted fleet backend. `wicklee.dev` serves the site, the install
+There is no hosted backend. `wicklee.dev` serves the site, the install
 scripts and the discovery files as static files; it runs no API and holds no
-telemetry. A report about a fleet control plane you are running yourself falls
-under self-hosted modifications.
+telemetry. The agent makes no outbound connections.
 
 ## Disclosure
 

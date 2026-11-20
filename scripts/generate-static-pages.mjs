@@ -115,7 +115,7 @@ function injectContent(html, { jsonLd, bodyHtml, wrapStyle }) {
     html = html.replace('</head>', `<script type="application/ld+json">${JSON.stringify(jsonLd)}</script>\n</head>`);
   }
   if (bodyHtml) {
-    const rootTag = '<div id="root" role="application" aria-label="Wicklee dashboard">';
+    const rootTag = '<div id="root" role="application" aria-label="Wicklee">';
     if (!html.includes(rootTag)) throw new Error('#root div not found in built index.html');
 
     // Content lives inside #root so React's createRoot().render() clears it once
@@ -236,51 +236,6 @@ async function emit(routePath, html) {
 
 let shell = await readFile(join(DIST, 'index.html'), 'utf8');
 
-// ── Cold-load waterfall ───────────────────────────────────────────────────────
-// On the cloud build, index.tsx awaits import('@clerk/clerk-react') before its
-// first render, and App then lazy-loads CloudApp. Vite only preloads a dynamic
-// import's dependencies at the moment the import() runs, so on a cold load
-// those two chunks are fetched one after another, AFTER the entry has
-// downloaded and executed: three serial round-trips before a cloud route can paint.
-// Preloading them from the HTML lets all three download in parallel.
-//
-// Chunk names are hashed, so they are discovered here rather than authored:
-// the Clerk vendor chunk is the non-entry index-*.js that carries
-// ClerkProvider. Best-effort — if the shape changes, log and skip rather than
-// fail the build over an optimisation.
-{
-  const assetsDir = join(DIST, 'assets');
-  const entry = (shell.match(/assets\/(index-[\w-]+\.js)/) ?? [])[1];
-  const files = (await readdir(assetsDir)).filter(f => f.endsWith('.js'));
-  const preload = [];
-  const clerkVendor = [];
-  for (const f of files) {
-    if (f.startsWith('index-') && f !== entry) {
-      const src = await readFile(join(assetsDir, f), 'utf8');
-      if (src.includes('ClerkProvider')) clerkVendor.push(f);
-    }
-    if (f.startsWith('CloudApp-')) preload.push(f);
-  }
-  if (clerkVendor.length === 1) preload.unshift(clerkVendor[0]);
-  else console.warn(`[static-pages] expected one Clerk vendor chunk, found ${clerkVendor.length} — skipping its preload`);
-  // A preloaded chunk's own static imports are only discovered once the
-  // browser has parsed it — one more serial round-trip per level (measured:
-  // a 1 kB use-sync-external-store shim fetched ~160 ms after the entry
-  // executed). Pull in one level of them here; they are small.
-  for (const f of [...preload]) {
-    const src = await readFile(join(assetsDir, f), 'utf8');
-    for (const m of src.matchAll(/from\s*"\.\/([^"]+\.js)"|import\s*"\.\/([^"]+\.js)"/g)) {
-      const dep = m[1] ?? m[2];
-      if (dep && dep !== entry && !preload.includes(dep)) preload.push(dep);
-    }
-  }
-  if (preload.length) {
-    const links = preload.map(f => `<link rel="modulepreload" crossorigin href="/assets/${f}">`).join('\n');
-    shell = shell.replace('</head>', `${links}\n</head>`);
-    console.log(`[static-pages] modulepreload: ${preload.join(', ')}`);
-  }
-}
-
 // 1. Landing page: add SoftwareApplication JSON-LD in place.
 {
   const jsonLd = {
@@ -347,7 +302,7 @@ for (const file of postFiles) {
   let html = applyMeta(shell, {
     title: `Blog — ${SITE_NAME}`,
     description: 'Engineering notes on local AI inference observability: efficiency scoring, ' +
-                 'thermal throttling, quantization, and hardware-aware fleet operations.',
+                 'thermal throttling, quantization, and hardware-aware diagnostics.',
     path: '/blog',
   });
   html = injectContent(html, { bodyHtml: `<h1>Wicklee Blog</h1>\n<ul>\n${list}\n</ul>` });
@@ -356,14 +311,13 @@ for (const file of postFiles) {
 }
 
 // 4. Docs reference (markdown source the React page also renders).
-//    /metrics is NOT prerendered: nginx exact-matches it to the cloud's
-//    Prometheus scrape proxy, so a static page there would never be served.
+//    /metrics is NOT prerendered; the reference page lives at /metrics-reference.
 for (const page of [
   {
     src: 'public/docs.md',
     path: '/docs',
     title: `Documentation — ${SITE_NAME}`,
-    description: 'Install the Wicklee agent, pair your fleet, and read the methodology behind ' +
+    description: 'Install the Wicklee agent, run inspect, ready and verify, and read the methodology behind ' +
                  'WES, Model Fit, Context Runway, and the 18 hardware observation patterns.',
   },
 ]) {

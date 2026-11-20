@@ -106,8 +106,7 @@ fi
 # NVML on hosts that have it. Releases up to v0.14.0 published a second asset
 # per arch under a `-nvidia` name, but the cfg that was meant to separate them
 # stripped nothing, so both were the same build. The detection stays because
-# it tells the operator what they are getting and feeds the install telemetry
-# below.
+# it tells the operator what they are getting.
 #
 # glibc 2.31 floor either way — v0.8.2 retired the musl asset, so there is no
 # static variant to fall back to.
@@ -229,5 +228,5 @@ else
   echo ""
 fi
 echo "  Local dashboard:    http://localhost:7700"
-echo "  Fleet dashboard:    https://wicklee.dev"
+echo "  Then check it:      ${USER_INSTALL_PATH} inspect"
 echo ""

@@ -111,4 +111,4 @@ That's the only step that needs root. WES, multi-model WES and Thermal Cost % ar
 
 ---
 
-*WES scores update live from your fleet's SSE telemetry. The agent, including the WES calculation, is open source under Apache 2.0; the fleet control plane is source-available under FSL-1.1-Apache-2.0. See the [source code](https://github.com/jeffgeiser/Wicklee).*
+*WES scores update live from the agent's local SSE telemetry. The agent, including the WES calculation, is open source under Apache 2.0. See the [source code](https://github.com/jeffgeiser/Wicklee).*

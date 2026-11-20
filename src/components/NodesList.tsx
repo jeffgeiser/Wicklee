@@ -1,11 +1,11 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Search, X, ArrowUpDown, ChevronDown,
   Cloud, Lock, CheckSquare, Square,
   Database, Wifi, Cpu, AlertTriangle,
   ExternalLink, CheckCircle, AlertCircle,
-  Radio, Activity} from 'lucide-react';
-import { NodeAgent, PairingInfo, SentinelMetrics } from '../types';
+  Activity} from 'lucide-react';
+import { NodeAgent, SentinelMetrics } from '../types';
 import type { NodeEffectiveSettings } from '../hooks/useSettings';
 import { NODE_REACHABLE_MS, fmtAgo } from '../utils/time';
 import { calculateTotalVramMb, calculateTotalVramCapacityMb, fleetVramSubtitle } from '../utils/efficiency';
@@ -613,36 +613,6 @@ const MgmtRow: React.FC<{
   );
 };
 
-const TelemetryRelayStatus: React.FC<{ pairingInfo: PairingInfo | null | undefined }> = ({ pairingInfo }) => {
-  const isRelaying = pairingInfo?.status === 'connected';
-  const isPending  = pairingInfo?.status === 'pending';
-  return (
-    <div className="flex items-center gap-2.5 px-4 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
-      <Radio className={`w-3.5 h-3.5 shrink-0 ${isRelaying ? 'text-green-400' : isPending ? 'text-amber-400 animate-pulse' : 'text-gray-500'}`} />
-      {isRelaying ? (
-        <p className="text-xs font-medium text-gray-500 dark:text-gray-400">
-          Relaying to <span className="text-green-400 font-semibold">wicklee.dev ✓</span>
-          {pairingInfo?.node_id && <span className="text-gray-600 font-telin"> · {pairingInfo.node_id}</span>}
-        </p>
-      ) : isPending ? (
-        <p className="text-xs font-medium text-amber-400">Pairing in progress…</p>
-      ) : (
-        <p className="text-xs font-medium text-gray-500 dark:text-gray-500">
-          Sovereign Mode — no outbound telemetry
-          <a
-            href="https://wicklee.dev"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="ml-2 text-indigo-400 hover:text-indigo-300 transition-colors"
-          >
-            Connect →
-          </a>
-        </p>
-      )}
-    </div>
-  );
-};
-
 const HarvesterHealth: React.FC<{ metrics: SentinelMetrics | null }> = ({ metrics: m }) => {
   const chip = (m?.chip_name ?? m?.gpu_name ?? '').toLowerCase();
   const isApple  = m?.cpu_power_w != null && (chip.includes('apple') || /\bm[1-4]\b/.test(chip));
@@ -724,19 +694,10 @@ interface NodesListProps {
   nodes:                 NodeAgent[];
   getNodeSettings?:      (nodeId: string) => NodeEffectiveSettings;
   onNavigateToSettings?: () => void;
-  pairingInfo?:          PairingInfo | null;
-  /** Clerk / session token factory — present in hosted (non-local) builds. */
-  getToken?:             () => Promise<string | null>;
-  /** Cloud base URL for management API calls. */
-  cloudUrl?:             string;
-  /** Called after one or more nodes are successfully removed so the parent
-   *  can refresh its fleet list and free up the node slot count. */
-  onNodesRemoved?:       (removedIds: string[]) => void;
 }
 
 const NodesList: React.FC<NodesListProps> = ({
-  nodes, getNodeSettings, onNavigateToSettings, pairingInfo,
-  getToken, cloudUrl, onNodesRemoved,
+  nodes, getNodeSettings, onNavigateToSettings,
 }) => {
   const {
     allNodeMetrics: cloudMetrics,
@@ -753,10 +714,6 @@ const NodesList: React.FC<NodesListProps> = ({
   const [statusFilter, setStatusFilter]   = useState<StatusFilter>('all');
   const [showFlaggedOnly, setShowFlaggedOnly] = useState(false);
   const [selectedNodes, setSelectedNodes] = useState<Set<string>>(new Set());
-  const [disconnectConfirming, setDisconnectConfirming] = useState(false);
-  const [disconnecting, setDisconnecting] = useState(false);
-  const [disconnectError, setDisconnectError] = useState<string | null>(null);
-  const confirmTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const sortRef  = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -790,56 +747,6 @@ const NodesList: React.FC<NodesListProps> = ({
     a.href = url; a.download = `wicklee-audit-${Date.now()}.json`; a.click();
     URL.revokeObjectURL(url);
   };
-
-  const handleBulkDisconnect = useCallback(async () => {
-    if (!disconnectConfirming) {
-      setDisconnectError(null);
-      setDisconnectConfirming(true);
-      if (confirmTimeoutRef.current) clearTimeout(confirmTimeoutRef.current);
-      confirmTimeoutRef.current = setTimeout(() => setDisconnectConfirming(false), 6000);
-      return;
-    }
-    if (!getToken || cloudUrl == null || disconnecting) return;
-    if (confirmTimeoutRef.current) clearTimeout(confirmTimeoutRef.current);
-    setDisconnecting(true);
-    setDisconnectConfirming(false);
-    try {
-      const token = await getToken();
-      const ids   = [...selectedNodes];
-      const results = await Promise.allSettled(
-        ids.map(id =>
-          fetch(`${cloudUrl}/api/nodes/${encodeURIComponent(id)}`, {
-            method:  'DELETE',
-            headers: token ? { Authorization: `Bearer ${token}` } : {},
-          })
-        )
-      );
-      const removed = ids.filter((_, i) => {
-        const r = results[i];
-        return r.status === 'fulfilled' && r.value.ok;
-      });
-      const failCount = ids.length - removed.length;
-      if (removed.length > 0) {
-        setSelectedNodes(new Set());
-        onNodesRemoved?.(removed);
-      }
-      if (failCount > 0) {
-        const firstFail = results.find(r =>
-          r.status === 'rejected' || (r.status === 'fulfilled' && !r.value.ok)
-        );
-        const statusHint = firstFail?.status === 'fulfilled'
-          ? ` (${firstFail.value.status})`
-          : '';
-        setDisconnectError(
-          `${failCount} node${failCount !== 1 ? 's' : ''} could not be removed${statusHint}. Try again in a moment.`
-        );
-      }
-    } catch {
-      setDisconnectError('Request failed. Check your connection and try again.');
-    } finally {
-      setDisconnecting(false);
-    }
-  }, [disconnectConfirming, disconnecting, getToken, cloudUrl, selectedNodes, onNodesRemoved]);
 
   const toggleSelect = (id: string) =>
     setSelectedNodes(prev => {
@@ -950,8 +857,6 @@ const NodesList: React.FC<NodesListProps> = ({
             onNavigateToSettings={onNavigateToSettings}
           />
         </div>
-
-        <TelemetryRelayStatus pairingInfo={pairingInfo} />
 
         <div className="bg-indigo-500/5 border border-indigo-500/20 rounded-2xl p-6 flex flex-col sm:flex-row items-center justify-between gap-4">
           <div>
@@ -1282,39 +1187,10 @@ const NodesList: React.FC<NodesListProps> = ({
           </button>
           <div className="w-px h-4 bg-gray-700 shrink-0" />
           <button
-            onClick={handleBulkDisconnect}
-            disabled={disconnecting || !getToken}
-            className={`text-xs font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
-              disconnectConfirming
-                ? 'text-red-300 font-semibold animate-pulse'
-                : 'text-red-400 hover:text-red-300'
-            }`}
-            title={!getToken ? 'Sign in to remove nodes' : disconnectConfirming ? 'Click again to confirm removal' : `Remove ${selectedNodes.size} node${selectedNodes.size !== 1 ? 's' : ''} from fleet`}
-          >
-            {disconnecting
-              ? 'Removing…'
-              : disconnectConfirming
-              ? `Confirm remove ${selectedNodes.size} node${selectedNodes.size !== 1 ? 's' : ''}?`
-              : 'Disconnect'}
-          </button>
-          <div className="w-px h-4 bg-gray-700 shrink-0" />
-          <button
-            onClick={() => { setSelectedNodes(new Set()); setDisconnectError(null); }}
+            onClick={() => setSelectedNodes(new Set())}
             className="text-xs text-gray-500 hover:text-gray-300 transition-colors"
           >
             <X className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      )}
-
-      {disconnectError && (
-        <div className="fixed bottom-[72px] left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-4 py-2.5 bg-red-950 border border-red-800/60 rounded-xl shadow-xl animate-in fade-in slide-in-from-bottom-2 duration-200">
-          <span className="text-xs text-red-300">{disconnectError}</span>
-          <button
-            onClick={() => setDisconnectError(null)}
-            className="text-red-500 hover:text-red-300 transition-colors ml-1"
-          >
-            <X className="w-3 h-3" />
           </button>
         </div>
       )}

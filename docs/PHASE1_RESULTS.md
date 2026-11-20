@@ -1,5 +1,7 @@
 # Phase 1 results — `wicklee inspect`
 
+> **Note, 2026-11-20.** The agent no longer has `/api/pair/*` routes or a `--no-cloud` flag; the fleet pairing code was removed. References to them below are a record of how the measurements were taken.
+
 What was measured, on what, and what it found. Every number here came off real
 hardware; the raw transcripts are committed beside this file so the tables can
 be checked rather than taken on faith.

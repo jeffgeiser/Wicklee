@@ -2,8 +2,8 @@ Wicklee
 Copyright 2024-2026 Jeff Geiser
 
 This repository is licensed under the Apache License, Version 2.0, except for
-the directories listed in LICENSING.md, which are licensed under
-FSL-1.1-Apache-2.0.
+src/site/ (the website), which is licensed under FSL-1.1-Apache-2.0. See
+LICENSING.md.
 
 "Wicklee" and the Wicklee logo are trademarks of the project's owner and are
 not licensed under either licence.

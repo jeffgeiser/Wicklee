@@ -4,32 +4,30 @@ Wicklee is published under two licences, split by directory.
 
 ## Open source — Apache License 2.0
 
-Everything in this repository **except the directories listed in the next
-section**. That includes:
+Everything in this repository **except `src/site/`**. That includes:
 
 - `agent/` — the agent binary that runs on each node
-- `src/` (other than `src/cloud/` and `src/site/`) — the local dashboard served
-  at `localhost:7700`, including how WES and the other metrics are calculated
-- `shared/`, `scripts/`, `deploy/grafana/` and the build configuration needed
-  to build the agent
+- `src/` (other than `src/site/`) — the local dashboard served at
+  `localhost:7700`, including how WES and the other metrics are calculated
+- `shared/`, `scripts/` and the build configuration needed to build the agent
 
 Licence text: [`LICENSE`](LICENSE).
 
 ## Source-available — FSL-1.1-Apache-2.0
 
-The fleet control plane and the public website:
+The public website only:
 
-- `cloud/` — the control-plane backend
-- `src/cloud/` — control-plane screens (organizations, SSO, audit log, SLOs,
-  chargeback, fleet history and the rest of the fleet features)
 - `src/site/` — the wicklee.dev website
-- `deploy/helm/`, `deploy/self-hosted/` — control-plane deployment
 
-You may read, run, modify and self-host this code for any purpose other than
-offering it to others as a competing GPU fleet monitoring service. Each release
-converts to Apache 2.0 four years after it is published.
+You may read, run and modify this code for any purpose other than offering it
+to others as a competing product or service. Each release converts to Apache
+2.0 four years after it is published.
 
-Licence text: [`cloud/LICENSE`](cloud/LICENSE).
+Licence text: [`src/site/LICENSE`](src/site/LICENSE).
+
+There is no hosted service and no control plane. The control-plane backend,
+its screens and its deployment files were removed from the repository; they
+remain in git history and keep the licence they were published under.
 
 ## Trademark
 
@@ -39,5 +37,5 @@ different name and must not present itself as Wicklee.
 
 ## Questions
 
-For anything these terms don't cover — a commercial licence for the control
-plane, or use of the name — contact jeff@wicklee.dev.
+For anything these terms don't cover — a commercial licence for the website
+code, or use of the name — contact jeff@wicklee.dev.

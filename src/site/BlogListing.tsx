@@ -136,7 +136,7 @@ const BlogListing: React.FC<BlogListingProps> = ({ onNavigate }) => {
         <div className="mb-12">
           <h1 className="text-4xl sm:text-5xl font-extrabold text-white tracking-tight mb-4">Blog</h1>
           <p className="text-lg text-gray-400 leading-relaxed max-w-xl">
-            Thinking out loud about local AI inference, fleet operations, and the metrics that matter.
+            Thinking out loud about local AI inference and the metrics that matter.
           </p>
         </div>
 

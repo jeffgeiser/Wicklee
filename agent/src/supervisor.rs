@@ -1,7 +1,7 @@
 //! Task supervision — keep critical background loops alive.
 //!
 //! Several agent subsystems run as fire-and-forget `tokio::spawn` loops
-//! (metrics broadcast, the runtime harvesters, cloud push). If one panics —
+//! (metrics broadcast, the runtime harvesters). If one panics —
 //! say a malformed sensor read or a parsing edge case — tokio swallows the
 //! panic and that task simply ends, leaving the agent "running" while a whole
 //! subsystem goes silent: stale or missing metrics, no error surfaced.
@@ -49,7 +49,7 @@ where
 }
 
 /// Like [`supervise`], but the task returns [`ControlFlow`]: `Break(())` means
-/// "this was a deliberate, permanent stop — do NOT restart" (e.g. `cloud_push`
+/// "this was a deliberate, permanent stop — do NOT restart" (e.g. a loop
 /// breaking when the broadcast channel closes at shutdown), while
 /// `Continue(())` is treated as an unexpected exit and restarted with backoff.
 /// A panic is always restarted.

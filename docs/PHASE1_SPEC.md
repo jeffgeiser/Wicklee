@@ -882,58 +882,24 @@ Order of work for these removals:
 3. **Embedded dashboard:** remove after step 4, when `wicklee inspect` and the `/v1` routes exist to replace it. The debugging page shows State, findings with their evidence, and receipts.
 4. **Dashboard-only agent routes:** remove with the dashboard.
 
-The dashboard components are shared with the hosted fleet view on wicklee.dev. Removing the embedded dashboard takes them out of the agent binary. They stay in the repository for the hosted fleet view, which remains frozen. The maintainer is open to removing it later.
+The dashboard components are shared with the hosted fleet view on wicklee.dev. Removing the embedded dashboard takes them out of the agent binary. The hosted fleet view and its shared components were later deleted (`docs/TRANSITION_PLAN.md` step 7).
 
 ### Deployed infrastructure
 
-The ordered, step-by-step version of this section, with owners and completion checks, is `docs/TRANSITION_PLAN.md`. Where the two disagree, that document is newer.
+The ordered, step-by-step version of how this was reached, with owners and completion checks, is `docs/TRANSITION_PLAN.md`. Where the two disagree, that document is newer.
 
-Everything above concerns code. This section concerns running services, which are a separate decision: freezing a directory in the repository does not turn off the service built from it.
+**End state, reached 2026-11-20:** Cloudflare Pages serves wicklee.dev as a static site, and GitHub Releases distributes the agent binary. Nothing else is running: no Railway services, no Postgres, no Paddle, no demo. The deliverable is a single binary a developer installs, reached through the CLI, HTTP on localhost and MCP. Nothing in this spec calls out to a server.
 
-**Phase 1's product needs two pieces of infrastructure.** Somewhere to serve a static site, and GitHub Releases to distribute the binary. The deliverable is a single binary a developer installs, reached through the CLI, HTTP on localhost and MCP. Nothing in this spec calls out to a server. Every other running component is either the withdrawn paid product or the frozen fleet view.
+| Component | What it is |
+| --- | --- |
+| GitHub Releases | Four agent binaries plus the `SHA256SUMS` file. All Linux binaries are built in an `ubuntu:20.04` container for a glibc 2.31 floor. No musl asset: v0.8.2 retired it after musl silently stripped the 14 store-backed routes. CI builds the musl target so its cfg gates stay honest, and publishes nothing. This is the entire install path |
+| Cloudflare Pages | Serves wicklee.dev: the marketing site, the docs, the blog, `install.sh`, `install.ps1` and the discovery files, all as static files. `/api/*`, `/mcp` and `/metrics` are not served and answer 404 |
 
-| Component | What it is | Decision |
-| --- | --- | --- |
-| GitHub Releases | Six agent binaries — macOS arm64, Windows x64, Linux x64 and Linux arm64, the last two each in a plain and an NVIDIA variant — plus the `SHA256SUMS` file the self-update verifies against and refuses to install without. All four Linux binaries are built in an `ubuntu:20.04` container for a glibc 2.31 floor. No musl asset: v0.8.2 retired it after musl silently stripped the 14 store-backed routes. CI builds the musl target so its cfg gates stay honest, and publishes nothing | **Keep.** This is the entire install path now, and it is the one piece that must not break |
-| Cloudflare Pages | Serves wicklee.dev. Confirmed by the maintainer as the host the domain points to | **Keep, and it is the only web host needed.** It serves the static marketing site and docs |
-| Railway: frontend | React app served by nginx, proxying `/api/*` to the cloud backend | **Retire.** This service exists for the dashboard, which Phase 1 removes. Cloudflare Pages already serves the domain |
-| Railway: cloud backend | `wicklee-cloud`, axum, internet-facing | **Turn the service off,** separately from the code freeze. See below |
-| Postgres and TimescaleDB | Fleet telemetry, accounts, API keys, billing records | **Turn off with the backend.** Export first if any data is worth keeping |
-| Paddle | Checkout and HMAC-verified webhooks | **Remove.** Paid tiers are withdrawn |
-| Cloudflare Pages project `wicklee-demo` | Builds on every commit | **Remove.** Decided: it demonstrates the old strategy and the dashboard, both of which Phase 1 replaces. Removing it also removes 750 lines of demo code, listed below |
-| Root `Dockerfile`, `nginx.conf`, `entrypoint.sh`, `railway.toml` | The Railway frontend deployment path | **Remove with the Railway services.** Cloudflare Pages builds from the repository directly and uses none of them |
-| HF Space | Demo deployment in `deploy/hf-space/` | **Retire,** for the same reason as `wicklee-demo`: it hosts the same demo build. Flagged for the maintainer to confirm, since only `wicklee-demo` was decided explicitly |
-| Helm chart, docker-compose | `deploy/helm/`, `deploy/self-hosted/`, bundling their own Postgres | **Keep, rewrite later.** They deploy today's hosted architecture — frontend, cloud, Postgres — not the self-hostable coordinator the strategy describes. Rewriting them belongs with that coordinator, not with Phase 1 |
-| Grafana dashboard JSON | `deploy/grafana/wicklee-fleet.json` | Documentation, not infrastructure. Follows the fleet view |
+What was retired on the way, and is recorded here only so the footprint is not re-created by accident:
 
-**Turning the cloud service off is a security decision, not only a cost one.** It is an internet-facing service holding accounts, API keys and billing records for a product with no paying users. That is attack surface maintained for no current benefit. The code can stay frozen in the repository, as decided, while the deployment is stopped. These are independent choices and revision 1 conflated them.
-
-**Paddle removal is not only code.** `src/site/LegalPage.tsx` names Paddle as merchant of record, which carries refund and billing terms. Those pages need editing rather than deleting, or the site will describe a payment relationship that no longer exists. Order: confirm no active subscriptions, cancel and refund any that exist, turn checkout off, take the pricing page down, then correct the legal pages, then remove the integration code.
-
-**Railway goes entirely.** With Cloudflare Pages confirmed as the host the domain points to, Railway's only purpose is the dashboard and the backend behind it. Both services and their Postgres can be shut down together, and the four root-level files that exist to build and serve that deployment go with them. The end state is Cloudflare Pages for the site and GitHub Releases for the binary.
-
-**One consequence to accept deliberately.** Retiring the Railway services removes the hosted fleet view, so `cloud/`, `src/cloud/` and the agent's `cloud_push.rs` and `pairing.rs` become not merely frozen but unreachable — there is no deployment left for them to talk to. That is consistent with the decisions above, and it strengthens the case for deleting that code rather than freezing it, which the maintainer has said he is open to. Until then it stays in the repository as dead code, and the README and docs must not describe a fleet view that no longer runs.
-
-**The Pages build will need narrowing.** `src/` holds both the marketing site in `src/site/` and the dashboard views in `src/cloud/`. The Cloudflare build currently ships both, and the dashboard routes call `/api/*`, which has no backend on Pages. Once the hosted views are gone the build should cover `src/site/` only. This is a follow-up to the dashboard removal in step 4, not Phase 1 work.
-
-**Removing the demo takes code with it.** The demo is a real subsystem, not just a Pages project, so retiring it is a clean 750-line deletion rather than a configuration change:
-
-| Item | Size | Note |
-| --- | --- | --- |
-| `src/demo/demoApi.ts` | 414 lines | Installs a `fetch` shim that fakes the agent's API |
-| `src/demo/demoFleet.ts` | 209 lines | Synthetic fleet data |
-| `src/demo/demoEventSource.ts` | 36 lines | Fake event stream |
-| `src/demo/DemoBanner.tsx` | 40 lines | Banner component |
-| `src/demo/__tests__/demoApi.test.ts` | 51 lines | Its tests |
-| `src/index.tsx` | 3 call sites | Dynamic imports of `demoApi` and `DemoBanner`, and the banner in the tree |
-| `vite.config.ts` | 1 line | The `mode === 'demo'` branch choosing `dist-demo` |
-| `package.json` | 1 line | The `build:demo` script |
-| `docs/DEMO.md` | 94 lines | Describes the demo |
-| `deploy/hf-space/README.md` | 48 lines | Deploys the same build |
-
-Order: disconnect the Cloudflare Pages project and the HF Space first so nothing is serving a build that is about to disappear, then delete the code in one commit. Check `src/components/Sidebar.tsx`, `src/App.tsx`, `src/components/ModelsPage.tsx` and `src/contexts/FleetStreamContext.tsx` for demo-conditional branches before deleting, since those reference the demo without importing from `src/demo/`.
-
-None of the above is Phase 1 implementation work. It is the maintainer's to sequence, and it is recorded here so the infrastructure footprint is decided deliberately rather than left running by default.
+- The Railway frontend and cloud-backend services, Postgres and TimescaleDB, and the Paddle checkout (paid tiers were withdrawn).
+- The `wicklee-demo` Pages project, the HF Space and the 750 lines of demo code behind them.
+- The control-plane code and its deployment files: `cloud/`, `src/cloud/`, `deploy/helm/`, `deploy/self-hosted/`, `deploy/grafana/`, the root `Dockerfile`, `nginx.conf` and `entrypoint.sh`, and the agent's `cloud_push.rs`, `pairing.rs` and `update.rs`. They were frozen during Phase 1 and deleted on 2026-11-20 once nothing could run them. They are in git history.
 
 ## Implementation plan
 

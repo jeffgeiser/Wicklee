@@ -170,7 +170,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
 
       <section className="max-w-7xl mx-auto px-4 sm:px-8 py-16 sm:py-24 border-t border-gray-800 relative z-10">
         <h2 className="text-3xl sm:text-4xl font-bold text-white tracking-tight text-center mb-4">
-          Find it, fix it, prove the fix worked.
+          Find it, check it, prove it.
         </h2>
         <p className="text-gray-400 text-center max-w-2xl mx-auto mb-14">
           Three questions, in the order you actually hit them. Each one is a command.
@@ -181,19 +181,19 @@ const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
               icon: Search,
               step: 'Find',
               cmd: 'wicklee inspect',
-              body: 'Named findings with the evidence behind every line: a model reloading at the runtime’s 4096 default after running larger, models clearing each other before their keep-alives expire, part of a model sitting outside accelerator memory, a model that has lost ground against its own measured baseline. A rule that could not run says so, with the reason.',
+              body: 'Shows what’s broken and backs it up with evidence. Typical catches include a model quietly reloading at the runtime’s 4096 default context, two models evicting each other before their keep-alive expires, weights spilling out of accelerator memory, or a model running slower than its own baseline. Skipped checks are listed with the reason why.',
             },
             {
               icon: Wrench,
-              step: 'Fix',
+              step: 'Check',
               cmd: 'wicklee ready llama3.1:8b',
-              body: 'Before a job starts rather than after it fails: ready now, requires loading, may require eviction, or cannot determine — with the memory headroom, where the footprint figure came from, and what a load would displace. Readiness is advice, not a reservation; it does not hold capacity for you.',
+              body: 'Run this before starting a job so you don’t hit an OOM or eviction halfway through. You’ll get one of four calls: ready now, needs a load, may need to evict something, or can’t tell. It also breaks down your available memory headroom, where the size estimate came from, and what would get evicted. Note that it doesn’t reserve memory—another process can still grab it before you load.',
             },
             {
               icon: ClipboardCheck,
               step: 'Verify',
               cmd: 'wicklee verify F-7fff93',
-              body: 'Re-runs the finding’s own test and prints both runs: medians, ranges, what differed in the configuration. A verdict needs non-overlapping ranges, three receipts a side and medians at least 5% apart — otherwise it says no measurable change, and why. Two runs 1.5% apart on an idle host is scatter, not an improvement.',
+              body: 'Re-runs the test behind a finding and compares the runs side by side, including medians, ranges, and config diffs. It only counts as a real change if there are at least three runs on each side, the ranges don’t overlap, and the medians are at least 5% apart. Anything less—like a 1.5% gap on an idle machine—gets dismissed as noise.',
             },
           ].map((s) => (
             <div key={s.step} className="bg-gray-800/40 border border-gray-700/60 rounded-3xl p-7 hover:border-blue-500/40 transition-colors">

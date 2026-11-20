@@ -82,7 +82,7 @@ export const STATIC_PAGE_META: Record<string, PageMeta> = {
   },
   '/docs': {
     title:       'Documentation — Wicklee',
-    description: 'Install the Wicklee agent, pair your fleet, and read the methodology behind ' +
+    description: 'Install the Wicklee agent, run inspect, ready and verify, and read the methodology behind ' +
                  'WES, Model Fit, Context Runway, and the 18 hardware observation patterns.',
     path:        '/docs',
   },
@@ -101,13 +101,13 @@ export const STATIC_PAGE_META: Record<string, PageMeta> = {
   '/blog': {
     title:       'Blog — Wicklee',
     description: 'Engineering notes on local AI inference observability: efficiency scoring, ' +
-                 'thermal throttling, quantization, and hardware-aware fleet operations.',
+                 'thermal throttling, quantization, and hardware-aware diagnostics.',
     path:        '/blog',
   },
   '/trust': {
     title:       'Trust & Security — Wicklee',
-    description: 'What leaves a node (hardware telemetry) vs what never does (prompts, responses, ' +
-                 'templates). Unpaired, the agent makes no outbound connection at all.',
+    description: 'What the agent reads, what it stores, and what it never does: it makes no ' +
+                 'outbound connection, and prompts and responses are never read.',
     path:        '/trust',
   },
   '/terms': {
@@ -119,11 +119,6 @@ export const STATIC_PAGE_META: Record<string, PageMeta> = {
     title:       'Privacy Policy — Wicklee',
     description: 'Wicklee privacy policy.',
     path:        '/privacy',
-  },
-  '/refund': {
-    title:       'Refund Policy — Wicklee',
-    description: 'Wicklee refund policy.',
-    path:        '/refund',
   },
 };
 

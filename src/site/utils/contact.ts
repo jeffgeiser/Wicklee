@@ -4,7 +4,7 @@
  * Every address that appears on a public page comes from here. They had drifted
  * to eight separate literals — jeff@, sales@, support@, legal@, privacy@,
  * security@ — scattered across the pricing page, trust page, design-partner
- * page, terms/privacy/refund pages and the AI plugin manifest, which is both
+ * page, terms and privacy pages and the AI plugin manifest, which is both
  * more surface than a one-person company needs and more places to get wrong.
  *
  * The scheme is deliberately small:

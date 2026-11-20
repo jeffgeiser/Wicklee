@@ -97,11 +97,10 @@ async function checkWesThresholds() {
   }
 }
 
-// ── 3. MetricsPayload stays in three-way sync ────────────────────────────────
+// ── 3. MetricsPayload stays in sync with the frontend type ───────────────────
 //
-// CLAUDE.md: the cloud uses serde(default), so a field the agent sends and the
-// cloud struct lacks is dropped silently and never reaches Postgres or the
-// fleet dashboard. That failure mode cost months once already.
+// A field the agent sends and SentinelMetrics lacks is dropped silently by the
+// dashboard. Checked here so it fails the build instead.
 const rustFields = (body) =>
   new Set([...body.matchAll(/^\s*(?:pub(?:\(crate\))?\s+)?([a-z_][a-z0-9_]*)\s*:/gm)].map((m) => m[1]));
 
@@ -116,9 +115,8 @@ async function findStruct(dir, name) {
 
 async function checkPayloadSync() {
   const agent = await findStruct('agent/src', 'MetricsPayload');
-  const cloud = await findStruct('cloud/src', 'MetricsPayload');
-  if (!agent || !cloud) {
-    fail('payload-sync', 'could not locate struct MetricsPayload in agent/src or cloud/src');
+  if (!agent) {
+    fail('payload-sync', 'could not locate struct MetricsPayload in agent/src');
     return;
   }
 
@@ -133,10 +131,6 @@ async function checkPayloadSync() {
   );
 
   for (const f of agent.fields) {
-    if (!cloud.fields.has(f)) {
-      fail('payload-sync',
-        `${f} is sent by the agent but missing from ${cloud.file} — serde(default) will drop it silently`);
-    }
     if (!front.has(f)) {
       fail('payload-sync',
         `${f} is sent by the agent but missing from SentinelMetrics in src/types.ts`);
@@ -174,4 +168,4 @@ if (failures.length) {
   process.exit(1);
 }
 for (const s of skipped) console.log(`[check-invariants] skipped — ${s}`);
-console.log('[check-invariants] OK — WES ladder, WES thresholds, MetricsPayload three-way sync.');
+console.log('[check-invariants] OK — WES ladder, WES thresholds, MetricsPayload sync.');

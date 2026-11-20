@@ -32,14 +32,11 @@ mod store;
 mod inference;
 mod harvester;
 mod proxy;
-mod cloud_push;
 mod service;
 mod diagnostics;
 mod runtime_config;
 
 mod config;
-mod pairing;
-mod update;
 mod hardware;
 mod samplers;
 mod metrics;
@@ -67,8 +64,6 @@ use tower_http::cors::{Any, CorsLayer};
 use inference::{read_hardware_signals, compute_inference_state};
 use proxy::ProxyState;
 use config::*;
-use pairing::*;
-use update::*;
 use hardware::*;
 use samplers::*;
 use metrics::*;
@@ -147,50 +142,6 @@ where
     })
 }
 
-/// Whether `--no-cloud` was passed: run the agent with every outbound fleet
-/// request suppressed for the life of the process.
-///
-/// This exists so a second agent can be started on a paired host — to exercise
-/// a route, reproduce a bug, check a build — without that agent pushing
-/// telemetry under the installed node's id, downloading and installing an
-/// update over it, or writing pairing fields into the config file the
-/// installed service reads. None of those are prevented by moving ports:
-/// `PORT` isolates the listener, not the identity.
-fn cloud_is_disabled<I, S>(args: I) -> bool
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<str>,
-{
-    args.into_iter().any(|a| a.as_ref() == "--no-cloud")
-}
-
-/// A flag `--no-cloud` cannot be combined with, and the reason.
-///
-/// `--no-cloud` governs *this* process. Combined with a flag that acts on the
-/// installed service, or that is itself a request to the fleet, it would be
-/// silently ignored — and a flag that appears to have been accepted while
-/// doing nothing is worse than no flag, because the whole point of this one is
-/// to be able to trust that nothing left the machine.
-fn no_cloud_conflict<I, S>(args: I) -> Option<(&'static str, &'static str)>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<str>,
-{
-    const CONFLICTS: &[(&str, &str)] = &[
-        ("--pair", "pairing is itself a request to the fleet"),
-        ("--install-service", "the installed service does not inherit it"),
-        ("--uninstall-service", "the installed service does not inherit it"),
-    ];
-    let given: Vec<String> = args.into_iter().map(|a| a.as_ref().to_string()).collect();
-    if !cloud_is_disabled(&given) {
-        return None;
-    }
-    CONFLICTS
-        .iter()
-        .find(|(flag, _)| given.iter().any(|a| a == flag))
-        .copied()
-}
-
 #[tokio::main]
 async fn main() {
     let version_line = format!("wicklee-agent v{}", env!("CARGO_PKG_VERSION"));
@@ -214,30 +165,7 @@ async fn main() {
         }
     }
 
-    if let Some((flag, why)) = no_cloud_conflict(std::env::args()) {
-        eprintln!("[fatal] --no-cloud cannot be combined with {flag}: {why}.");
-        std::process::exit(2);
-    }
-    let no_cloud = cloud_is_disabled(std::env::args());
-    let pair_on_start = std::env::args().any(|a| a == "--pair");
-    if no_cloud {
-        eprintln!(
-            "[no-cloud] fleet disabled for this process: no telemetry push, no \
-             self-update, pairing routes refuse. Local routes are unaffected."
-        );
-    }
-
     let config = load_or_create_config();
-    let initial_status = if config.fleet_url.is_some() { "connected" } else { "unpaired" };
-    let pairing_state = Arc::new(Mutex::new(PairingState {
-        node_id:             config.node_id.clone(),
-        cloud_session_token: config.session_token.clone(),
-        status: match config.fleet_url.clone() {
-            Some(url) => PairingStatus::Connected { fleet_url: url },
-            None      => PairingStatus::Unpaired,
-        },
-    }));
-
     if version_flag {
         return;
     }
@@ -259,7 +187,7 @@ async fn main() {
 
     if std::env::args().any(|a| a == "--status") {
         let port: u16 = std::env::var("PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(7700);
-        let url = format!("http://127.0.0.1:{port}/api/pair/status");
+        let url = format!("http://127.0.0.1:{port}/api/health");
         let sep       = "╠══════════════════════════════════════════════╣";
         let top       = "╔══════════════════════════════════════════════╗";
         let bot       = "╚══════════════════════════════════════════════╝";
@@ -273,7 +201,7 @@ async fn main() {
         match reqwest::get(&url).await {
             Ok(resp) if resp.status().is_success() => {
                 #[derive(serde::Deserialize)]
-                struct StatusResp { status: String, node_id: String }
+                struct StatusResp { node_id: String }
                 if let Ok(s) = resp.json::<StatusResp>().await {
                     println!("{top}");
                     println!("{blank_row}");
@@ -282,7 +210,6 @@ async fn main() {
                     println!("{blank_row}");
                     println!("{sep}");
                     println!("{}", row("Node", &s.node_id));
-                    println!("{}", row("Pairing", &s.status));
                     println!("{sep}");
                     let cfg_ref = &config;
                     let discovered = process_discovery::scan_runtimes();
@@ -373,40 +300,7 @@ async fn main() {
     }
     let auth_policy = Arc::new(auth_policy);
 
-    if pair_on_start {
-        let code = generate_code();
-        let expires_at = now_ms() + 300_000;
-        pairing_state.lock().unwrap().status = PairingStatus::Pending { code: code.clone(), expires_at };
-        match register_pair_code(&config.node_id, &code).await {
-            Some(token) => {
-                let fleet_url = "https://wicklee.dev".to_string();
-                let nid = {
-                    let mut state = pairing_state.lock().unwrap();
-                    state.cloud_session_token = Some(token.clone());
-                    state.status = PairingStatus::Connected { fleet_url: fleet_url.clone() };
-                    state.node_id.clone()
-                };
-                update_config(|cfg| {
-                    cfg.node_id = nid;
-                    cfg.fleet_url = Some(fleet_url);
-                    cfg.session_token = Some(token);
-                });
-            }
-            None => eprintln!("[warn] Could not register code with cloud backend. Check your internet connection."),
-        }
-        print_pairing_box(&config.node_id, &code);
-
-        println!("\n  ✓ Pairing complete. The background service will connect to the fleet automatically.");
-        println!("  Run `wicklee --status` to verify.\n");
-        return;
-    }
-
-    let diag_status = match (pair_on_start, no_cloud) {
-        (true, _) => "pending".to_string(),
-        (false, true) => format!("{initial_status} · no-cloud"),
-        (false, false) => initial_status.to_string(),
-    };
-    diagnostics::run_startup_diagnostics(&config.node_id, &diag_status, port, &config).await;
+    diagnostics::run_startup_diagnostics(&config.node_id, port, &config).await;
 
     #[cfg(target_os = "macos")]
     if unsafe { libc::getuid() } != 0 {
@@ -685,20 +579,6 @@ async fn main() {
 
     let deployment_profile: Arc<Mutex<DeploymentProfile>> =
         Arc::new(Mutex::new(DeploymentProfile::from_config(config.deployment_profile.as_deref())));
-
-    if no_cloud {
-        eprintln!("[no-cloud] telemetry push not started");
-    } else {
-        #[cfg(not(target_env = "musl"))]
-        cloud_push::start_cloud_push(
-            Arc::clone(&pairing_state),
-            broadcast_tx.clone(),
-            Arc::clone(&observation_cache),
-            Arc::clone(&deployment_profile),
-        );
-        #[cfg(target_env = "musl")]
-        cloud_push::start_cloud_push(Arc::clone(&pairing_state), broadcast_tx.clone(), Arc::clone(&deployment_profile));
-    }
 
     let latest_frame = metrics::track_latest_frame(&broadcast_tx);
 
@@ -1014,21 +894,10 @@ async fn main() {
             .route("/api/metrics",        get(handle_metrics))
             .route("/api/metrics/snapshot", get(handle_metrics_snapshot))
             .route("/ws",                 get(handle_ws))
-            .route("/api/pair/status",    get(handle_pair_status))
             .route("/mcp",                      post(handle_mcp))
             .route("/.well-known/mcp.json",     get(handle_mcp_manifest))
             .route("/api/runtime-config",       get(handle_runtime_config))
             .route("/api/deployment-profile",   get(handle_get_deployment_profile).put(handle_put_deployment_profile));
-
-        let r = if no_cloud {
-            r.route("/api/pair/generate",   post(handle_pair_disabled))
-             .route("/api/pair/claim",      post(handle_pair_disabled))
-             .route("/api/pair/disconnect", post(handle_pair_disabled))
-        } else {
-            r.route("/api/pair/generate",   post(handle_pair_generate))
-             .route("/api/pair/claim",      post(handle_pair_claim))
-             .route("/api/pair/disconnect", post(handle_pair_disconnect))
-        };
 
         #[cfg(not(target_env = "musl"))]
         let r = if let Some(ref st) = metrics_store {
@@ -1053,9 +922,7 @@ async fn main() {
 
         r.fallback(static_handler)
          .layer(axum::extract::Extension(store_healthy))
-        .layer(axum::extract::Extension(CloudDisabled(no_cloud)))
         .layer(axum::extract::Extension(v1_port_rx))
-         .layer(axum::extract::Extension(Arc::clone(&pairing_state)))
          .layer(axum::extract::Extension(Arc::clone(&deployment_profile)))
          .layer(axum::extract::Extension(apple_metrics))
          .layer(axum::extract::Extension(nvidia_metrics))
@@ -1104,31 +971,13 @@ async fn main() {
                         continue;
                     }
                 }
-                if pair_on_start {
-                    println!();
-                    println!("  Agent is running on :{port} — pairing code registered.");
-                    println!("  Restart the service to activate:  sudo systemctl restart wicklee");
-                } else {
-                    eprintln!("Failed to bind port {port}: address already in use.");
-                    eprintln!("Run: sudo pkill -x wicklee  then retry.");
-                }
+                eprintln!("Failed to bind port {port}: address already in use.");
+                eprintln!("Run: sudo pkill -x wicklee  then retry.");
                 return;
             }
             Err(e) => panic!("Failed to bind port {port}: {e}"),
         }
     };
-
-    if no_cloud {
-        eprintln!("[no-cloud] self-update check skipped");
-    } else {
-        let pairing_state     = Arc::clone(&pairing_state);
-        let live_events       = Arc::clone(&live_events);
-        let recent_events_log = Arc::clone(&recent_events_log);
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_secs(5)).await;
-            check_and_apply_update(pairing_state, live_events, recent_events_log).await;
-        });
-    }
 
     let shutdown = async {
         #[cfg(unix)]
@@ -1161,7 +1010,7 @@ async fn main() {
 
 #[cfg(test)]
 mod version_output_tests {
-    use super::{cloud_is_disabled, no_cloud_conflict, version_is_command_output};
+    use super::version_is_command_output;
 
     #[test]
     fn version_flags_put_it_on_stdout() {
@@ -1179,7 +1028,6 @@ mod version_output_tests {
             vec!["wicklee", "findings"],
             vec!["wicklee", "--mcp-stdio"],
             vec!["wicklee", "--install-service"],
-            vec!["wicklee", "--pair"],
         ] {
             assert!(
                 !version_is_command_output(&args),
@@ -1197,37 +1045,5 @@ mod version_output_tests {
         ] {
             assert!(!version_is_command_output(&args), "{args:?} is not --version");
         }
-    }
-
-    #[test]
-    fn no_cloud_is_recognised_only_when_it_is_actually_passed() {
-        assert!(cloud_is_disabled(["wicklee", "--no-cloud"]));
-        assert!(cloud_is_disabled(["wicklee", "--no-cloud", "--pair"]));
-        for args in [
-            vec!["wicklee"],
-            vec!["wicklee", "--status"],
-            vec!["wicklee", "--nocloud"],
-            vec!["wicklee", "--no-cloud-push"],
-            vec!["wicklee", "no-cloud"],
-        ] {
-            assert!(!cloud_is_disabled(&args), "{args:?} must not disable the fleet");
-        }
-    }
-
-    #[test]
-    fn no_cloud_refuses_the_flags_that_would_ignore_it() {
-        for flag in ["--pair", "--install-service", "--uninstall-service"] {
-            let got = no_cloud_conflict(["wicklee", "--no-cloud", flag]);
-            assert_eq!(got.map(|(f, _)| f), Some(flag), "{flag} must be refused");
-            assert!(got.unwrap().1.len() > 10, "a refusal has to say why");
-            assert_eq!(
-                no_cloud_conflict(["wicklee", flag, "--no-cloud"]).map(|(f, _)| f),
-                Some(flag)
-            );
-            assert!(no_cloud_conflict(["wicklee", flag]).is_none());
-        }
-        assert!(no_cloud_conflict(["wicklee", "--no-cloud"]).is_none());
-        assert!(no_cloud_conflict(["wicklee", "--no-cloud", "--status"]).is_none());
-        assert!(no_cloud_conflict(["wicklee", "--no-cloud", "--mcp-stdio"]).is_none());
     }
 }

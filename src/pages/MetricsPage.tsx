@@ -137,7 +137,7 @@ const MetricsPage: React.FC<MetricsPageProps> = ({ onNavigate }) => {
         <section>
           <SectionHeader
             title="How Wicklee Works: Synchronous Observation"
-            description="A sovereign Rust binary that observes your inference fleet without ever touching your private data."
+            description="A sovereign Rust binary that observes your inference hardware without ever touching your private data."
           />
           <div className="bg-gray-800 border border-indigo-500/20 rounded-2xl p-6 space-y-5">
             {([
@@ -203,7 +203,7 @@ const MetricsPage: React.FC<MetricsPageProps> = ({ onNavigate }) => {
                 <p className="text-sm text-gray-400 font-sans leading-relaxed">
                   Zero synthetic tokens. The agent scrapes <code className="text-indigo-300 text-xs">vllm:avg_generation_throughput_toks_per_s</code> from
                   vLLM's Prometheus endpoint every 2 seconds. This gauge represents aggregate server throughput across all concurrent
-                  requests — the right signal for fleet monitoring, and more accurate than a latency-inverse formula because vLLM
+                  requests — the right signal for monitoring, and more accurate than a latency-inverse formula because vLLM
                   only exposes inter-token latency as a histogram, not a scalar.
                 </p>
               </div>
@@ -272,7 +272,7 @@ const MetricsPage: React.FC<MetricsPageProps> = ({ onNavigate }) => {
               id="tok-w"
               name="TOK/W — Tokens Per Watt"
               formula="tok/s ÷ (Watts / 1000)"
-              description="Raw efficiency without thermal penalty — the energy cost of each token before thermal adjustment. When thermal is Normal, TOK/W ≈ WES. The gap between TOK/W and WES is your thermal cost. No universal range — compare nodes within your fleet. Higher is always better."
+              description="Raw efficiency without thermal penalty — the energy cost of each token before thermal adjustment. When thermal is Normal, TOK/W ≈ WES. The gap between TOK/W and WES is your thermal cost. No universal range — compare nodes against each other. Higher is always better."
             />
 
             <MetricCard
@@ -347,47 +347,6 @@ const MetricsPage: React.FC<MetricsPageProps> = ({ onNavigate }) => {
               name="COST/1M TOKENS"
               formula="(W/1K TKN × kWh_rate ÷ 3,600,000) × 1,000"
               description="Dollar cost of generating 1 million tokens based on your configured electricity rate (default $0.12/kWh). W/1K TKN is joules per thousand tokens, so the ÷ 3,600,000 converts joules to kWh (1 kWh = 1,000 W × 3,600 s) and the × 1,000 scales a per-1k cost to per-million. At 36 W and 56 tok/s on a $0.12/kWh rate that is $0.021 per million tokens, against roughly $5 per million for a frontier cloud API. Configure your rate in Settings → Cost & Energy."
-            />
-
-          </div>
-        </section>
-
-        {/* ── Fleet Metrics ────────────────────────────────────────────────── */}
-        <section>
-          <SectionHeader
-            title="Fleet Metrics"
-            description="Aggregated across all paired nodes. Available in the cloud dashboard at wicklee.dev."
-          />
-          <div className="space-y-4">
-
-            <MetricCard
-              id="fleet-avg-wes"
-              name="FLEET AVG WES"
-              description="Average WES score across all online nodes. Weighted equally — not by throughput. A useful fleet health signal but not a routing decision — use Best Route Now for routing."
-            />
-
-            <MetricCard
-              id="cost-efficiency"
-              name="COST EFFICIENCY — $/1M Tokens"
-              description="Fleet-level cost per million tokens at current draw and throughput. Uses per-node electricity rate and PUE multiplier from Settings. The sovereign fleet benchmark — compare to cloud API pricing to quantify your cost advantage."
-            />
-
-            <MetricCard
-              id="tokens-per-watt"
-              name="TOKENS PER WATT (Fleet)"
-              formula="fleet_tok/s ÷ (total_fleet_watts / 1000)"
-              description="Fleet-wide energy efficiency. Rises when efficient nodes (Apple Silicon) are active, falls when power-hungry nodes dominate the fleet."
-            />
-
-            <MetricCard
-              id="fleet-health"
-              name="FLEET HEALTH"
-              description="Distribution of thermal states across all paired nodes. A node at Serious or Critical thermal state is already throttling — fleet health reflects how many nodes are in this condition simultaneously."
-              ranges={[
-                { threshold: 'All Normal',           color: 'green', label: 'All nodes running within design limits' },
-                { threshold: 'Any Fair',             color: 'amber', label: 'Monitor · mild throttling on at least one node' },
-                { threshold: 'Any Serious/Critical', color: 'red',   label: 'Active degradation · fleet efficiency is reduced' },
-              ]}
             />
 
           </div>

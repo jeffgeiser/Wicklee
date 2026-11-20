@@ -24,14 +24,9 @@ mime_guess    = "2"
 tokio-stream  = "0.1"
 # UUID v4 for trace IDs (inference request tracing).
 uuid          = { version = "1", features = ["v4"] }
-# Cryptographically secure random pairing codes.
-rand          = "0.8"
-# Outbound HTTPS for cloud pairing registration.
+# HTTP client: the CLI and MCP stdio bridge talk to the local agent; the agent
+# probes local runtimes (Ollama, vLLM).
 reqwest       = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
-# Atomic binary self-replacement for the auto-update flow (downloads use reqwest).
-self-replace  = "1"
-# SHA-256 verification of auto-update downloads against the release's SHA256SUMS.
-sha2          = "0.10"
 # Local metrics store — three-tier DuckDB schema (raw 1Hz / 1-min / 1-hr).
 # `bundled` compiles DuckDB from source for a fully self-contained binary.
 # Gated to non-musl targets: musl static linking + DuckDB C++ is unsupported;
