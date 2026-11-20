@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { Thermometer, Database, Zap, Activity, ChevronDown, Check, DollarSign, AlertTriangle, Cpu, Lock, Clock} from 'lucide-react';
+import { Thermometer, Database, Zap, Activity, ChevronDown, Check, DollarSign, AlertTriangle, Cpu, Clock} from 'lucide-react';
 import { computeWES, computeRawWES, thermalCostPct, thermalSourceLabel, formatWES, wesColorClass } from '../utils/wes';
 import { computeModelFitScore } from '../utils/modelFit';
 import { calculateFleetHealthPct, calculateTotalVramMb, calculateTotalVramCapacityMb, fleetVramSubtitle, calculateCostPer1kTokens, WES_TOOLTIP, INFERENCE_VRAM_THRESHOLD_MB, ELECTRICITY_RATE_USD_PER_KWH } from '../utils/efficiency';
@@ -68,7 +68,6 @@ interface OverviewProps {
   nodes: NodeAgent[];
   /** True while the initial /api/fleet fetch is in-flight. Suppresses EmptyFleetState flash on refresh. */
   nodesLoading?: boolean;
-  onUpgrade?: () => void;
   getNodeSettings?: (nodeId: string) => { pue: number; kwhRate: number; currency: string };
   fleetKwhRate?: number;
   /** Cross-nav to Observability tab with optional node pre-filter. */
@@ -233,40 +232,6 @@ const FleetStatusHeader: React.FC = () => (
   </div>
 );
 
-const RestrictedNodeBanner: React.FC<{ hostname: string; onUpgrade: () => void }> = ({ hostname, onUpgrade }) => (
-  <div className="flex items-center gap-3 px-4 py-3 bg-amber-500/5 border border-amber-500/20 rounded-xl">
-    <Lock className="w-4 h-4 text-amber-400 shrink-0" />
-    <div className="flex-1 min-w-0">
-      <p className="text-xs text-amber-300/90 font-medium truncate">
-        <span className="font-mono">{hostname}</span> is active but restricted
-      </p>
-      <p className="text-[10px] text-gray-500 mt-0.5">
-        Upgrade to Team to unlock Accelerator-tier patterns and history
-      </p>
-    </div>
-    <button
-      onClick={onUpgrade}
-      className="shrink-0 px-3 py-1.5 text-[10px] font-semibold bg-amber-500/10 hover:bg-amber-500/20
-                 text-amber-400 border border-amber-500/30 rounded-lg transition-colors"
-    >
-      Upgrade
-    </button>
-  </div>
-);
-
-const LockedMetricTile: React.FC<{ label: string }> = ({ label }) => (
-  <div className="relative overflow-hidden">
-    <div className="blur-sm select-none pointer-events-none">
-      <p className="text-xs font-telin text-gray-600">—</p>
-      <p className="text-[9px] text-gray-600 uppercase tracking-widest">{label}</p>
-    </div>
-    <div className="absolute inset-0 flex flex-col items-center justify-center gap-0.5">
-      <Lock className="w-3 h-3 text-gray-500" />
-      <span className="text-[8px] text-gray-500 font-semibold uppercase tracking-widest">Team</span>
-    </div>
-  </div>
-);
-
 interface NodeRowProps {
   nodeId: string;
   hostname: string;
@@ -275,11 +240,10 @@ interface NodeRowProps {
   pue?: number;
   /** Session peak tok/s for this node — from peakTpsMap in FleetStreamContext. */
   peakTps?: number;
-  restricted?: boolean;
   onOpenConfig?: (modelName: string) => void;
 }
 
-const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, lastSeenMs, pue = 1.0, peakTps, restricted = false, onOpenConfig }) => {
+const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, lastSeenMs, pue = 1.0, peakTps, onOpenConfig }) => {
   const [expanded, setExpanded] = useState(false);
   const isOnline = m !== null;
 
@@ -542,9 +506,7 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
         )}
       </div>
 
-      {restricted ? (
-        <LockedMetricTile label="WES" />
-      ) : (
+      {(
         <div className="flex flex-col gap-0.5 overflow-hidden">
           <div className="flex items-center gap-1">
             {thermalWarn && isOnline && (
@@ -578,9 +540,7 @@ const FleetStatusRow: React.FC<NodeRowProps> = ({ nodeId, hostname, metrics: m, 
         </span>
       </div>
 
-      {restricted ? (
-        <LockedMetricTile label="TOK/S" />
-      ) : (
+      {(
         <div className="min-w-0 overflow-hidden">
           {isInferring ? (
             <>
@@ -1112,7 +1072,7 @@ const DiagnosticRail: React.FC<{
   );
 };
 
-const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, onUpgrade, getNodeSettings, fleetKwhRate = ELECTRICITY_RATE_USD_PER_KWH, onNavigateToObservability, onNavigateToInsights }) => {
+const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, getNodeSettings, fleetKwhRate = ELECTRICITY_RATE_USD_PER_KWH, onNavigateToObservability, onNavigateToInsights }) => {
   const {
     allNodeMetrics: cloudMetrics,
     lastSeenMsMap: cloudLastSeen,
@@ -1299,10 +1259,9 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, onUpgr
   }
 
   const liveMetrics: SentinelMetrics[] = Object.values(allNodeMetrics);
-  const restrictedIds = new Set(nodes.filter(n => n.restricted).map(n => n.id));
   const effectiveMetrics: SentinelMetrics[] = isLocalHost
     ? (sentinel ? [sentinel] : [])
-    : liveMetrics.filter(m => !restrictedIds.has(m.node_id));
+    : liveMetrics;
 
   const hasAnyOllama = effectiveMetrics.some(m => m.ollama_running);
   const hasAnyVllm   = effectiveMetrics.some(m => m.vllm_running);
@@ -1357,7 +1316,7 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, onUpgr
 
   const totalRegisteredNodes = isLocalHost
     ? (sentinel ? 1 : 0)
-    : nodes.filter(n => !n.restricted).length;
+    : nodes.length;
   const fleetHealthPct = calculateFleetHealthPct(effectiveMetrics, totalRegisteredNodes);
   const fleetHealthCls = fleetHealthPct == null        ? 'text-gray-400 dark:text-gray-600'
     : fleetHealthPct === 100                           ? 'text-green-600 dark:text-green-400'
@@ -1595,7 +1554,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, onUpgr
           lastSeenMs: lastSeenMsMap[n.id],
           pue: ns?.pue ?? 1.0,
           peakTps: peakTpsMap[n.id],
-          restricted: n.restricted ?? false,
         };
       });
 
@@ -2158,17 +2116,6 @@ const Overview: React.FC<OverviewProps> = ({ nodes, nodesLoading = false, onUpgr
                   Active Only
                 </button>
               </div>
-              {nodeRows.filter(r => r.restricted).length > 0 && (
-                <div className="px-4 py-3 space-y-2 border-b border-gray-100 dark:border-gray-700/60">
-                  {nodeRows.filter(r => r.restricted).map(r => (
-                    <RestrictedNodeBanner
-                      key={r.nodeId}
-                      hostname={r.hostname}
-                      onUpgrade={onUpgrade ?? (() => {})}
-                    />
-                  ))}
-                </div>
-              )}
               <FleetStatusHeader />
               <div className="divide-y divide-gray-100 dark:divide-gray-800">
                 {visibleRows.map(row => (

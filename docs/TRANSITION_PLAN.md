@@ -127,8 +127,8 @@ What went, beyond the directories named above:
 **Follow-ups, not done:**
 
 - **Maintainer legal review** of the rewritten Terms and Privacy pages and of `LICENSING.md`. They were edited to match what runs; they were not reviewed as legal text.
-- **Tier and upsell machinery in the local dashboard** — `usePermissions`, `InsightsTeaseCard`, `SubscriptionTier` in `src/types.ts` — still renders "upgrade" teasers for tiers that do not exist. Remove it.
-- **`PairingInfo` in `src/types.ts`** if nothing references it any more.
+- ~~**Tier and upsell machinery in the local dashboard**~~ **Done, 2026-11-20.** `usePermissions`, `utils/tier.ts` (and its test), `InsightsTeaseCard`, `InsightsLiteCard`, `tierStyle.ts`, `SubscriptionTier`/`InsightsTier`/`TIER_BADGE`, the Team and API-keys tabs, the "restricted node" banner and locked metric tiles are removed; the gated insight cards render unconditionally, as they already did for the community tier.
+- ~~**`PairingInfo` in `src/types.ts`**~~ Done: removed.
 - **Cloudflare Pages build settings**: check that the build command and output directory still match (`npm run build`, `agent/frontend/dist`), and that the `_redirects` file trimmed here is what is deployed.
 
 - **Done when:** the decision is in `docs/STRATEGY.md`, and no document describes a licence boundary or a deployment that the repository no longer has.

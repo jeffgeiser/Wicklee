@@ -44,7 +44,6 @@ function toDetectedInsight(raw: RawLocalObservation): DetectedInsight {
     observedMs:        raw.confidence_ratio * 300_000,
     confidence:        raw.confidence as DetectedInsight['confidence'],
     confidenceRatio:   raw.confidence_ratio,
-    tier:              'community',
     actions:           raw.resolution_steps.slice(0, 2).map(step => ({
       label: step.length > 40 ? step.slice(0, 37) + '...' : step,
       copyText: step.replace(/^Run: /, ''),

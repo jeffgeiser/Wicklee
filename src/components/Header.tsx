@@ -16,21 +16,11 @@ interface HeaderProps {
   connectionState?: ConnectionState;
 }
 
-const Header: React.FC<HeaderProps> = ({ activeTab, theme, connectionState = 'disconnected' }) => {
-  const titles: Record<string, string> = {
-    [DashboardTab.TEAM]:         'Team & Memberships',
-    [DashboardTab.API_KEYS]:     'Manage API Keys',
-  };
-
+const Header: React.FC<HeaderProps> = ({ theme, connectionState = 'disconnected' }) => {
   return (
     <header className="h-16 border-b border-gray-200 dark:border-gray-700 bg-white/80 dark:bg-gray-800/20 backdrop-blur-md px-6 flex items-center justify-between sticky top-0 z-40 transition-colors">
       <div className="flex items-center gap-4">
         <Logo className="text-xl" connectionState={connectionState} theme={theme} />
-        {titles[activeTab] && (
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white whitespace-nowrap">
-            {titles[activeTab]}
-          </h2>
-        )}
       </div>
 
     </header>

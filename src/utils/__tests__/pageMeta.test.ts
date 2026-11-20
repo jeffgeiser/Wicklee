@@ -11,10 +11,8 @@
  * "Local AI inference" survived a copy sweep that changed every visible string
  * on the page.
  *
- * Also guards the public tier names: the pricing page sells Community / Team /
- * Enterprise, and a retired tier ("Pro", "Business") appearing in a public
- * offer is a promise we can no longer honour. Those names stay legal in
- * types.ts, where they identify grandfathered subscriptions.
+ * Also guards against tier names: there are no paid tiers, so "Pro" or
+ * "Business" appearing in a public offer is a promise nobody can honour.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -53,7 +51,7 @@ describe('index.html mirrors pageMeta', () => {
   });
 });
 
-describe('public copy sells only live tiers', () => {
+describe('public copy names no tiers', () => {
   const RETIRED = ['Pro tier', 'Business tier', 'Business free', 'Pro free'];
 
   it('no retired tier is named in page metadata', () => {

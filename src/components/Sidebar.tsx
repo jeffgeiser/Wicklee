@@ -1,8 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { LayoutGrid, Server, Activity, Cpu, Users, Settings, BookOpen, Newspaper, Github, User as UserIcon, Boxes } from 'lucide-react';
-import { ConnectionState, DashboardTab, User, TIER_BADGE } from '../types';
-import { usePermissions } from '../hooks/usePermissions';
-import { IS_AGENT } from '../utils/buildTarget';
+import { LayoutGrid, Server, Activity, Cpu, Settings, BookOpen, Newspaper, Github, User as UserIcon, Boxes } from 'lucide-react';
+import { ConnectionState, DashboardTab, User } from '../types';
 
 interface SidebarProps {
   activeTab: DashboardTab;
@@ -16,7 +14,6 @@ interface SidebarProps {
 }
 
 const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser, onUserChange: _onUserChange, connectionState: _connectionState = 'disconnected', theme: _theme, isLocalHost = false, onNavigate }) => {
-  const permissions = usePermissions(currentUser);
   const [isAvatarMenuOpen, setIsAvatarMenuOpen] = useState(false);
   const avatarMenuRef = useRef<HTMLDivElement>(null);
 
@@ -33,10 +30,9 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
   const items = [
     { id: DashboardTab.OVERVIEW,     icon: LayoutGrid, label: 'Intelligence', show: true },
     { id: DashboardTab.MODELS,       icon: Boxes,      label: 'Models',          show: true },
-    { id: DashboardTab.AI_INSIGHTS,  icon: Cpu,        label: 'Insights',        show: permissions.canRunAIAnalysis },
+    { id: DashboardTab.AI_INSIGHTS,  icon: Cpu,        label: 'Insights',        show: true },
     { id: DashboardTab.NODES,        icon: Server,     label: 'Management',      show: true },
     { id: DashboardTab.TRACES,       icon: Activity,   label: 'Observability',   show: true },
-    { id: DashboardTab.TEAM,         icon: Users,      label: 'Team Management', show: permissions.canManageTeam && !IS_AGENT && !isLocalHost },
   ];
 
   return (
@@ -94,9 +90,6 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
                 <div className="min-w-0">
                   <p className="text-xs font-bold text-gray-900 dark:text-gray-200 truncate">{currentUser.fullName}</p>
                   <p className="text-[10px] text-gray-500 truncate">{currentUser.email}</p>
-                  <span className={`inline-flex items-center px-1.5 py-0.5 mt-0.5 rounded border text-[9px] font-medium ${TIER_BADGE[currentUser.tier ?? 'community'].color}`}>
-                    {TIER_BADGE[currentUser.tier ?? 'community'].label}
-                  </span>
                 </div>
               </div>
 

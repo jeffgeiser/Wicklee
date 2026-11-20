@@ -10,7 +10,6 @@ import MobileTabBar from './components/MobileTabBar';
 import Header from './components/Header';
 import LandingPage from './site/LandingPage';
 import { useSettings } from './hooks/useSettings';
-import { usePermissions } from './hooks/usePermissions';
 import { STATIC_PAGE_META, setPageMeta, normalizePath } from './utils/pageMeta';
 
 const Absent = (() => null) as never;
@@ -46,7 +45,6 @@ const LOCAL_USER: UserType = {
   email: '',
   fullName: '',
   role: 'Owner',
-  isPro: false,
 };
 
 /** Path state shared by both builds: the current pathname plus a client-side navigate. */
@@ -124,7 +122,6 @@ const Dashboard: React.FC = () => {
   const [nodes, setNodes] = useState<NodeAgent[]>([]);
   const theme = 'dark' as const;
   const { settings, savedToast, getNodeSettings, updateFleet, setNodeOverride, clearAllOverridesForField, clearAllNodeOverrides } = useSettings();
-  const permissions = usePermissions(LOCAL_USER);
 
   useEffect(() => {
     void import('./utils/perplexity').then(m => m.loadPerplexityBaseline());
@@ -151,7 +148,6 @@ const Dashboard: React.FC = () => {
           activeInterceptors: [],
           uptime: '—',
           sentinelActive: false,
-          restricted: false,
         }]);
       })
       .catch(() => {});
@@ -188,17 +184,15 @@ const Dashboard: React.FC = () => {
   const renderContent = () => {
     switch (activeTab) {
       case DashboardTab.MODELS:
-        return <ModelsPage nodes={nodes} onNavigateToInsightsPerformance={permissions.canRunAIAnalysis ? () => { setInsightsDeepLink({ tab: 'performance' }); setActiveTab(DashboardTab.AI_INSIGHTS); } : undefined} />;
+        return <ModelsPage nodes={nodes} onNavigateToInsightsPerformance={() => { setInsightsDeepLink({ tab: 'performance' }); setActiveTab(DashboardTab.AI_INSIGHTS); }} />;
       case DashboardTab.NODES:
         return <NodesList nodes={nodes} getNodeSettings={getNodeSettings} onNavigateToSettings={() => setActiveTab(DashboardTab.SETTINGS)} />;
       case DashboardTab.TRACES:
         return <TracesView nodes={nodes} tenantId={LOCAL_TENANTS[0].id} getNodeSettings={getNodeSettings} navParams={observabilityNav} onNavConsumed={() => setObservabilityNav(undefined)} />;
       case DashboardTab.AI_INSIGHTS:
-        return permissions.canRunAIAnalysis ? (
+        return (
           <AIInsights
             nodes={nodes}
-            insightsTier={permissions.insightsTier}
-            canViewInsight={permissions.canViewInsight}
             onNavigateToObservability={(params?: ObservabilityNavParams) => {
               setObservabilityNav(params);
               setActiveTab(DashboardTab.TRACES);
@@ -207,8 +201,6 @@ const Dashboard: React.FC = () => {
             onDeepLinkConsumed={() => setInsightsDeepLink(undefined)}
             onNavigateToModels={() => setActiveTab(DashboardTab.MODELS)}
           />
-        ) : (
-          <div className="text-center py-20 text-gray-500">Unauthorized Access</div>
         );
       case DashboardTab.SETTINGS:
         return <SettingsView

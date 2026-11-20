@@ -16,7 +16,6 @@ const MAX_EVENTS = 50;
 const NO_METRICS: Record<string, SentinelMetrics> = {};
 const NO_LAST_SEEN: Record<string, number> = {};
 const NO_PEAKS: Record<string, number> = {};
-const NO_RESTRICTED: ReadonlySet<string> = new Set();
 
 const FleetStreamContext = createContext<FleetStreamState | null>(null);
 
@@ -43,7 +42,6 @@ export const FleetStreamProvider: React.FC<FleetStreamProviderProps> = ({ childr
     transport:         null,
     lastTelemetryMs:   null,
     connectionState:   'disconnected',
-    restrictedNodeIds: NO_RESTRICTED,
   }), [fleetEvents, addFleetEvent]);
 
   return (

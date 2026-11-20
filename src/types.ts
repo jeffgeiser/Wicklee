@@ -13,7 +13,6 @@ export interface NodeAgent {
   activeInterceptors: string[];
   uptime: string;
   sentinelActive?: boolean;
-  restricted?: boolean;
 }
 
 /** Per-model live metrics for concurrent model tracking. */
@@ -409,36 +408,11 @@ export interface TraceRecord {
 
 export type UserRole = 'Owner' | 'Collaborator' | 'Viewer';
 
-/**
- * Subscription tier stored in Clerk publicMetadata.tier.
- *
- * Sold tiers: Community (free), Team ($200/mo), Enterprise (custom).
- * 'pro' and 'business' are RETAINED, not sold — existing accounts still hold
- * them and the cloud tier gates still honour them. Keep both in this union and
- * in every tier-rank table, or those accounts silently lose access (see the
- * tierRank map in MetricsHistoryChart for the bug this caused).
- */
-export type SubscriptionTier = 'community' | 'pro' | 'team_10' | 'team' | 'business' | 'enterprise';
-
-
-/**
- * Insights capability level derived from SubscriptionTier.
- * Controls which insight cards render vs. show locked shells.
- *   live_session  = Community  (real-time only, no history)
- *   persistent    = Pro        (7-day history, persistent cards)
- *   trend         = Team       (90-day history, trend analysis)
- *   predictive    = Enterprise (custom scope, compliance artifacts)
- */
-export type InsightsTier = 'live_session' | 'persistent' | 'trend' | 'predictive';
-
 export interface User {
   id: string;
   email: string;
   fullName: string;
   role: UserRole;
-  isPro?: boolean;
-  /** Subscription tier from Clerk publicMetadata.tier — defaults to 'community' */
-  tier?: SubscriptionTier;
 }
 
 export interface Tenant {
@@ -455,10 +429,9 @@ export interface FleetNode {
   node_id: string;
   last_seen_ms: number;
   metrics: SentinelMetrics | null;
-  restricted?: boolean;
-  /** Custom display name set by Pro+ users. Takes priority over hostname. */
+  /** Custom display name. Takes priority over hostname. */
   display_name?: string | null;
-  /** Comma-separated node tags (Pro+, set in Settings → Node Configuration). */
+  /** Comma-separated node tags. */
   tags?: string | null;
 }
 
@@ -468,8 +441,6 @@ export interface FleetStreamState {
   allNodeMetrics: Record<string, SentinelMetrics>;
   /** Per-node last_seen_ms from the SSE stream. */
   lastSeenMsMap: Record<string, number>;
-  /** Set of node_ids that are restricted (beyond the free tier limit). */
-  restrictedNodeIds: ReadonlySet<string>;
   /**
    * Session-scoped per-node peak tok/s high-water mark.
    * Resets on model swap so the baseline stays relevant to the loaded model.
@@ -497,8 +468,6 @@ export enum DashboardTab {
   NODES = 'nodes',
   TRACES = 'traces',
   AI_INSIGHTS = 'ai_insights',
-  TEAM = 'team',
-  API_KEYS = 'api_keys',
   SETTINGS = 'settings',
 }
 
@@ -560,12 +529,3 @@ export interface HistoryResponse {
   to_ms:      number;
   samples:    HistorySample[];
 }
-
-export const TIER_BADGE: Record<SubscriptionTier, { label: string; color: string }> = {
-  community:  { label: 'Community',  color: 'text-gray-400  bg-gray-500/10  border-gray-500/20'  },
-  pro:        { label: 'Pro',        color: 'text-indigo-400 bg-indigo-500/10 border-indigo-500/20' },
-  team_10:    { label: 'Team · 10',  color: 'text-blue-400  bg-blue-500/10  border-blue-500/20'  },
-  team:       { label: 'Team',       color: 'text-blue-400  bg-blue-500/10  border-blue-500/20'  },
-  business:   { label: 'Business',  color: 'text-teal-400  bg-teal-500/10  border-teal-500/20'  },
-  enterprise: { label: 'Enterprise', color: 'text-amber-400 bg-amber-500/10 border-amber-500/20' },
-};

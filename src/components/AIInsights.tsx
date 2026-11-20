@@ -25,7 +25,7 @@ import {
   Activity, CheckCircle, ChevronDown, History, Clock,
 } from 'lucide-react';
 
-import { NodeAgent, SentinelMetrics, InsightsTier, FleetEvent, SubscriptionTier, ObservabilityNavParams } from '../types';
+import { NodeAgent, SentinelMetrics, FleetEvent, ObservabilityNavParams } from '../types';
 import { useFleetStream } from '../contexts/FleetStreamContext';
 
 import { computeWES, computeRawWES, thermalCostPct, wesColorClass } from '../utils/wes';
@@ -50,8 +50,6 @@ import IdleResourceCard    from './insights/tier2/IdleResourceCard';
 import ModelFitAnalysis from './insights/tier2/ModelFitAnalysis';
 
 import InsightsGlobalStatusRail, { FiringAlert } from './insights/InsightsGlobalStatusRail';
-import InsightsLiteCard   from './insights/InsightsLiteCard';
-import InsightsTeaseCard  from './insights/InsightsTeaseCard';
 import HexHive from './shared/HexHive';
 import type { HexHiveRow } from './shared/HexHive';
 import AccordionObservationCard from './insights/AccordionObservationCard';
@@ -335,15 +333,7 @@ const InsightsTabBar: React.FC<{
 
 interface AIInsightsProps {
   nodes: NodeAgent[];
-  insightsTier: InsightsTier;
-  canViewInsight: (id: number) => boolean;
   onFleetEvent?: (event: FleetEvent) => void;
-  /** Cloud session token getter — used for WES history fetch (cloud/Mission Control only). */
-  getToken?: () => Promise<string | null>;
-  /** Days of retained history the user's tier unlocks. */
-  historyDays?: number;
-  /** Subscription tier for history range gating. */
-  subscriptionTier?: SubscriptionTier;
   /**
    * Called when the operator clicks a "View source →" link in the Triage tab.
    * Should navigate to the Observability tab's Metric History panel.
@@ -365,9 +355,6 @@ interface AIInsightsProps {
   /** Navigate to the Models tab — used by model-placement cards (e.g. the
    *  Migration Advisor's "view what's loaded" handoff). */
   onNavigateToModels?: () => void;
-  /** Was /pricing. Left unset since the page is gone, which makes the
-   *  upgrade CTAs on the frozen cloud cards inert rather than broken. */
-  onNavigateToPricing?: () => void;
 }
 
 type ProfileMetric = 'ttft_ms' | 'kv_cache_pct' | 'queue_depth' | 'thermal_penalty' | 'power_w';
@@ -786,11 +773,9 @@ const LocalPerformanceHistory: React.FC<{ nodeId: string }> = ({ nodeId }) => {
 
 const AIInsights: React.FC<AIInsightsProps> = ({
   nodes,
-  canViewInsight,
   onFleetEvent,
   deepLink,
   onDeepLinkConsumed,
-  onNavigateToPricing,
 }) => {
 
   const [localSentinel, setLocalSentinel] = useState<SentinelMetrics | null>(null);
@@ -1685,7 +1670,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                     lastFiredMs={lastEvictionFiredRef.current} lastFiredDetail={lastEvictionDetailRef.current} />
                 )}
 
-                {canViewInsight(6) ? (
+                {(
                   isLocalHost ? (
                     tier2IdleActive && m ? (
                       <div id="insight-idle-resource">
@@ -1699,12 +1684,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                     <Section2NominalRow icon={<Zap className="w-4 h-4" />} label="Idle Resource Cost" status="No idle overhead detected"
                       lastFiredMs={lastIdleFiredRef.current} lastFiredDetail={lastIdleDetailRef.current} />
                   )
-                ) : (
-                  <Section2NominalRow icon={<Zap className="w-4 h-4" />} label="Idle Resource Cost"
-                    status={(() => {
-                      const w = effectiveNodes.reduce<number | null>((sum, n) => { const nw = getNodePowerW(n); return nw != null ? (sum ?? 0) + nw : sum; }, null);
-                      return w != null ? `${w.toFixed(0)}W fleet draw · monitoring` : 'Monitoring idle overhead';
-                    })()} />
                 )}
               </div>
 
@@ -1773,7 +1752,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
 
           {activeTab === 'performance' && (
             <>
-              {canViewInsight(10) && effectiveNodes.length > 0 ? (
+              {effectiveNodes.length > 0 ? (
                 <div id="model-fit-analysis">
                   <ModelFitAnalysis
                     node={effectiveNodes[0]}
@@ -1783,7 +1762,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                     getNodeSettings={getNodeSettings}
                   />
                 </div>
-              ) : canViewInsight(10) ? (
+              ) : (
                 <div className="bg-gray-800 border border-gray-700 rounded-2xl p-4 flex items-center gap-3">
                   <Cpu className="w-3.5 h-3.5 text-gray-600 shrink-0" />
                   <div>
@@ -1791,19 +1770,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                     <p className="text-xs text-gray-700 mt-0.5">No model loaded — load a model to see silicon fit analysis.</p>
                   </div>
                 </div>
-              ) : (
-                <InsightsTeaseCard
-                  onUpgradeClick={onNavigateToPricing}
-                  title="Silicon Fit Audit"
-                  icon={<Cpu className="w-3.5 h-3.5" />}
-                  tierRequired="team"
-                  upgradeCopy="View detailed benchmarks on Team →"
-                  liveContent={
-                    <p className="text-xs text-gray-600">
-                      Live efficiency metrics available — load a model to see silicon fit analysis.
-                    </p>
-                  }
-                />
               )}
 
               {isLocalHost && <LocalPerformanceHistory nodeId={effectiveNodes[0]?.node_id ?? ''} />}
@@ -1875,7 +1841,7 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                       );
                     })()}
                   </div>
-                ) : canViewInsight(7) ? (
+                ) : (
                   <div className="bg-gray-800 border border-gray-700 rounded-2xl p-4 flex flex-col gap-3">
                     <div className="flex items-center gap-2">
                       <BarChart2 className="w-3.5 h-3.5 text-gray-500 shrink-0" />
@@ -1883,16 +1849,6 @@ const AIInsights: React.FC<AIInsightsProps> = ({
                     </div>
                     <WesLeaderboardLite nodes={effectiveNodes} />
                   </div>
-                ) : (
-                  <InsightsLiteCard
-                    onUpgradeClick={onNavigateToPricing}
-                    title="WES Leaderboard"
-                    icon={<BarChart2 className="w-3.5 h-3.5" />}
-                    tierRequired="team"
-                    upgradeCopy="Unlock sparklines & peer comparison on Team →"
-                  >
-                    <WesLeaderboardLite nodes={effectiveNodes} />
-                  </InsightsLiteCard>
                 )}
 
                 <div className="bg-gray-800 border border-gray-700 rounded-2xl p-4 flex flex-col gap-3">

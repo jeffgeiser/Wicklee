@@ -20,7 +20,6 @@ export type ActionId =
   | 'switch_quantization'
   | 'check_power_limits';
 
-type PatternTier = 'community' | 'pro' | 'team';
 export type PatternConfidence = 'building' | 'moderate' | 'high';
 
 interface PatternAction {
@@ -70,8 +69,6 @@ export interface DetectedInsight {
   confidence: PatternConfidence;
   /** 0.0–1.0 for the progress bar. */
   confidenceRatio: number;
-  /** Minimum subscription tier required to see this insight. */
-  tier: PatternTier;
   /** Actions the operator can take — rendered as copy buttons. */
   actions: PatternAction[];
   /** Unix ms when the pattern first fired in this session. */
