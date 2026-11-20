@@ -3,7 +3,7 @@
 > The evidence layer for self-hosted AI inference.
 > This document contains everything an AI agent needs to integrate with Wicklee.
 > v0.15.0 is the `/v1` diagnostic surface on one host: what is loaded, what will run now, what is wrong and how to verify a fix. No account, no paid plans.
-> The hosted fleet backend described below still runs, but it serves the product that has been withdrawn and is being shut down. The agent's localhost surface is the supported one.
+> The hosted fleet backend was shut down on 2026-11-20. `wicklee.dev` serves only the site, the install scripts and these discovery files as static files — no API, no MCP endpoint, no Prometheus endpoint, no telemetry. Everything below describes the agent's own localhost surface.
 
 ---
 
@@ -425,211 +425,11 @@ MCP server discovery manifest. Returns server name, version, transport, and capa
 
 ---
 
-## Fleet API v1
+## The hosted backend is gone
 
-Base URL: `https://wicklee.dev/api/v1`
-Auth: `X-API-Key: wk_live_...` header. Create keys in Settings > API Keys.
-
-### GET /api/v1/fleet
-All nodes with full MetricsPayload.
-```json
-{
-  "nodes": [{
-    "node_id": "WK-XXXX",
-    "hostname": "macmini.local",
-    "online": true,
-    "last_seen_ms": 1774622475195,
-    "metrics": { ...full MetricsPayload... }
-  }]
-}
-```
-
-### GET /api/v1/fleet/wes
-WES scores for all nodes, ranked.
-```json
-{
-  "nodes": [
-    { "node_id": "WK-XXXX", "online": true, "wes": 15.0 },
-    { "node_id": "WK-99E9", "online": true, "wes": 3.2 }
-  ]
-}
-```
-
-### GET /api/v1/nodes/{node_id}
-Single node deep dive with full MetricsPayload.
-```json
-{
-  "node_id": "WK-XXXX",
-  "hostname": "macmini.local",
-  "online": true,
-  "last_seen_ms": 1774622475195,
-  "metrics": { ...full MetricsPayload... }
-}
-```
-
-### GET /api/v1/route/best
-Routing recommendation. Returns two candidates: latency (highest tok/s) and efficiency (highest WES).
-Optional `?model=qwen2.5:7b` filters to nodes with the target model loaded and uses per-model WES.
-```json
-{
-  "latency":    { "node": "WK-99E9", "tok_s": 31.9, "wes": 3.3,  "reason": "Highest throughput" },
-  "efficiency": { "node": "WK-XXXX", "tok_s": 19.5, "wes": 15.0, "reason": "Highest WES" },
-  "default":    "efficiency"
-}
-```
-
-### GET /api/v1/models/discover
-Model discovery:
-- **Browse**: `?search=llama&limit=20` — catalog search with fit scores
-- **Simulate**: `?simulate_hw=nvidia_4090` — score models against hardware you don't own. Profiles: m4, m4_pro_24gb, m4_max_36gb, m4_max_64gb, m4_ultra_128gb, nvidia_4060, nvidia_4070, nvidia_4080, nvidia_4090, nvidia_a100_40gb, nvidia_a100_80gb, nvidia_h100. Custom: `?simulate_vram_mb=24576&simulate_power_w=350`
-- **Fleet match**: `?fleet=true&model_id=bartowski/Llama-3.1-70B-GGUF` — which fleet nodes can run this model?
-```json
-{ "models": [{ "model_id": "bartowski/Llama-3.1-8B-GGUF", "downloads": 245000, "variants": [{ "quant": "Q4_K_M", "file_size_mb": 4920, "vram_required_mb": 5200, "fit_score": 92, "fit_label": "Excellent" }] }], "simulation": { "hardware": "nvidia_4090", "vram_mb": 24576, "power_w": 450.0 } }
-```
-
-### GET /api/v1/fleet/model-comparison?hours=168
-Fleet-wide per-model rollup over the past N hours. Reads `metrics_5min`
-(rollup table) because the long 7-day window is too heavy on `metrics_raw`
-30-second granularity. TTFT lives in `metrics_raw` only, so the handler
-runs a side query over the last 24 hours of raw data and joins it in.
-Window: 1–720 hours (30 days). Returns one row per `ollama_active_model`.
-```json
-{
-  "models": [
-    {
-      "model": "llama3.1:70b",
-      "hours_active": 18.3,
-      "avg_tok_s": 22.5,
-      "avg_watts": 95.0,
-      "wes": 0.24,
-      "avg_ttft_ms": 245,
-      "cost_per_hour": 0.0152,
-      "total_cost": 0.278,
-      "sample_count": 219
-    }
-  ]
-}
-```
-Cost = `avg_watts × hours_active × $0.16 / 1000`. The kWh rate is a const
-in the cloud handler today (`DEFAULT_KWH_RATE_USD = 0.16`); the per-node
-`kwh_rate` setting is honored by the localhost equivalents but not yet
-plumbed through here. Empty array until new telemetry is ingested under
-the v0.9.x schema (the `ollama_active_model` column was added in this sprint).
-
-### GET /api/v1/fleet/model-switches?hours=24
-Cross-node model swap events. Uses Postgres `LAG()` window function over
-`metrics_raw` partitioned by `node_id` to detect transitions where
-`ollama_active_model` changes. Window: 1–168 hours, capped at 200 rows.
-```json
-{
-  "swaps": [
-    { "ts_ms": 1774621630223, "node_id": "WK-XXXX", "from_model": "llama3.1:70b", "to_model": "phi3:mini", "gap_ms": 3200 }
-  ],
-  "total_swaps": 14,
-  "total_gap_ms": 480000,
-  "total_gap_minutes": 8.0
-}
-```
-`gap_ms` is the time between consecutive `metrics_raw` samples — a proxy
-for the visible swap duration. Swaps shorter than the ~2 s push cadence round to a single sample
-interval.
-
-### GET /api/v1/fleet/chargeback?days=30&kwh_rate=0.16
-Chargeback/showback (Clerk JWT). Cost + token attribution by team tag, model, and node, plus a daily trend — from MEASURED energy (Σ watts × each sample's real duration at the given rate; 5-min rollup UNION raw trailing-day tail, same conventions as cost-by-model) and tokens estimated from sampled throughput while live (tok/s × seconds inferring). `usd_per_mtok` is the headline: $ per million tokens, the number requiring watts AND tokens in one store. Tag rows overlap when a node carries multiple tags (showback, not double-billing); untagged nodes fold into `(untagged)`. Window 1–90 days. `&format=csv&group=tag|model|node|daily` downloads one grouping as formula-injection-hardened CSV, audited as `chargeback.exported`.
-
-### GET /api/v1/fleet/idle-waste?days=30&kwh_rate=0.16
-Idle-waste & right-sizing report (Clerk JWT). Phantom load = a model held in memory while the node is NOT inferring — power burned for nothing. Idle/active energy split uses per-sample `inference_state` on raw rows and `inference_duty_pct` on 5-min rollups (same energy conventions as chargeback: each sample weighted by its real duration, ~2 s apart; idle = total − live). Actions: `unload_idle_model` per node×model (with `recovers_usd_month`, normalized so 7d and 30d reports advise consistently) and `consolidate` for nodes inferring <10% of the window. Quant-swap savings are a documented follow-up (needs agent Quant Sweet Spot data on the wire).
-```json
-{ "days": 30, "totals": { "phantom_cost_usd": 4.82, "baseline_idle_cost_usd": 1.10, "active_cost_usd": 9.4, "idle_pct_of_energy": 37.2, "projected_monthly_recovery_usd": 4.6 }, "by_node": [{ "node_id": "WK-C133", "idle_hours": 512.3, "duty_pct": 3.1, "phantom_cost_usd": 3.9 }], "actions": [{ "kind": "unload_idle_model", "node_id": "WK-C133", "model": "glm-4.7-flash:latest", "idle_hours": 480.0, "recovers_usd_month": 3.75, "detail": "glm-4.7-flash:latest sat loaded but idle for 480h on WK-C133 — unload when idle (or set a keep-alive timeout) to recover ~$3.75/mo" }] }
-```
-
-### GET/PUT /api/digest
-Weekly idle-waste digest settings (Clerk JWT). PUT `{"email","enabled"}` — one email per week via Resend with idle burn, energy share, and the top recovery actions. One setting per tenant (org members share it); `last_sent_ms` advances only on successful delivery. Changes audited as `digest.updated`.
-
-### GET /api/v1/fleet/capacity?target_tok_s=200&kwh_rate=0.16&days=7
-Fleet Capacity Planner with procurement scenarios (Clerk JWT). Observed per-node tok/s + watts over the window (5-min rollups UNION raw trailing day), nodes classified Apple vs NVIDIA from their live power source, and a median measured tok/W per class. Scenarios answer "reach `target_tok_s` sustained": for each of 12 hardware profiles (M4 → H100), how many units close the gap and what that costs per day at 24h duty — priced from YOUR fleet's measured efficiency, never vendor benchmarks. Each scenario carries a `basis` string naming the efficiency source. Default target = 2× current sustained. Scenarios needing >16 units of one profile are omitted.
-```json
-{ "target_tok_s": 200, "target_met": false, "fleet": { "sustained_tok_s": 45.2, "total_watts": 74.5, "cost_per_day": 0.29 }, "scenarios": [{ "profile": "nvidia_4090", "label": "RTX 4090", "units": 2, "unit_tok_s": 81.0, "est_added_tok_s": 162.0, "est_cost_per_day": 3.46, "basis": "your NVIDIA nodes' measured efficiency (0.18 tok/W)" }] }
-```
-
-### GET /api/v1/fleet/migration-advisor
-Cross-node model migration (Clerk JWT). Current placement from the live cache (model identity across Ollama/vLLM/llama.cpp, live WES, free memory — NVIDIA VRAM or Apple available unified memory) compared against each peer's 7-day demonstrated WES (5-min rollups UNION raw trailing day). Recommends moves with ≥20% estimated gain where the model fits with 1.2× headroom (unknown footprint assumes 8 GB). Top 10 by gain.
-```json
-{ "recommendations": [{ "model": "llama3.1:70b", "from_node": "WK-A1B2", "to_node": "WK-C3D4", "from_wes": 8.2, "to_wes_7d": 12.1, "est_gain_pct": 47, "to_free_mem_mb": 49152 }] }
-```
-```json
-{ "days": 30, "kwh_rate": 0.16,
-  "totals": { "key": "total", "energy_kwh": 42.1, "cost_usd": 6.74, "tokens_m": 812.4, "usd_per_mtok": 0.0083, "hours_covered": 1440.0 },
-  "by_tag":   [{ "key": "env:prod", "energy_kwh": 30.2, "cost_usd": 4.83, "tokens_m": 700.1, "usd_per_mtok": 0.0069, "hours_covered": 980.0 }],
-  "by_model": [{ "key": "llama3.1:8b", "...": "..." }],
-  "by_node":  [{ "key": "WK-1a2b3c4d", "...": "..." }],
-  "daily":    [{ "key": "2026-07-01", "...": "..." }] }
-```
-
-### GET /api/v1/fleet/cost-by-model?hours=24
-Fleet-wide per-model cost rollup. Uses `metrics_raw` (not the 5-min
-rollup) because 24h × ~12 nodes is manageable at 30s granularity.
-Window: 1–168 hours. Cost = `avg_watts × hours_active × $0.16 / 1000`.
-```json
-{
-  "models": [
-    { "model": "llama3.1:70b", "hours_active": 6.2, "avg_watts": 95.0, "cost_usd": 0.0942, "tok_s_avg": 22.5, "sample_count": 744 }
-  ],
-  "total_cost_usd": 0.221
-}
-```
-
-### GET /api/v1/insights/latest
-Fleet intelligence snapshot.
-```json
-{
-  "generated_at_ms": 1774624251478,
-  "fleet": { "online_count": 3, "total_count": 3, "avg_wes": 9.9, "fleet_tok_s": 79.0 },
-  "findings": [{ "node_id": "WK-99E9", "hostname": "spark-c559", "severity": "low", "pattern": "wes_below_baseline", "title": "WES below fleet average", "detail": "WES 3.3 vs fleet average 9.9", "value": 3.3, "unit": "WES" }]
-}
-```
-
-### POST /api/v1/keys
-Create a new API key. Returns the raw key once (prefix `wk_live_`). Stored as SHA-256 hash. Body: `{ "name": "...", "scope": "personal" | "org" }` (scope defaults to personal). **Org keys** scope every V1 endpoint (and Prometheus `/metrics`) to the org's whole fleet — minting requires an active org session AND the org Admin role. Personal keys see only your personal nodes.
-```json
-{ "key": "wk_live_abc123...", "key_id": "uuid", "created_at_ms": 1774622475195, "scope": "org" }
-```
-
-### GET /api/v1/keys
-List API keys — your personal keys plus the active org's keys (org keys are visible to every member; each entry carries `scope`). Hash is never exposed.
-
-### DELETE /api/v1/keys/{key_id}
-Revoke an API key. Takes effect immediately. Personal keys: owner only. Org keys: any Admin of the key's org.
-
-### GET /api/audit-log
-Immutable, append-only audit trail of sensitive fleet operations. Clerk JWT auth. Org members see the whole org-scoped trail. Query params: `limit` (default 50, max 200), `before` (ts_ms cursor for pagination), `action` (exact-match filter). Recorded actions: `node.paired`, `node.removed`, `node.updated`, `alert_rule.created`, `alert_channel.created`, `webhook.created`, `api_key.created`, `api_key.deleted`, `stream_tokens.revoked`.
-```json
-{
-  "entries": [
-    { "id": 42, "ts": 1774624251478, "user_id": "user_abc", "org_id": "org_xyz",
-      "actor_email": "ops@acme.com", "action": "node.removed", "target": "WK-99E9", "details": {} }
-  ],
-  "next_before": 1774624251478
-}
-```
-
-### GET /api/audit-log/export
-Full-history audit export. Params: `format=csv|json` (default json), `action` (exact-match filter), `from`/`to` (ts_ms range). Chronological, capped at 100k rows, served with `Content-Disposition: attachment`. CSV is RFC-4180 quoted with spreadsheet formula-injection hardening (`= + - @` prefixed cells are neutralized). Every export is itself audited as `audit_log.exported`. Retention: unlimited — audit entries are never pruned.
-
-### GET/PUT/DELETE /api/audit-log/drain
-SIEM drain (PUT/DELETE are org-Admin-only). One drain per tenant. PUT `{ "url": "https://..." }` returns the HMAC secret ONCE (re-PUT rotates it) and starts the delivery cursor at the current max audit id — the drain streams NEW events; use the export endpoint for backfill. A background loop ships batches (≤500 events) every 60s as JSON, HMAC-SHA256 signed via `X-Wicklee-Signature: sha256=<hex>` (same scheme as threshold webhooks). Auto-disables after 20 consecutive delivery failures; re-PUT re-enables. Drain config changes are audited (`audit_drain.created` / `audit_drain.deleted`).
-```json
-{
-  "type": "audit.batch",
-  "tenant_id": "org_xyz",
-  "events": [
-    { "id": 43, "ts": 1774624299001, "user_id": "user_abc", "org_id": "org_xyz",
-      "actor_email": "ops@acme.com", "action": "alert_rule.created", "target": "rule-uuid", "details": { "event_type": "thermal_critical" } }
-  ]
-}
-```
-
----
+The hosted fleet backend was shut down on 2026-11-20. These routes no longer exist at
+`wicklee.dev`, which now serves static files only. If you run the control plane yourself,
+its routes are yours and not these.
 
 ## MetricsPayload Schema
 
@@ -839,7 +639,7 @@ Evaluated by the cloud backend every 60 seconds.
 
 There are no paid plans today. The tiers introduced earlier are withdrawn
 pending a monetization plan grounded in actual usage (`docs/STRATEGY.md` §14),
-and the payment integration is being shut down with the rest of the hosted
+and the payment integration was removed with the rest of the hosted
 backend. Everything the agent does is open source under Apache 2.0 and needs no
 account.
 

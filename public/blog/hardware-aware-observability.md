@@ -85,7 +85,7 @@ curl -fsSL https://wicklee.dev/install.sh | bash
 
 The dashboard opens at `http://localhost:7700`. WES, thermal state, per-model VRAM, inference state machine, and multi-runtime detection are all in the agent, which is free and needs no account.
 
-For multi-node fleets, the cloud dashboard at `wicklee.dev` aggregates everything across paired nodes, and an OpenTelemetry exporter and a Prometheus scrape endpoint feed an existing observability stack. (Written in 2026 against the hosted fleet view, which is being shut down. The agent's own localhost surface is what a current release gives you.)
+For multi-node fleets, the cloud dashboard at `wicklee.dev` aggregates everything across paired nodes, and an OpenTelemetry exporter and a Prometheus scrape endpoint feed an existing observability stack. (Written in 2026 against the hosted fleet view, which was shut down on 2026-11-20. The agent's own localhost surface is what a current release gives you.)
 
 ---
 

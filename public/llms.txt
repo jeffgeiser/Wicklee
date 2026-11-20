@@ -147,50 +147,13 @@ person consents.
 - `wicklee://node/metrics` — Live MetricsPayload JSON
 - `wicklee://node/thermal` — Thermal state + WES penalty values
 
-## Cloud MCP Server (Bearer auth)
+## The hosted backend is gone
 
-**The hosted fleet backend is being shut down.** It still runs today, and the
-two sections below describe it accurately, but it serves the product that has
-been withdrawn and is not where new work goes. The agent's own localhost
-surface above is the supported one.
-
-`POST wicklee.dev/mcp` — fleet-aggregated MCP. 9 tools:
-- `get_fleet_status` — all nodes with metrics + WES
-- `get_fleet_wes` — compact WES scores
-- `get_node_detail` — full metrics for a specific node
-- `get_best_route` — routing recommendation by throughput/efficiency
-- `get_fleet_insights` — fleet health summary + observation count
-- `get_fleet_observations` — active/resolved observations
-- `get_inference_profile` — correlated profiler timeline
-- `explain_slowdown` — root cause analysis for slow requests
-- `get_fleet_model_fit` — score a HuggingFace GGUF against every online node
-
-## Fleet API v1 (X-API-Key auth)
-
-Base URL: `https://wicklee.dev/api/v1`
-
-- `GET /api/v1/fleet` — All nodes with full MetricsPayload
-- `GET /api/v1/fleet/wes` — WES scores ranked
-- `GET /api/v1/nodes/{id}` — Single node deep dive
-- `GET /api/v1/route/best` — Routing recommendation (latency or efficiency). `?model=qwen2.5:7b` for per-model routing
-- `GET /api/v1/models/discover` — Model discovery: browse (`?search=`), simulate (`?simulate_hw=nvidia_4090`), fleet match (`?fleet=true&model_id=X`)
-- `GET /api/v1/fleet/model-comparison?hours=168` — fleet-wide per-model rollup (WES, tok/s, watts, TTFT, cost). Reads `metrics_5min`. 1–720 hour window.
-- `GET /api/v1/fleet/model-switches?hours=24` — cross-node model swap events via LAG window function over `metrics_raw`. 1–168 hour window, capped at 200 rows.
-- `GET /api/v1/fleet/cost-by-model?hours=24` — fleet-wide per-model power cost at $0.16/kWh default. 1–168 hour window.
-- `GET /api/v1/fleet/chargeback?days=30` — Chargeback/showback (JWT): cost + $/1M-token attribution by team tag / model / node + daily trend, from measured watts × sampled throughput. `&format=csv&group=` for finance export (audited).
-- `GET /api/v1/fleet/idle-waste?days=30` — Idle-waste & right-sizing report (JWT): phantom-load cost (models loaded while not inferring, from per-sample inference_state + rollup duty%) with per-node recovery actions (unload idle model, consolidate low-duty nodes) and projected $/mo recovery. Weekly email digest opt-in via `GET/PUT /api/digest` (Resend, audited).
-- `GET /api/v1/fleet/capacity?target_tok_s=200` — Capacity planner with procurement scenarios (JWT): "reach 200 tok/s: 2× RTX 4090 vs 1× H100" priced from the fleet's OWN measured tok/W per hardware class (Apple vs NVIDIA), never vendor benchmarks. Each scenario states its estimate basis. Default target = 2× current sustained.
-- `GET /api/v1/fleet/migration-advisor` — Cross-node model migration (JWT): compares each actively-inferring node's live WES against peers' 7-day demonstrated WES + free memory; recommends moves with ≥20% estimated gain and 1.2× memory headroom.
-- `GET /api/v1/insights/latest` — Fleet intelligence snapshot
-- `POST /api/v1/keys` — Create API key (`scope: personal|org` — org keys see the whole org fleet; org-Admin-only to mint)
-- `GET /api/v1/keys` — List API keys (personal + active org's, with scope)
-- `DELETE /api/v1/keys/{id}` — Revoke API key (personal: owner; org: org Admins)
-- `GET /api/audit-log` — Immutable audit trail (Clerk JWT): sensitive-op events (node.paired/removed/updated, alert_rule.created, alert_channel.created, webhook.created, api_key.created/deleted, stream_tokens.revoked, audit_log.exported, audit_drain.created/deleted). Params: limit/before/action. Org-scoped, append-only.
-- `GET /api/audit-log/export?format=csv|json` — Full-history audit export, formula-injection-hardened CSV, ≤100k rows, itself audited.
-- `GET/POST /api/model-policy`, `DELETE /api/model-policy/{id}` — Model governance: allow-list of approved models, fleet-wide (`tag` omitted) or scoped to a node tag. Governance is ACTIVE ONLY for scopes with at least one entry — an empty list governs nothing rather than blocking everything. Matching is exact/case-insensitive with a trailing-`*` prefix form (`llama3.1:8b*` admits quant variants); a bare `*` is rejected. Writes are Admin-only and audited (`model_policy.created/deleted`).
-- `GET /api/model-policy/violations?limit=50` — recorded violations, newest first. Detected in the telemetry push path on the frame an unapproved model appears; fires once per (node, model) and resets when the node returns to an approved model. Violations are NOT in the audit log (that table is actor-keyed and there is no acting user) so they are not carried by the SIEM drain; they land in `model_policy_violations` and the node event feed as `model_policy_violation`. Detection only — nothing blocks a model from loading.
-- `GET/PUT/DELETE /api/audit-log/drain` — SIEM drain (Admin to configure): streams new audit events to your HTTPS endpoint in HMAC-signed batches within ~1 min; auto-disables after 20 consecutive failures.
-- `GET /metrics` — Prometheus scrape endpoint on the cloud (`https://wicklee.dev/metrics`, not the agent; X-API-Key auth). Seven gauges labelled `node_id`/`hostname`: wicklee_wes_score, wicklee_inference_tokens_per_second, wicklee_power_watts, wicklee_thermal_penalty, wicklee_gpu_utilization, wicklee_memory_pressure, wicklee_inference_ttft_ms. Accepts the key as `X-API-Key` OR `Authorization: Bearer`, so stock Prometheus `authorization` scrape config works. Series are omitted when unreadable, so gaps mean idle (WES needs throughput AND power AND thermal penalty together) and a `count()` is nodes-reporting, not fleet inventory. Prebuilt Grafana dashboard: `deploy/grafana/wicklee-fleet.json`; setup in docs/GRAFANA.md
+The hosted fleet backend was shut down on 2026-11-20. `wicklee.dev` now serves only the
+site, the install scripts and these discovery files as static files — it runs no API, no
+MCP endpoint and no Prometheus endpoint, and holds no telemetry. Everything Wicklee does
+is on the agent's own localhost surface, documented above. If you run the control plane
+yourself, its routes are yours and not these.
 
 ## Multi-Model Monitoring
 

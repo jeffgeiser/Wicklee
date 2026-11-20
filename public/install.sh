@@ -161,15 +161,6 @@ fi
 INSTALLED_VERSION="$("${USER_INSTALL_PATH}" --version 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
 VERSION_LABEL="${INSTALLED_VERSION:-${RELEASE_TAG}}"
 
-# ── Anonymous install telemetry ───────────────────────────────────────────────
-NVIDIA_FLAG="$NVIDIA_PRESENT"
-UPGRADE_FLAG="false"
-[[ "$EXISTING_BINARY" == "true" ]] && UPGRADE_FLAG="true"
-curl -sf -X POST "https://wicklee.dev/api/telemetry/install" \
-  -H "Content-Type: application/json" \
-  -d "{\"os\":\"${OS_TAG}\",\"arch\":\"${ARCH_TAG}\",\"version\":\"${VERSION_LABEL}\",\"nvidia\":${NVIDIA_FLAG},\"upgrade\":${UPGRADE_FLAG}}" \
-  >/dev/null 2>&1 &
-
 # ── Success ───────────────────────────────────────────────────────────────────
 
 echo ""
