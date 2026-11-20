@@ -763,32 +763,13 @@ curl "http://localhost:7700/api/history?node_id=$NODE_ID" | jq '.samples | lengt
 
 ---
 
-## Fleet API v1
+## The hosted backend is gone
 
-**The hosted fleet backend is being shut down.** It still runs, and this
-section describes it accurately, but it serves the product that has been
-withdrawn: there are no paid plans and nothing here is tier-gated any more. The
-localhost agent above is the supported surface.
-
-Base URL: `https://wicklee.dev/api/v1`
-Auth: `X-API-Key: wk_live_...` header.
-
-**Key scopes:** keys are **personal** (see only your own nodes) or **org-wide** (see the whole organization fleet and see the whole organization fleet — for CI and automation that shouldn't ride on an individual's account). Org keys are minted and revoked by org Admins (`POST /api/v1/keys` with `"scope": "org"`); every member can see them in the key list. All key lifecycle events are captured in the audit log.
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/v1/fleet | All nodes with full MetricsPayload |
-| GET | /api/v1/fleet/wes | WES scores ranked |
-| GET | /api/v1/nodes/{id} | Single node deep dive |
-| GET | /api/v1/route/best | Routing recommendation |
-| GET | /api/v1/fleet/model-comparison?hours=168 | Fleet-wide per-model rollup (WES, tok/s, watts, TTFT, cost). Reads `metrics_5min`. 1–720h window. |
-| GET | /api/v1/fleet/model-switches?hours=24 | Cross-node model swap events via LAG over `metrics_raw`. 1–168h, capped at 200 rows. |
-| GET | /api/v1/fleet/cost-by-model?hours=24 | Fleet-wide per-model power cost at $0.16/kWh. 1–168h. |
-| GET | /api/v1/insights/latest | Fleet intelligence snapshot |
-| GET | /metrics | Prometheus scrape endpoint |
-| GET | /api/otel/config | OTel export configuration |
-| PUT | /api/otel/config | Update OTel settings |
----
+The hosted fleet backend was shut down on 2026-11-20. `wicklee.dev` now serves only the
+site, the install scripts and these discovery files as static files — it runs no API, no
+MCP endpoint and no Prometheus endpoint, and holds no telemetry. Everything Wicklee does
+is on the agent's own localhost surface, documented above. If you run the control plane
+yourself, its routes are yours and not these.
 
 ## Teams & Organizations
 
@@ -1145,7 +1126,11 @@ it.
 
 ## OpenTelemetry & Prometheus
 
-Both are cloud-side, and the hosted backend is being shut down.
+Both were cloud-side only, and the hosted backend was shut down on 2026-11-20, so neither
+is available at `wicklee.dev` any more. The agent itself implements neither: it has no OTLP
+exporter and no Prometheus scrape endpoint — `GET /api/metrics` is an SSE stream, and
+`GET /api/metrics/snapshot` returns the latest frame as JSON. The sections below describe
+what the withdrawn hosted service did.
 
 ### OpenTelemetry Export
 
@@ -1229,7 +1214,7 @@ Wicklee is sovereign by default:
 
 There are no paid plans today. The tiers introduced earlier are withdrawn
 pending a monetization plan grounded in actual usage, and the payment
-integration is being shut down with the rest of the hosted backend. The agent
+integration was removed with the rest of the hosted backend. The agent
 is open source under Apache 2.0 and needs no account.
 
 ---

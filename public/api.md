@@ -213,38 +213,13 @@ curl -X POST http://localhost:7700/mcp \
   -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"get_inference_state"},"id":1}'
 ```
 
-## Fleet API v1
+## The hosted backend is gone
 
-Base URL: `https://wicklee.dev/api/v1`
-Auth: `X-API-Key: wk_live_...` header.
-
-**The hosted fleet backend is being shut down.** It still runs, and this table
-describes it accurately, but it serves the product that has been withdrawn.
-There are no paid plans and nothing here is tier-gated any more. The localhost
-agent API above is the supported surface.
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/v1/fleet | All nodes with full MetricsPayload |
-| GET | /api/v1/fleet/wes | WES scores ranked |
-| GET | /api/v1/nodes/{id} | Single node deep dive |
-| GET | /api/v1/route/best | Routing recommendation (latency or efficiency). Optional `?model=` for per-model routing |
-| GET | /api/v1/models/discover | Model discovery — browse catalog, `?simulate_hw=`, `?fleet=true` |
-| GET | /api/v1/fleet/model-comparison?hours=168 | Fleet-wide per-model rollup (WES, tok/s, watts, TTFT, cost). Reads `metrics_5min`. 1–720 hour window. |
-| GET | /api/v1/fleet/model-switches?hours=24 | Cross-node model swap events (LAG window function over `metrics_raw`). 1–168 hour window, capped at 200 rows. |
-| GET | /api/v1/fleet/cost-by-model?hours=24 | Fleet-wide per-model power cost using $0.16/kWh default. 1–168 hour window. |
-| GET | /api/v1/insights/latest | Fleet intelligence snapshot |
-| GET | /api/v1/fleet/chargeback?days=30 | Chargeback/showback (Clerk JWT auth) — cost + $/1M-token attribution by team tag / model / node + daily trend. `&format=csv&group=` for finance export (audited) |
-| GET | /api/v1/fleet/capacity?target_tok_s=200 | Capacity planner with procurement scenarios (Clerk JWT auth) — "reach 200 tok/s: 2× RTX 4090 vs 1× H100" priced from the fleet's own measured tok/W per hardware class; every scenario states its basis |
-| GET | /api/v1/fleet/migration-advisor | Cross-node model migration (Clerk JWT auth) — live WES vs peers' 7-day demonstrated WES + free memory; moves with ≥20% estimated gain and 1.2× headroom |
-| GET | /api/v1/fleet/idle-waste?days=30 | Idle-waste & right-sizing report (Clerk JWT auth) — phantom-load cost + recovery actions (unload idle model, consolidate) with projected $/mo recovery |
-| GET/PUT | /api/digest | Weekly idle-waste email digest settings (Clerk JWT auth) — Resend-delivered, one per tenant, audited |
-| POST | /api/v1/keys | Create API key |
-| GET | /api/v1/keys | List API keys |
-| DELETE | /api/v1/keys/{id} | Revoke API key |
-| GET | /metrics | Prometheus scrape endpoint (text format) |
-| GET | /api/otel/config | OpenTelemetry export configuration |
-| PUT | /api/otel/config | Update OTel export settings |
+The hosted fleet backend was shut down on 2026-11-20. `wicklee.dev` now serves only the
+site, the install scripts and these discovery files as static files — it runs no API, no
+MCP endpoint and no Prometheus endpoint, and holds no telemetry. Everything Wicklee does
+is on the agent's own localhost surface, documented above. If you run the control plane
+yourself, its routes are yours and not these.
 
 ## Response Examples
 

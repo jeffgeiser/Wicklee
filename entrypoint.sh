@@ -25,8 +25,17 @@ else
 fi
 export RESOLVER
 
-# Backend hostname — set via Railway env var, falls back to Railway private networking.
-export BACKEND_HOST="${BACKEND_HOST:-vibrant-fulfillment.railway.internal:8080}"
+# Backend hostname. This image is the self-hosted frontend (see
+# docs/SELF_HOSTING.md and deploy/helm/wicklee); the control plane it proxies to
+# is yours to run. There is no default any more: the previous fallback pointed at
+# a Railway private hostname that was shut down on 2026-11-20, so an unset
+# BACKEND_HOST proxied silently into nothing.
+if [[ -z "${BACKEND_HOST:-}" ]]; then
+  echo "entrypoint.sh: BACKEND_HOST is not set." >&2
+  echo "  Set it to host:port of your control plane, e.g. wicklee-cloud:8080." >&2
+  exit 1
+fi
+export BACKEND_HOST
 
 envsubst '$PORT $RESOLVER $BACKEND_HOST' < /etc/nginx/conf.d/nginx.conf.template \
   > /etc/nginx/conf.d/default.conf
