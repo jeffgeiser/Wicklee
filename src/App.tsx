@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { version } from '../package.json';
 import { RefreshCw, X } from 'lucide-react';
 import { DashboardTab, FleetNode, NodeAgent, Tenant, User as UserType, ObservabilityNavParams } from './types';
 import { FleetStreamProvider, useFleetStream } from './contexts/FleetStreamContext';
@@ -266,7 +265,7 @@ const DashboardShell: React.FC<DashboardShellProps> = (props) => {
   const [versionBannerDismissed, setVersionBannerDismissed] = useState(false);
   const showVersionBanner = !versionBannerDismissed
     && localAgentVersion != null
-    && localAgentVersion !== version;
+    && localAgentVersion !== __APP_VERSION__;
 
   return (
     <div className="flex h-screen overflow-hidden bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100 font-sans transition-colors duration-300">
@@ -301,7 +300,7 @@ const DashboardShell: React.FC<DashboardShellProps> = (props) => {
           <div className="flex items-center gap-3 px-4 py-2.5 bg-amber-500/10 border-b border-amber-500/25 text-amber-300 text-xs">
             <RefreshCw className="w-3.5 h-3.5 shrink-0 text-amber-400" />
             <span className="flex-1">
-              UI out of date — browser is running <span className="font-mono">v{version}</span> but the agent is <span className="font-mono">v{localAgentVersion}</span>. Hard-reload to get the latest interface.
+              UI out of date — browser is running <span className="font-mono">v{__APP_VERSION__}</span> but the agent is <span className="font-mono">v{localAgentVersion}</span>. Hard-reload to get the latest interface.
             </span>
             <button
               onClick={() => window.location.reload()}

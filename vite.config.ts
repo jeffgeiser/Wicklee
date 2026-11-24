@@ -139,8 +139,15 @@ const sitemapPlugin = (): Plugin => ({
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+// The UI is built from the same tag as the agent, so its version is the agent's:
+// read it from the crate rather than keeping a second number in package.json.
+const AGENT_VERSION =
+  fs.readFileSync(path.resolve(__dirname, 'agent/Cargo.toml'), 'utf-8')
+    .match(/^version\s*=\s*"([^"]+)"/m)?.[1] ?? '0.0.0';
+
 export default defineConfig(() => {
   return {
+    define: { __APP_VERSION__: JSON.stringify(AGENT_VERSION) },
     server: {
       port: 3000,
       host: '0.0.0.0',

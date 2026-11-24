@@ -15,21 +15,67 @@ written notes.
 
 ---
 
-## Unreleased — removals
+## v0.16.0 — Local only: the hosted fleet view is gone
 
-No tag yet. The hosted fleet view and everything behind it are gone, so a
-future release changes what the agent does, not only what it adds:
+**Install, or update (there is no self-update — see below):**
+```powershell
+# Windows
+irm https://wicklee.dev/install.ps1 | iex
+```
+```bash
+# macOS / Linux
+curl -fsSL https://wicklee.dev/install.sh | bash
+```
 
-- Removed the fleet pairing flow (`--pair`, `/api/pair/*`), telemetry push, the
-  `--no-cloud` flag (there is nothing left for it to turn off) and the
-  self-update, which only ever ran for paired agents and depended on an endpoint
-  that no longer exists. Upgrade by re-running the install script.
-- `/api/health` now reports `node_id`, and `wicklee --status` and the MCP stdio
-  bridge use it instead of `/api/pair/status`.
-- An existing `config.toml` that still carries `fleet_url` or `session_token`
-  keeps working; the keys are ignored.
-- Removed the control-plane code, its deployment files and the Prometheus,
-  OpenTelemetry and webhook paths that went with it.
+Wicklee is now one thing: an agent that runs on your machine, answers from your
+own hardware and keeps everything there. The hosted fleet view, its accounts and
+the paid tiers behind it were shut down on 2026-11-20, and this release removes
+every part of the agent and the dashboard that talked to them. No new
+diagnostics in this release; the five commands are unchanged from v0.15.0.
+
+### What changed for you
+
+- **No outbound connections.** The agent never contacts wicklee.dev or anything
+  else of ours. Its only network traffic is to the inference runtimes on your
+  own machine (Ollama, vLLM, llama.cpp) and replies to requests you make to it.
+- **Updating is re-running the install script.** The self-update was removed:
+  it only ever ran for paired agents and relied on an endpoint that no longer
+  exists. Existing v0.15.0 installs will not update themselves.
+- **Pairing is gone.** `--pair` and the `/api/pair/*` routes are removed, and so
+  is `--no-cloud`, because there is nothing left for it to turn off. A
+  `config.toml` that still carries `fleet_url` or `session_token` keeps
+  working; the keys are ignored.
+- **`/api/health` reports `node_id`.** `wicklee --status` and the MCP stdio
+  bridge use it in place of `/api/pair/status`. Anything of yours that called
+  `/api/pair/status` should call `/api/health`.
+- **The local dashboard is local only.** Removed: the fleet and pairing
+  screens, the Forensics tab and the other fleet history charts, the Team and
+  API-key pages, the SSO, webhook, audit-log, SLO and model-governance
+  settings, and every upgrade prompt and tier badge. The cards that used to be
+  gated now always show.
+- **Nothing exports to Prometheus or OpenTelemetry.** Those paths lived in the
+  hosted service, not the agent. Read `/api/metrics` (SSE) or the `/v1` routes.
+
+### The rest of the project
+
+- The website is static pages only: documentation, the blog, the install
+  scripts, and the legal pages, which now describe a product with no accounts
+  and no hosted service. The refund page is gone because nothing is sold.
+- The control-plane code, its Helm chart and self-hosting files were deleted
+  from the repository. They stay in git history (`git show 68ca72f:cloud/`).
+- Licensing: the agent and the local dashboard are Apache 2.0; only the website
+  source in `src/site/` remains under FSL-1.1-Apache-2.0.
+
+### Fixed
+
+- The dashboard's "UI out of date" banner compared the UI against a hard-coded
+  version number; it now compares against the agent's own version.
+
+### Known issues
+
+The displacement issue listed under v0.15.0 is unchanged: readiness can be wrong
+about whether loading a model will evict another, and a safety margin does not
+fix it. Treat the answer as advice.
 
 ---
 

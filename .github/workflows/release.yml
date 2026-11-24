@@ -238,8 +238,7 @@ jobs:
         with:
           merge-multiple: true
 
-      # Agents verify auto-update downloads against this file and refuse to
-      # install a release without it (agent/src/main.rs check_and_apply_update).
+      # Checksums for people (and scripts) verifying a downloaded binary.
       - name: Generate SHA256SUMS
         run: sha256sum wicklee-agent-* > SHA256SUMS && cat SHA256SUMS
 
@@ -288,8 +287,7 @@ jobs:
         with:
           merge-multiple: true
 
-      # Agents verify auto-update downloads against this file and refuse to
-      # install a release without it (agent/src/main.rs check_and_apply_update).
+      # Checksums for people (and scripts) verifying a downloaded binary.
       - name: Generate SHA256SUMS
         run: sha256sum wicklee-agent-* > SHA256SUMS && cat SHA256SUMS
 
