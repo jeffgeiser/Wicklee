@@ -178,14 +178,23 @@ function landingBodyHtml() {
   <p style="font-size:0.8rem;font-weight:700;letter-spacing:0.2em;text-transform:uppercase;color:#22d3ee;margin:0 0 0.75rem">Inference evidence and readiness intelligence</p>
   <h1 style="font-size:2rem;font-weight:800;color:#f9fafb;line-height:1.15">Stop guessing why your local AI is slow.</h1>
   <p style="font-size:1.05rem;color:#9ca3af;line-height:1.6;margin:1rem 0 1rem">
-    Wicklee finds what is wrong with inference on your own hardware, tells you what will run
-    right now without displacing what is already loaded, and measures whether a change actually
-    helped. One binary, over localhost. No account.
+    A small agent runs on each machine that serves your models. Your own agents, orchestrators
+    and editors ask it over MCP or HTTP what is wrong, what will run right now without displacing
+    what is already loaded, and whether a change actually helped. You can ask it from the command
+    line too. One binary, over localhost. No account.
   </p>
   <p style="margin:0 0 2rem">
     <code style="background:#1f2937;border:1px solid #374151;border-radius:0.375rem;padding:0.5rem 0.75rem;color:#f9fafb;font-family:ui-monospace,monospace;font-size:0.875rem">curl -fsSL https://wicklee.dev/install.sh | bash</code>
   </p>
-  <h2 style="font-size:1.4rem;font-weight:700;color:#f9fafb;margin-top:2.5rem">Find it, fix it, prove the fix worked</h2>
+  <h2 style="font-size:1.4rem;font-weight:700;color:#f9fafb;margin-top:2.5rem">Your agents ask. Every node answers.</h2>
+  <p style="color:#9ca3af;line-height:1.6">
+    Wicklee is built first for software to ask: an orchestrator deciding where a job runs, a coding
+    agent about to start a long task, a script checking a host before a deploy. Each machine runs
+    its own Wicklee, and each answers what is wrong, what can run right now and whether a change
+    helped, over MCP (wicklee_state, wicklee_readiness, wicklee_inspect) and plain HTTP on /v1, as
+    JSON with the evidence attached. Today there is no aggregator: every node answers for itself. An optional, self-hostable fleet coordinator is planned, not started, and local use will never require it.
+  </p>
+  <h2 style="font-size:1.4rem;font-weight:700;color:#f9fafb;margin-top:2.5rem">Find it, check it, prove it</h2>
   <ul style="list-style:none;padding:0;color:#9ca3af;line-height:1.6">
 ${stepHtml}
   </ul>
@@ -244,7 +253,7 @@ let shell = await readFile(join(DIST, 'index.html'), 'utf8');
     name: SITE_NAME,
     applicationCategory: 'DeveloperApplication',
     operatingSystem: 'macOS, Linux, Windows',
-    description: 'Evidence-based diagnostics, model readiness and performance verification for self-hosted AI inference. Find what is wrong, see what will run now without displacing a loaded model, and measure whether a change helped — one binary over localhost, for Ollama, vLLM and llama.cpp.',
+    description: 'A local agent that tells your agents, and you, what is wrong with self-hosted AI inference, what will run now without displacing a loaded model, and whether a change helped. Over MCP, HTTP and the CLI. One binary, for Ollama, vLLM and llama.cpp.',
     url: ORIGIN,
     offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
   };

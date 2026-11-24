@@ -19,9 +19,9 @@ const OG_IMAGE_URL = `${SITE_ORIGIN}/og-image.png`;
 
 export const DEFAULT_TITLE       = 'Wicklee — stop guessing why your local AI is slow.';
 export const DEFAULT_DESCRIPTION =
-  'Evidence-based diagnostics, model readiness and performance verification for self-hosted ' +
-  'AI inference. Find what is wrong, see what will run now without displacing a loaded model, ' +
-  'and measure whether a change helped. One binary over localhost, for Ollama, vLLM and llama.cpp.';
+  'A local agent that tells your agents, and you, what is wrong with self-hosted AI inference, ' +
+  'what will run now without displacing a loaded model, and whether a change helped. ' +
+  'Over MCP, HTTP and the CLI. One binary, for Ollama, vLLM and llama.cpp.';
 
 export interface PageMeta {
   title:       string;

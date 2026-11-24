@@ -28,6 +28,34 @@ const labels = [
   },
 ];
 
+const agentCards = [
+  {
+    title: 'Over MCP',
+    body: 'Give your editor or agent three tools: wicklee_state, wicklee_readiness and wicklee_inspect. Same answers the CLI prints.',
+    code: `claude mcp add -s user wicklee -- \\
+  npx -y mcp-remote http://localhost:7700/mcp`,
+  },
+  {
+    title: 'Over HTTP',
+    body: 'Plain JSON on /v1. Ask whether a model can run before you start the job that needs it, then re-check after a change.',
+    code: `curl -s localhost:7700/v1/inspect
+curl -s "localhost:7700/v1/readiness?model=llama3.1:8b"
+curl -s -X POST localhost:7700/v1/verify ...`,
+  },
+  {
+    title: 'Across your machines',
+    body: 'Run it on every host that serves models and have your agent ask each one. To reach a node from another machine, bind it to the network with a token; it refuses to start without one.',
+    code: `# config.toml on each node
+bind_address = "0.0.0.0"
+auth_token   = "<long random string>"
+
+for h in gpu-01 gpu-02 gpu-03; do
+  curl -s -H "Authorization: Bearer $TOKEN" \\
+    "http://$h:7700/v1/readiness?model=llama3.1:8b"
+done`,
+  },
+];
+
 const commands = [
   { cmd: 'wicklee inspect', what: 'Findings, readiness and what to change, in one report' },
   { cmd: 'wicklee ready [MODEL]', what: 'Ready now, requires loading, would displace, or cannot determine' },
@@ -93,7 +121,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
 
       <section className="max-w-5xl mx-auto px-4 sm:px-8 pt-12 sm:pt-20 pb-14 sm:pb-24 text-center relative z-10">
         <p className="text-[11px] sm:text-xs font-bold uppercase tracking-[0.2em] text-cyan-400/80 mb-5">
-          Inference evidence and readiness intelligence
+          Built for agents to ask · Evidence for self-hosted inference
         </p>
         <h1 className="text-4xl sm:text-6xl md:text-7xl font-extrabold tracking-tight text-white mb-6 leading-[1.1]">
           Stop guessing why your{' '}
@@ -102,9 +130,11 @@ const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
           </span>
         </h1>
         <p className="text-base sm:text-xl text-gray-400 max-w-3xl mx-auto mb-6 leading-relaxed">
-          Wicklee finds what is wrong with inference on your own hardware, tells you what
-          will run right now without displacing what is already loaded, and measures
-          whether a change actually helped. One binary, over localhost. No account.
+          A small agent runs on each machine that serves your models. Your own agents,
+          orchestrators and editors ask it over MCP or HTTP what is wrong, what will run
+          right now without displacing what is already loaded, and whether a change
+          actually helped. You can ask it from the command line too. One binary, over
+          localhost. No account.
         </p>
         <div className="flex items-center justify-center mt-10">
           <button
@@ -116,7 +146,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
           </button>
         </div>
         <p className="mt-4 text-xs text-gray-600">
-          Open source, Apache 2.0 · Nothing leaves the machine · Reads hardware without sudo
+          Open source, Apache 2.0 · Nothing leaves the machine · No account · Reads hardware without sudo
         </p>
       </section>
 
@@ -146,7 +176,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
             </div>
             <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 pt-3 border-t border-zinc-800">
               <div className="font-mono text-sm overflow-x-auto w-full space-y-2 min-w-0">
-                <p className="text-zinc-500 whitespace-nowrap"># Windows (PowerShell, Admin)</p>
+                <p className="text-zinc-500 whitespace-nowrap"># Windows (PowerShell)</p>
                 <p className="text-white whitespace-nowrap">irm https://wicklee.dev/install.ps1 | iex</p>
                 <p className="text-zinc-500 whitespace-nowrap"># Optional: wicklee --install-service &nbsp;<span className="text-green-500/70">← runs on every boot</span></p>
               </div>
@@ -166,6 +196,39 @@ const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
             </div>
           </div>
         </div>
+      </section>
+
+      <section className="max-w-7xl mx-auto px-4 sm:px-8 py-16 sm:py-24 border-t border-gray-800 relative z-10">
+        <p className="text-[11px] sm:text-xs font-bold uppercase tracking-[0.2em] text-cyan-400/80 mb-4 text-center">
+          Built for agents
+        </p>
+        <h2 className="text-3xl sm:text-4xl font-bold text-white tracking-tight text-center mb-4">
+          Your agents ask. Every node answers.
+        </h2>
+        <p className="text-gray-400 text-center max-w-3xl mx-auto mb-14 leading-relaxed">
+          Wicklee is built first for software to ask: an orchestrator deciding where a job
+          runs, a coding agent about to start a long task, a script checking a host before
+          a deploy. Each machine runs its own Wicklee, and each answers the same three
+          questions &mdash; what is wrong, what can run right now, did the change help &mdash; as
+          structured JSON with the evidence attached, so an agent can act on it without
+          scraping a dashboard.
+        </p>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {agentCards.map((c) => (
+            <div key={c.title} className="bg-gray-800/40 border border-gray-700/60 rounded-3xl p-7 flex flex-col">
+              <h3 className="text-base font-bold text-white mb-2">{c.title}</h3>
+              <p className="text-sm text-gray-400 leading-relaxed mb-5">{c.body}</p>
+              <pre className="mt-auto bg-zinc-950 border border-zinc-800 rounded-xl p-4 overflow-x-auto font-mono text-[11px] leading-relaxed text-gray-300 whitespace-pre">{c.code}</pre>
+            </div>
+          ))}
+        </div>
+        <p className="mt-6 text-xs text-gray-500 text-center max-w-3xl mx-auto leading-relaxed">
+          Today there is no aggregator and nothing phones home: every node answers for
+          itself, and the agent that asks decides what to do with the answers. Wicklee
+          publishes evidence; it does not route or schedule. An optional, self-hostable
+          coordinator for aggregating across a larger fleet is planned (not started),
+          and local use will never require it.
+        </p>
       </section>
 
       <section className="max-w-7xl mx-auto px-4 sm:px-8 py-16 sm:py-24 border-t border-gray-800 relative z-10">
