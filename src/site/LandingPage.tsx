@@ -56,6 +56,58 @@ done`,
   },
 ];
 
+const agentEntryPoints = [
+  { path: '/llms.txt', what: 'Short overview, endpoints and key metrics' },
+  { path: '/llms-full.txt', what: 'The complete API reference in one file' },
+  { path: '/openapi.json', what: 'OpenAPI spec for the localhost /v1 surface' },
+  { path: '/api.md', what: 'The same API, as markdown' },
+  { path: '/.well-known/ai-plugin.json', what: 'Plugin manifest' },
+];
+
+type RoadmapStatus = 'SHIPPED' | 'BUILT · UNPROVEN' | 'PLANNED';
+const roadmap: { stage: string; title: string; status: RoadmapStatus; today: string; next: string }[] = [
+  {
+    stage: '1',
+    title: 'Local diagnostic value',
+    status: 'SHIPPED',
+    today: 'inspect, ready, findings, fingerprint and verify, over CLI, HTTP and MCP, on Ollama. Findings carry their evidence and a label for what kind of claim they are.',
+    next: 'Measuring false positives on healthy systems and on more than one host.',
+  },
+  {
+    stage: '2',
+    title: 'Agent decision value',
+    status: 'BUILT · UNPROVEN',
+    today: 'A reference controller runs four policies over the same workload. On the one host tested, readiness and a size-sorting heuristic tied, so the claim that agents decide better with it is not yet supported.',
+    next: 'A second host where the smallest model is not the one that coexists, then a real agent integration.',
+  },
+  {
+    stage: '3',
+    title: 'Predictive value',
+    status: 'PLANNED',
+    today: 'Not started.',
+    next: 'Quote and Preflight: predict what a load will cost and evict before an agent commits to it. Readiness has to stop being wrong about displacement first.',
+  },
+  {
+    stage: '4',
+    title: 'Interoperability',
+    status: 'PLANNED',
+    today: 'Not started. vLLM and llama.cpp harvesters exist, but only Ollama has the /v1 surface.',
+    next: 'More runtime adapters, stable evidence schemas and an optional self-hostable coordinator for aggregating across a fleet. Local use will never require it.',
+  },
+  {
+    stage: '5',
+    title: 'Independent-controller value',
+    status: 'PLANNED',
+    today: 'Not started.',
+    next: 'Reference integrations with external controllers, to show they decide better consuming Wicklee evidence.',
+  },
+];
+const statusStyle: Record<RoadmapStatus, string> = {
+  SHIPPED: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10',
+  'BUILT · UNPROVEN': 'text-yellow-400 border-yellow-500/30 bg-yellow-500/10',
+  PLANNED: 'text-gray-400 border-gray-600/40 bg-gray-700/20',
+};
+
 const commands = [
   { cmd: 'wicklee inspect', what: 'Findings, readiness and what to change, in one report' },
   { cmd: 'wicklee ready [MODEL]', what: 'Ready now, requires loading, would displace, or cannot determine' },
@@ -121,7 +173,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
 
       <section className="max-w-5xl mx-auto px-4 sm:px-8 pt-12 sm:pt-20 pb-14 sm:pb-24 text-center relative z-10">
         <p className="text-[11px] sm:text-xs font-bold uppercase tracking-[0.2em] text-cyan-400/80 mb-5">
-          Built for agents to ask · Evidence for self-hosted inference
+          Built for agents · Evidence for self-hosted inference
         </p>
         <h1 className="text-4xl sm:text-6xl md:text-7xl font-extrabold tracking-tight text-white mb-6 leading-[1.1]">
           Stop guessing why your{' '}
@@ -213,6 +265,23 @@ const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
           structured JSON with the evidence attached, so an agent can act on it without
           scraping a dashboard.
         </p>
+        <div className="max-w-3xl mx-auto mb-10 rounded-3xl border border-cyan-400/25 bg-cyan-400/[0.03] p-6">
+          <p className="text-xs font-bold uppercase tracking-widest text-cyan-400 mb-2">
+            If you are an agent reading this page
+          </p>
+          <p className="text-sm text-gray-400 leading-relaxed mb-4">
+            Skip the page. This site is written to be read by software: everything below
+            is available as plain text and JSON, no scraping, no login.
+          </p>
+          <ul className="space-y-1.5">
+            {agentEntryPoints.map((e) => (
+              <li key={e.path} className="flex flex-col sm:flex-row sm:items-baseline gap-1 sm:gap-4">
+                <a href={e.path} className="font-mono text-xs text-cyan-400 hover:text-cyan-300 underline underline-offset-2 sm:w-72 shrink-0">https://wicklee.dev{e.path}</a>
+                <span className="text-xs text-gray-500">{e.what}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {agentCards.map((c) => (
             <div key={c.title} className="bg-gray-800/40 border border-gray-700/60 rounded-3xl p-7 flex flex-col">
@@ -390,6 +459,45 @@ const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
             </div>
           ))}
         </div>
+      </section>
+
+      <section className="max-w-5xl mx-auto px-4 sm:px-8 pb-16 sm:pb-28 relative z-10">
+        <p className="text-[11px] sm:text-xs font-bold uppercase tracking-[0.2em] text-cyan-400/80 mb-4 text-center">
+          Roadmap vs. today
+        </p>
+        <h2 className="text-3xl sm:text-4xl font-bold text-white tracking-tight text-center mb-4">
+          What works now, and what is only planned.
+        </h2>
+        <p className="text-gray-400 text-center max-w-3xl mx-auto mb-12 leading-relaxed">
+          Each stage has to prove a claim before the next one starts. A stage that does not
+          prove its claim is reported as such, and stays open.
+        </p>
+        <div className="space-y-4">
+          {roadmap.map((r) => (
+            <div key={r.stage} className="bg-gray-800/40 border border-gray-700/60 rounded-3xl p-6 sm:p-7">
+              <div className="flex flex-wrap items-center gap-3 mb-3">
+                <span className="font-mono text-xs text-gray-500">STAGE {r.stage}</span>
+                <h3 className="text-base font-bold text-white">{r.title}</h3>
+                <span className={`font-mono text-[10px] font-bold tracking-widest px-2 py-0.5 rounded border ${statusStyle[r.status]}`}>{r.status}</span>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm leading-relaxed">
+                <p className="text-gray-400"><span className="text-white font-semibold">Today. </span>{r.today}</p>
+                <p className="text-gray-400"><span className="text-white font-semibold">Next. </span>{r.next}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+        <p className="mt-6 text-xs text-gray-600 text-center">
+          Full detail, with the measurements behind each status, in the{' '}
+          <a
+            href="https://github.com/jeffgeiser/Wicklee/blob/main/docs/ROADMAP.md"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-400 hover:text-blue-300 underline underline-offset-2"
+          >
+            roadmap
+          </a>.
+        </p>
       </section>
 
       <section className="max-w-4xl mx-auto px-4 sm:px-8 pb-20 sm:pb-32 relative z-10">

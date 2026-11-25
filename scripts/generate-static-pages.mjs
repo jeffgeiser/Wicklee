@@ -194,6 +194,11 @@ function landingBodyHtml() {
     helped, over MCP (wicklee_state, wicklee_readiness, wicklee_inspect) and plain HTTP on /v1, as
     JSON with the evidence attached. Today there is no aggregator: every node answers for itself. An optional, self-hostable fleet coordinator is planned, not started, and local use will never require it.
   </p>
+  <p style="color:#9ca3af;line-height:1.6">
+    If you are an agent reading this page: this site is written to be read by software. Plain text
+    and JSON, no scraping, no login: https://wicklee.dev/llms.txt (overview), /llms-full.txt (full API
+    reference), /openapi.json (the localhost /v1 surface), /api.md, /.well-known/ai-plugin.json.
+  </p>
   <h2 style="font-size:1.4rem;font-weight:700;color:#f9fafb;margin-top:2.5rem">Find it, check it, prove it</h2>
   <ul style="list-style:none;padding:0;color:#9ca3af;line-height:1.6">
 ${stepHtml}
@@ -214,6 +219,16 @@ ${stepHtml}
     send inference requests, both ask first and both are local-only. Wicklee is not in the request
     path by default, and it does not route or schedule — it publishes evidence and leaves the
     decision to whatever is making it.
+  </p>
+  <h2 style="font-size:1.4rem;font-weight:700;color:#f9fafb;margin-top:2.5rem">Roadmap vs. today</h2>
+  <p style="color:#9ca3af;line-height:1.6">
+    Stage 1, local diagnostic value: SHIPPED (inspect, ready, findings, fingerprint, verify over CLI,
+    HTTP and MCP, on Ollama). Stage 2, agent decision value: BUILT, UNPROVEN (on the one host tested,
+    readiness tied a size-sorting heuristic; a second host is needed). Stage 3, predictive value
+    (Quote, Preflight): PLANNED, not started. Stage 4, interoperability (more runtimes, stable
+    evidence schemas, an optional self-hostable fleet coordinator): PLANNED, not started. Stage 5,
+    independent-controller value: PLANNED, not started. Each stage must prove its claim before the
+    next begins.
   </p>
   <h2 style="font-size:1.4rem;font-weight:700;color:#f9fafb;margin-top:2.5rem">Known wrong, and published</h2>
   <p style="color:#9ca3af;line-height:1.6">

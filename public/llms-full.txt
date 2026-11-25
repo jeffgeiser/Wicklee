@@ -2,7 +2,7 @@
 
 > The evidence layer for self-hosted AI inference.
 > This document contains everything an AI agent needs to integrate with Wicklee.
-> v0.15.0 is the `/v1` diagnostic surface on one host: what is loaded, what will run now, what is wrong and how to verify a fix. No account, no paid plans.
+> v0.16.0 is the `/v1` diagnostic surface on one host: what is loaded, what will run now, what is wrong and how to verify a fix. No account, no paid plans.
 > Everything below describes the agent's own localhost surface. `wicklee.dev` serves only the site, the install scripts and these discovery files as static files.
 
 ---
@@ -562,3 +562,13 @@ There are no paid plans and no account. Everything the agent does is open source
 | Ollama | macOS, Linux, Windows | Process scan + /api/ps |
 | vLLM | Linux | Process scan + /metrics Prometheus |
 | llama.cpp / llama-box | macOS, Linux | Process scan + /health |
+
+## Roadmap vs. today
+
+Each stage must prove a claim before the next begins. Detail: docs/ROADMAP.md.
+
+- Stage 1, local diagnostic value — SHIPPED (v0.16.0). inspect, ready, findings, fingerprint, verify over CLI, HTTP and MCP, on Ollama.
+- Stage 2, agent decision value — BUILT, UNPROVEN. On the one host tested, readiness tied a size-sorting heuristic; a second host is needed before the claim is supported.
+- Stage 3, predictive value (Quote, Preflight) — PLANNED, not started.
+- Stage 4, interoperability (more runtime adapters, stable evidence schemas, an optional self-hostable fleet coordinator) — PLANNED, not started. Today there is no aggregator: each node answers for itself, and the agent that asks fans out across nodes. Local use will never require the coordinator.
+- Stage 5, independent-controller value — PLANNED, not started.
