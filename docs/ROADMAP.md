@@ -241,7 +241,7 @@ example, not a committed integration.
 
 ## Open items
 
-Each of these is blocked on something outside the code.
+Each of these is blocked on something outside the code. The next five days of work on the first two are laid out in [`FIVE_DAY_PLAN.md`](FIVE_DAY_PLAN.md).
 
 | Open item | Needs |
 | --- | --- |
@@ -250,7 +250,6 @@ Each of these is blocked on something outside the code.
 | `inspect` against the installed service daemon | A daemon restart onto a current binary, which needs root. Everything verified so far used a hand-started agent with a fresh store, which proves the query and the render but not what a week of real traffic looks like |
 | Four acceptance rows | A day of normal use, a >5% fix lever that 16 GB cannot provide, and three other machines |
 | `baseline_regression` on the musl build | The rule reads the store, and musl has none. The in-memory receipt buffer added in v0.15.0 could carry it; `inspect` currently reports it as not checked, with the reason |
-| A v0.15.0 tag | Steps 5 to 10 are untagged. The tag also publishes the two-asset Linux matrix |
 
 ---
 
