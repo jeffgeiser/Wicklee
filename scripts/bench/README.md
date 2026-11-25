@@ -26,10 +26,10 @@ Both step 8 scripts refuse to run against `:11434` or `:7700` for that reason.
 # A private runtime. Shares ~/.ollama/models, so nothing is downloaded.
 OLLAMA_HOST=127.0.0.1:11999 ollama serve &
 
-# An agent pinned to it, with its own store and the fleet switched off.
+# An agent pinned to it, with its own store.
 cd agent && cargo build        # clippy/test do NOT produce a runnable binary
 PORT=7999 WICKLEE_OLLAMA_PORT=11999 WICKLEE_DATA_DIR=/tmp/wk-bench \
-  ./target/debug/wicklee-agent --no-cloud
+  ./target/debug/wicklee-agent
 ```
 
 Both halves are load-bearing. Without `WICKLEE_OLLAMA_PORT` the harvester
@@ -44,7 +44,19 @@ window. Check with `lsof -nP -i -a -p <pid>`: loopback only, nothing to
 cp scripts/bench/scenarios.example.json scripts/bench/scenarios.json
 ```
 
-Then edit it. Nothing in it is guessed from your machine, deliberately: model
+`scenarios.json` is git-ignored and there is no committed default: the file has
+to describe the machine you are standing on. Then edit it, and delete the
+`_template` key when you are done. The scripts refuse a file that still has it,
+that still has `FILL-ME-IN` placeholders, or whose `host.platform` is not this
+machine's (`node -p process.platform`), so a copied file cannot be run on the
+wrong hardware by mistake. The maintainer's M4 Mac mini is kept as
+`scenarios.m4.json` for the record behind `docs/PHASE1_RESULTS.md`; pass it with
+`--scenarios` on that machine.
+
+The rules are in `lib/scenarios.mjs` and tested with
+`node --test scripts/bench/lib/scenarios.test.mjs`.
+
+Nothing in it is guessed from your machine, deliberately: model
 names, resident footprints and which contexts do or do not fit are things only
 you know, and a harness that assumed them would induce the wrong condition and
 report a pass. Read the footprints off `ollama ps` while each model is loaded —

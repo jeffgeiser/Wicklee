@@ -47,6 +47,9 @@ Cargo.lock
 # These contain architecture internals, pricing details, security audit
 # specifics, and development history that shouldn't be public.
 CLAUDE.md
+
+# Bench scenarios: per-machine, never committed. See scripts/bench/README.md.
+scripts/bench/scenarios.json
 HANDOVER.md
 docs/SPEC.md
 docs/TIERS.md
@@ -58,4 +61,7 @@ docs/SECURITY.md
 docs/PROGRESS.md
 docs/Progress*.rtf
 CLAUDE.md
+
+# Bench scenarios: per-machine, never committed. See scripts/bench/README.md.
+scripts/bench/scenarios.json
 

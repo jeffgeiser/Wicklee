@@ -16,7 +16,7 @@
 // WARNING: every scenario except `healthy` loads and unloads models on the
 // target runtime. Point it at one you control — a second `ollama serve` on its
 // own port, with the agent pinned to that port via WICKLEE_OLLAMA_PORT and
-// started with --no-cloud. Running it against the runtime your installed
+// given its own WICKLEE_DATA_DIR. Running it against the runtime your installed
 // service is watching pollutes that service's own attribution.
 //
 // WHAT A PASS MEANS. The harness asserts the expected rule fired and prints the
@@ -26,6 +26,8 @@
 // that induces the condition and gets no finding is a failure, and the raw
 // transcript holds the whole /v1/inspect body for working out why.
 
+import { loadScenarios, DEFAULT_SCENARIOS_PATH } from "./lib/scenarios.mjs";
+
 const args = process.argv.slice(2);
 function flag(name, fallback = undefined) {
   const i = args.indexOf(`--${name}`);
@@ -34,7 +36,7 @@ function flag(name, fallback = undefined) {
   return v && !v.startsWith("--") ? v : true;
 }
 
-const SCENARIOS_PATH = String(flag("scenarios", "scripts/bench/scenarios.json"));
+const SCENARIOS_PATH = String(flag("scenarios", DEFAULT_SCENARIOS_PATH));
 const ONLY = flag("only") ? String(flag("only")).split(",").map((s) => s.trim()) : null;
 const OUT = String(flag("out", `./fault-inject-${new Date().toISOString().replace(/[:.]/g, "-")}.json`));
 const YES = args.includes("--yes");
@@ -42,14 +44,7 @@ const PLAN = args.includes("--plan");
 
 const fs = await import("node:fs/promises");
 
-let cfg;
-try {
-  cfg = JSON.parse(await fs.readFile(SCENARIOS_PATH, "utf8"));
-} catch (e) {
-  console.error(`could not read ${SCENARIOS_PATH}: ${e.message}`);
-  console.error("Copy scripts/bench/scenarios.example.json and fill it in for your hardware.");
-  process.exit(2);
-}
+const cfg = await loadScenarios(SCENARIOS_PATH);
 
 const OLLAMA = String(cfg.ollama_base_url).replace(/\/+$/, "");
 const AGENT = String(cfg.agent_base_url).replace(/\/+$/, "");
@@ -463,7 +458,7 @@ if (!YES) {
 if (OLLAMA.includes(":11434") || AGENT.includes(":7700")) {
   console.log("Refusing: :11434 and :7700 are the default runtime and the installed agent.");
   console.log("Start a private `ollama serve` on another port and an agent with");
-  console.log("WICKLEE_OLLAMA_PORT and --no-cloud, then point the scenario file at those.");
+  console.log("WICKLEE_OLLAMA_PORT and its own WICKLEE_DATA_DIR, then point the scenario file at those.");
   process.exit(2);
 }
 

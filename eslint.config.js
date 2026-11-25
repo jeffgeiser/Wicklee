@@ -42,6 +42,14 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
 
+  // Examples — Node programs (18+), not browser code.
+  {
+    files: ['examples/**/*.mjs'],
+    languageOptions: {
+      globals: { ...globals.node },
+    },
+  },
+
   // Application source — browser globals.
   {
     files: ['src/**/*.{ts,tsx}'],

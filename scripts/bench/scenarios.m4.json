@@ -1,6 +1,8 @@
 {
   "_comment": [
-    "Fill this in for your own hardware and copy it to scenarios.json.",
+    "The maintainer's M4 Mac mini, kept as the record behind docs/PHASE1_RESULTS.md.",
+    "Use it with --scenarios scripts/bench/scenarios.m4.json. It is refused on any",
+    "other platform: its sizes and contexts describe this machine.",
     "Nothing here is guessed from your machine: model names, sizes and the",
     "contexts that do or do not fit are things only you know, and a harness",
     "that assumed them would induce the wrong condition and report a pass.",
@@ -15,6 +17,7 @@
 
   "host": {
     "label": "M4 Mac mini, 16 GB unified",
+    "platform": "darwin",
     "accelerator_budget_gb": 11.6,
     "notes": "iogpu.wired_limit_mb reads 0 on this M4, so the agent falls back to 75% of total RAM."
   },

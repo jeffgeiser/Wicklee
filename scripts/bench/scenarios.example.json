@@ -1,6 +1,10 @@
 {
+  "_template": true,
   "_comment": [
-    "Fill this in for your own hardware and copy it to scenarios.json.",
+    "Copy this to scripts/bench/scenarios.json (git-ignored), fill it in for your",
+    "hardware, and delete the `_template` key. The scripts refuse a file that still",
+    "has it, and refuse placeholder names.",
+    "",
     "Nothing here is guessed from your machine: model names, sizes and the",
     "contexts that do or do not fit are things only you know, and a harness",
     "that assumed them would induce the wrong condition and report a pass.",
@@ -9,39 +13,50 @@
     "the context you run them at, not the file size /api/tags reports. Read",
     "them off `ollama ps` while the model is loaded.",
     "",
-    "Run the harness against a runtime you control. Both scripts load and",
-    "unload models."
+    "Set host.platform to the output of `node -p process.platform` on the machine",
+    "that will run the scripts, so a copy of this file cannot be run on a different",
+    "one by mistake.",
+    "",
+    "Run the harness against a runtime you control. The scripts load and unload models."
   ],
-
   "host": {
-    "label": "M4 Mac mini, 16 GB unified",
-    "accelerator_budget_gb": 11.6,
-    "notes": "iogpu.wired_limit_mb reads 0 on this M4, so the agent falls back to 75% of total RAM."
+    "label": "FILL-ME-IN: machine, accelerator, memory",
+    "platform": "FILL-ME-IN",
+    "accelerator_budget_gb": 0,
+    "notes": "How the agent should see this host's accelerator budget, and anything unusual about it."
   },
-
   "ollama_base_url": "http://127.0.0.1:11999",
   "agent_base_url": "http://127.0.0.1:7999",
-
   "models": {
-    "small": { "name": "qwen3.5:4b", "resident_gb": 3.4, "default_context": 8192 },
-    "large": { "name": "qwen3.5:9b", "resident_gb": 6.6, "default_context": 8192 },
-    "other": { "name": "llama3.1:8b", "resident_gb": 4.9, "default_context": 8192 }
+    "small": {
+      "name": "FILL-ME-IN",
+      "resident_gb": 0,
+      "default_context": 8192
+    },
+    "large": {
+      "name": "FILL-ME-IN",
+      "resident_gb": 0,
+      "default_context": 8192
+    },
+    "other": {
+      "name": "FILL-ME-IN",
+      "resident_gb": 0,
+      "default_context": 8192
+    }
   },
-
   "contexts": {
     "_comment": [
-      "resident_gb above is measured at `fits`. The footprint is weights plus",
-      "KV cache and the second grows fast — the 4B model measured 3.4 GB at",
-      "8192 and 7.96 GB at 131072 on this host — so a pair that fits at a",
-      "small context stops fitting at a large one. That is what makes",
-      "eviction inducible on a machine with room for both models."
+      "resident_gb above is measured at `fits`. The footprint is weights plus KV",
+      "cache and the second grows fast, so a pair that fits at a small context stops",
+      "fitting at a large one. That is what makes eviction inducible on a machine",
+      "with room for both models. Measure each of these on your host; the M4's",
+      "values are in scenarios.m4.json and are not a guide to yours."
     ],
     "fits": 8192,
     "runtime_default": 4096,
-    "too_large_for_accelerator": 131072,
-    "eviction_context": 32768
+    "too_large_for_accelerator": 0,
+    "eviction_context": 0
   },
-
   "workflow": {
     "_comment": [
       "For the reference controller. Workflow A holds `held` continuously.",
@@ -50,7 +65,10 @@
       "the wicklee policy wait rather than displace."
     ],
     "held": "other",
-    "acceptable": ["large", "small"],
+    "acceptable": [
+      "large",
+      "small"
+    ],
     "defer_allowed": true,
     "defer_timeout_s": 30
   }

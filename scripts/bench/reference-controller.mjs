@@ -41,6 +41,8 @@
 // WARNING: loads and unloads models on the target runtime. Point it at one you
 // control.
 
+import { loadScenarios, DEFAULT_SCENARIOS_PATH } from "./lib/scenarios.mjs";
+
 const args = process.argv.slice(2);
 function flag(name, fallback = undefined) {
   const i = args.indexOf(`--${name}`);
@@ -49,7 +51,7 @@ function flag(name, fallback = undefined) {
   return v && !v.startsWith("--") ? v : true;
 }
 
-const SCENARIOS_PATH = String(flag("scenarios", "scripts/bench/scenarios.json"));
+const SCENARIOS_PATH = String(flag("scenarios", DEFAULT_SCENARIOS_PATH));
 const RUNS = Number(flag("runs", 5));
 const stamp = new Date().toISOString().replace(/[:.]/g, "-");
 const OUT = String(flag("out", `./controller-${stamp}.json`));
@@ -59,13 +61,7 @@ const PLAN = args.includes("--plan");
 
 const fs = await import("node:fs/promises");
 
-let cfg;
-try {
-  cfg = JSON.parse(await fs.readFile(SCENARIOS_PATH, "utf8"));
-} catch (e) {
-  console.error(`could not read ${SCENARIOS_PATH}: ${e.message}`);
-  process.exit(2);
-}
+const cfg = await loadScenarios(SCENARIOS_PATH);
 
 const OLLAMA = String(cfg.ollama_base_url).replace(/\/+$/, "");
 const AGENT = String(cfg.agent_base_url).replace(/\/+$/, "");

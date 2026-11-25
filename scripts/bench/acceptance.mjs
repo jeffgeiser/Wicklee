@@ -28,6 +28,8 @@
 //
 // Run it against a runtime you can disturb. It loads and unloads models.
 
+import { loadScenarios, DEFAULT_SCENARIOS_PATH } from "./lib/scenarios.mjs";
+
 const args = process.argv.slice(2);
 function flag(name, fallback = undefined) {
   const i = args.indexOf(`--${name}`);
@@ -36,7 +38,7 @@ function flag(name, fallback = undefined) {
   return v && !v.startsWith("--") ? v : true;
 }
 
-const SCENARIOS_PATH = String(flag("scenarios", "scripts/bench/scenarios.json"));
+const SCENARIOS_PATH = String(flag("scenarios", DEFAULT_SCENARIOS_PATH));
 const OUT = String(flag("out", `./acceptance-${new Date().toISOString().replace(/[:.]/g, "-")}.json`));
 const LABEL = flag("label") ? String(flag("label")) : null;
 const SKIP = flag("skip") ? String(flag("skip")).split(",").map((s) => s.trim()) : [];
@@ -45,7 +47,7 @@ const PLAN = args.includes("--plan");
 
 const fs = await import("node:fs/promises");
 const os = await import("node:os");
-const cfg = JSON.parse(await fs.readFile(SCENARIOS_PATH, "utf8"));
+const cfg = await loadScenarios(SCENARIOS_PATH);
 const OLLAMA = String(cfg.ollama_base_url).replace(/\/+$/, "");
 const AGENT = String(cfg.agent_base_url).replace(/\/+$/, "");
 const CTX = cfg.contexts?.fits ?? 8192;
