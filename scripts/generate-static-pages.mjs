@@ -220,15 +220,14 @@ ${stepHtml}
     path by default, and it does not route or schedule — it publishes evidence and leaves the
     decision to whatever is making it.
   </p>
-  <h2 style="font-size:1.4rem;font-weight:700;color:#f9fafb;margin-top:2.5rem">Roadmap vs. today</h2>
+  <h2 style="font-size:1.4rem;font-weight:700;color:#f9fafb;margin-top:2.5rem">Roadmap</h2>
   <p style="color:#9ca3af;line-height:1.6">
-    Stage 1, local diagnostic value: SHIPPED (inspect, ready, findings, fingerprint, verify over CLI,
-    HTTP and MCP, on Ollama). Stage 2, agent decision value: BUILT, UNPROVEN (on the one host tested,
-    readiness tied a size-sorting heuristic; a second host is needed). Stage 3, predictive value
-    (Quote, Preflight): PLANNED, not started. Stage 4, interoperability (more runtimes, stable
-    evidence schemas, an optional self-hostable fleet coordinator): PLANNED, not started. Stage 5,
-    independent-controller value: PLANNED, not started. Each stage must prove its claim before the
-    next begins.
+    Five stages; each has to prove its claim before the next begins. Stage 1 ships today, the rest
+    is planned. Stage 1, local diagnostic value: inspect, readiness, fingerprint and verify. Stage 2,
+    agent decision value: a controller or agent integration that makes better decisions with
+    readiness. Stage 3, predictive value: quote, preflight and prepare. Stage 4, interoperability:
+    more runtime adapters, stable evidence schemas and an optional self-hostable fleet coordinator.
+    Stage 5, independent-controller value: integrations with external controllers.
   </p>
   <h2 style="font-size:1.4rem;font-weight:700;color:#f9fafb;margin-top:2.5rem">Known wrong, and published</h2>
   <p style="color:#9ca3af;line-height:1.6">

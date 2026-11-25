@@ -563,12 +563,12 @@ There are no paid plans and no account. Everything the agent does is open source
 | vLLM | Linux | Process scan + /metrics Prometheus |
 | llama.cpp / llama-box | macOS, Linux | Process scan + /health |
 
-## Roadmap vs. today
+## Roadmap
 
-Each stage must prove a claim before the next begins. Detail: docs/ROADMAP.md.
+Five stages; each must prove its claim before the next begins. Stage 1 ships today (v0.16.0); everything after it is planned. Detail: docs/ROADMAP.md.
 
-- Stage 1, local diagnostic value — SHIPPED (v0.16.0). inspect, ready, findings, fingerprint, verify over CLI, HTTP and MCP, on Ollama.
-- Stage 2, agent decision value — BUILT, UNPROVEN. On the one host tested, readiness tied a size-sorting heuristic; a second host is needed before the claim is supported.
-- Stage 3, predictive value (Quote, Preflight) — PLANNED, not started.
-- Stage 4, interoperability (more runtime adapters, stable evidence schemas, an optional self-hostable fleet coordinator) — PLANNED, not started. Today there is no aggregator: each node answers for itself, and the agent that asks fans out across nodes. Local use will never require the coordinator.
-- Stage 5, independent-controller value — PLANNED, not started.
+- Stage 1, local diagnostic value: Ollama state, passive inspect, model readiness, consented fingerprint, finding IDs and verify.
+- Stage 2, agent decision value: a reference controller or real agent integration consuming readiness.
+- Stage 3, predictive value: workload-aware quote, empirical calibration, operational preflight, advisory prepare.
+- Stage 4, interoperability: more runtime adapters, stable evidence schemas, and an optional self-hostable fleet coordinator. Today there is no aggregator: each node answers for itself and the asking agent fans out. Local use will never require the coordinator.
+- Stage 5, independent-controller value: reference integrations with external controllers.

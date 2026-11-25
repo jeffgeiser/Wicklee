@@ -64,49 +64,38 @@ const agentEntryPoints = [
   { path: '/.well-known/ai-plugin.json', what: 'Plugin manifest' },
 ];
 
-type RoadmapStatus = 'SHIPPED' | 'BUILT · UNPROVEN' | 'PLANNED';
-const roadmap: { stage: string; title: string; status: RoadmapStatus; today: string; next: string }[] = [
+const roadmap: { stage: string; title: string; build: string; prove: string }[] = [
   {
     stage: '1',
     title: 'Local diagnostic value',
-    status: 'SHIPPED',
-    today: 'inspect, ready, findings, fingerprint and verify, over CLI, HTTP and MCP, on Ollama. Findings carry their evidence and a label for what kind of claim they are.',
-    next: 'Measuring false positives on healthy systems and on more than one host.',
+    build: 'Ollama state, passive inspect, model readiness, consented fingerprint, finding IDs and verify.',
+    prove: 'Wicklee finds real problems, its findings can be trusted, and it can measure whether a fix helped.',
   },
   {
     stage: '2',
     title: 'Agent decision value',
-    status: 'BUILT · UNPROVEN',
-    today: 'A reference controller runs four policies over the same workload. On the one host tested, readiness and a size-sorting heuristic tied, so the claim that agents decide better with it is not yet supported.',
-    next: 'A second host where the smallest model is not the one that coexists, then a real agent integration.',
+    build: 'A reference controller, or a real agent integration, that consumes Wicklee readiness.',
+    prove: 'A workload makes a materially better decision with Wicklee than with the runtime’s loaded-model status alone.',
   },
   {
     stage: '3',
     title: 'Predictive value',
-    status: 'PLANNED',
-    today: 'Not started.',
-    next: 'Quote and Preflight: predict what a load will cost and evict before an agent commits to it. Readiness has to stop being wrong about displacement first.',
+    build: 'Workload-aware quote, empirical calibration, operational preflight and advisory prepare.',
+    prove: 'Predictions improve execution decisions beyond simple readiness heuristics.',
   },
   {
     stage: '4',
     title: 'Interoperability',
-    status: 'PLANNED',
-    today: 'Not started. vLLM and llama.cpp harvesters exist, but only Ollama has the /v1 surface.',
-    next: 'More runtime adapters, stable evidence schemas and an optional self-hostable coordinator for aggregating across a fleet. Local use will never require it.',
+    build: 'More runtime adapters, stable evidence schemas and an optional self-hostable fleet coordinator for aggregating across machines.',
+    prove: 'Wicklee gives useful operational understanding across independently managed inference systems. Local use will never require the coordinator.',
   },
   {
     stage: '5',
     title: 'Independent-controller value',
-    status: 'PLANNED',
-    today: 'Not started.',
-    next: 'Reference integrations with external controllers, to show they decide better consuming Wicklee evidence.',
+    build: 'Reference integrations with external application or infrastructure controllers.',
+    prove: 'A controller makes better decisions when it consumes Wicklee evidence.',
   },
 ];
-const statusStyle: Record<RoadmapStatus, string> = {
-  SHIPPED: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10',
-  'BUILT · UNPROVEN': 'text-yellow-400 border-yellow-500/30 bg-yellow-500/10',
-  PLANNED: 'text-gray-400 border-gray-600/40 bg-gray-700/20',
-};
 
 const commands = [
   { cmd: 'wicklee inspect', what: 'Findings, readiness and what to change, in one report' },
@@ -463,14 +452,14 @@ const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
 
       <section className="max-w-5xl mx-auto px-4 sm:px-8 pb-16 sm:pb-28 relative z-10">
         <p className="text-[11px] sm:text-xs font-bold uppercase tracking-[0.2em] text-cyan-400/80 mb-4 text-center">
-          Roadmap vs. today
+          Roadmap
         </p>
         <h2 className="text-3xl sm:text-4xl font-bold text-white tracking-tight text-center mb-4">
-          What works now, and what is only planned.
+          Five stages. Each has to prove its claim.
         </h2>
         <p className="text-gray-400 text-center max-w-3xl mx-auto mb-12 leading-relaxed">
-          Each stage has to prove a claim before the next one starts. A stage that does not
-          prove its claim is reported as such, and stays open.
+          Stage 1 ships today. Everything after it is planned. A stage that does not
+          prove its claim is reported as such, and the next one waits.
         </p>
         <div className="space-y-4">
           {roadmap.map((r) => (
@@ -478,17 +467,16 @@ const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
               <div className="flex flex-wrap items-center gap-3 mb-3">
                 <span className="font-mono text-xs text-gray-500">STAGE {r.stage}</span>
                 <h3 className="text-base font-bold text-white">{r.title}</h3>
-                <span className={`font-mono text-[10px] font-bold tracking-widest px-2 py-0.5 rounded border ${statusStyle[r.status]}`}>{r.status}</span>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm leading-relaxed">
-                <p className="text-gray-400"><span className="text-white font-semibold">Today. </span>{r.today}</p>
-                <p className="text-gray-400"><span className="text-white font-semibold">Next. </span>{r.next}</p>
+                <p className="text-gray-400"><span className="text-white font-semibold">Build. </span>{r.build}</p>
+                <p className="text-gray-400"><span className="text-white font-semibold">Prove. </span>{r.prove}</p>
               </div>
             </div>
           ))}
         </div>
         <p className="mt-6 text-xs text-gray-600 text-center">
-          Full detail, with the measurements behind each status, in the{' '}
+          Detail, and the measurements behind each stage, in the{' '}
           <a
             href="https://github.com/jeffgeiser/Wicklee/blob/main/docs/ROADMAP.md"
             target="_blank"
