@@ -48,3 +48,57 @@ Tests: `node --test examples/fanout.test.mjs`. They use local fake nodes; the
 auth paths were also checked by hand against two real agents bound to a
 non-loopback address with a token. The answer rendering has not been exercised
 against a live Ollama host yet.
+
+## `dispatch.mjs` — ask before you load a model
+
+The Stage 2 consumer: a job dispatcher that would otherwise just call Ollama,
+and instead reads readiness first. It speaks MCP (JSON-RPC over HTTP, the same
+`wicklee_readiness` tool an editor or agent framework calls), runs the job on
+the model it chose, and sends the completion metadata back as a receipt.
+
+```bash
+# Decide only. Sends nothing to the runtime.
+node examples/dispatch.mjs --acceptable llama3.1:8b,qwen3.5:4b --dry-run
+
+# Decide, run, and report.
+node examples/dispatch.mjs --acceptable llama3.1:8b,qwen3.5:4b \
+  --num-ctx 8192 --prompt "Summarise this changelog: ..."
+```
+
+```
+ask   llama3.1:8b: may_require_eviction; qwen3.5:4b: ready_now
+decision  run qwen3.5:4b — ready_now
+ran   qwen3.5:4b in 1180 ms (load 6 ms, 212 tokens)
+receipt sent to Wicklee: HTTP 200
+```
+
+(Illustrative layout; the numbers are not from a run.)
+
+**The rule is yours.** Wicklee answers `ready_now`, `requires_loading`,
+`may_require_eviction` or `cannot_determine` per model; it does not choose. The
+rule in the file is: run the first acceptable model that is `ready_now`;
+otherwise wait and ask again; after `--defer-timeout` seconds either run nothing
+(`--on-timeout fail`, the default, exit 3) or run the first model anyway
+(`--on-timeout proceed`, recorded as an override). Replace it with your own.
+
+**`requires_loading` is not treated as safe.** While another model is resident
+the answer carries `coexistence: "unverified"`, and on the one host measured the
+runtime evicted a resident model in 5 of 6 such cases
+(`docs/PHASE1_RESULTS.md`). `--accept-unverified` opts in, and the decision
+record says that you did.
+
+**`--num-ctx` is required.** Leaving it out reloads the model at the runtime's
+4096 default, which is the finding `context_reset`; the example refuses to run
+without it.
+
+**Your prompt and the output stay between you and your runtime.** The receipt is
+built from an allowlist of numeric fields. Ollama's reply also contains
+`response` and `context`, which Wicklee's receipts route refuses; they are never
+copied, and a test asserts neither the prompt nor the output reaches the agent.
+
+Tests: `node --test examples/dispatch.test.mjs` (a fake agent that speaks MCP and
+a fake runtime). The MCP calls were also checked by hand against a real agent with
+no runtime behind it, where every model is `cannot_determine` and the dispatcher
+waits, times out and runs nothing. **It has not been run against a live Ollama
+host**, so there is no measurement yet of avoided reloads; that is W3 and the
+`reference-controller` re-run.
