@@ -323,4 +323,217 @@ report a pass.
 - **Four acceptance rows were not reached**, listed above with why.
 - **`improved` and `worse` verify verdicts are unit-tested, not live.**
   Manufacturing a real 5% regression needs a second model contending for
-  memory, which 16 GB cannot do while one of them is busy.
+  memory, which 16 GB cannot do while one of them is busy. With 1b-class
+  models a live `worse` was produced on 2026-11-28; `improved` still was not
+  (see "1b-class models on the M4" below).
+
+---
+
+## 1b-class models on the M4, 2026-11-28
+
+W3 of [`FIVE_DAY_PLAN.md`](FIVE_DAY_PLAN.md), run by the runbook in
+[`MAC_MINI_1B_RUN.md`](MAC_MINI_1B_RUN.md). Same machine as everything above,
+with models small enough that one can be held busy while another is measured.
+**Findings only.** Nothing here changed a threshold, readiness behaviour or
+agent code: one machine is not evidence for a constant that ships, and these
+go to W4.
+
+| | |
+| --- | --- |
+| Machine | M4 Mac mini, 16 GB unified, macOS 26.5 |
+| Runtime | Ollama 0.40.16 on a private `127.0.0.1:11999` |
+| Agent | 0.16.0, debug build (rustc 1.100.1), `127.0.0.1:7999`, own `WICKLEE_DATA_DIR`, `WICKLEE_LLAMACPP_PORT=11998` (see below) |
+| Models | `llama3.2:1b` (large, 1.73 GB resident at 8192), `qwen2.5:1.5b` (other, 1.37 GB), `gemma3:1b` (small, 0.96 GB). All three resident together at 8192 |
+| Budget | 12.88 GB as the agent reports it (`apple_wired_limit`). The runbook and `scenarios.m4.json` say 11.6; the agent says 12.88 |
+| Scenario file | [`scripts/bench/scenarios.m4-1b.json`](../scripts/bench/scenarios.m4-1b.json) |
+
+Every size and context above came off `/api/ps` on the private runtime. The
+installed service, the default Ollama on `:11434` and the agent on `:7700` were
+not touched. `lsof` showed both private processes on loopback only, with nothing
+to `:11434`. After teardown the default runtime's process and runner were
+still running, unchanged.
+
+### Isolation: the agent attached to Ollama's own runner
+
+Started exactly as the runbook says, the private agent's process discovery
+found a `llama-server` on `:51238` and connected to it as a llama.cpp runtime.
+That process is **the default Ollama's own runner** (parent PID the app's
+`ollama serve`, serving `llama3.1:8b` at `-c 4096`). Ollama 0.40 runs its models
+through `llama-server`, and discovery matches any `llama-server` binary. In
+about 15 seconds the agent sent only `GET /health` and `GET /slots` to it.
+The llama.cpp idle probe, which sends completions, did not fire. The agent was
+stopped and restarted with `WICKLEE_LLAMACPP_PORT=11998` (nothing listening),
+which pins the port and disables that discovery. Every run below used that
+setting. Without it the same discovery would also attach to the *private*
+runtime's runners and measure Ollama's models twice, under a second runtime
+label. The runbook and `scripts/bench/README.md` need that variable. The
+discovery itself is a W4 item.
+
+### Contexts, measured
+
+| Model | 8192 | 32768 | 65536 | 131072 |
+| --- | --- | --- | --- | --- |
+| `llama3.2:1b` | 1.73 GB | 2.59 GB | 3.78–4.00 GB | 6.04–6.20 GB |
+| `qwen2.5:1.5b` | 1.37 GB | 2.02–2.12 GB | clamped to 32768 | clamped to 32768 |
+| `gemma3:1b` | 0.96 GB | 1.01 GB | clamped to 32768 | clamped to 32768 |
+
+`qwen2.5:1.5b` and `gemma3:1b` top out at 32768. The runtime silently loads them
+at 32768 whatever larger `num_ctx` is asked for, so no context makes the small
+model exceed the budget here. `too_large_for_accelerator` is set to 131072 in
+the scenario file, but for `gemma3:1b` that is a 1.01 GB load.
+
+**The eviction boundary moved during the session.** Measured at 08:30 with
+`llama3.2:1b` and `qwen2.5:1.5b` loaded together, both orders each time: both
+resident at 65536 (twice each order), evicted at 69632, 73728, 81920, 98304 and
+131072. The combined footprints do not bracket: 6.12 GB coexisted at 65536,
+while 5.95 GB evicted at 69632. That was the same crossing as the larger models
+above. Re-measured at about 09:05, the same pair **coexisted at 69632, 98304 and
+131072 in both orders**, 8.32 GB together. Over that time free memory went from
+214,485 pages (3.5 GB) to 351,777 (5.8 GB). The default runtime's runner was
+unchanged, and swap stayed at about 7.4 of 8 GB used. So on this host, whether
+two models co-reside followed **free system memory**, which the agent does not
+read, and not their combined size against the agent's budget. That is an
+observation from one session, not a demonstrated cause. `eviction_context` was set
+to 69632 from the first measurement, before the move was seen.
+
+### The five questions
+
+**Is `baseline_regression` inducible, and does it fire?** No, on the
+harness's induction. Both models stayed resident this time. The 16 GB eviction
+that blocked it before did not happen. But the contention was too short to
+matter: `gemma3:1b` measured 98.19 tok/s, then 94.85 with `llama3.2:1b`
+generating, **−3.4%** against the rule's 20%. The harness's busy request is a
+2048-token completion started 12 s before the fingerprint. At about 100 tok/s
+it ends partway through the measurement. Sustained contention does slow the model
+far past 20%; see the verify result next.
+
+**Can `improved` or `worse` be produced live?** **`worse`: yes.** `wicklee
+verify F-868ecd` took a baseline at 85.5 tok/s (70.5–101.2, n=6, `gemma3:1b`
+and `llama3.2:1b` at 8192). Re-run while `qwen2.5:1.5b` decoded four 4096-token
+completions back to back, it measured 52.9 tok/s (39.2–61.1, n=6), **−38.1%**,
+verdict `worse`, "nothing Wicklee can see differed between the two runs".
+**`improved`: not produced.** `F-81259c` with its baseline taken under the
+same contention, 70.8 tok/s (53.3–96.1, n=9), then re-run clean, gave 96.5
+tok/s (72.3–100.7, n=9), +36.3%. The verdict was `no measurable change` because
+the ranges overlap. That verify measures all three models, including the busy
+one, so the contended baseline spans fast and slow runs. One attempt, not
+repeated. Both verdicts came from runs outside the harness: neither script calls
+verify.
+
+**Does readiness's displacement answer hold with small models?** **No
+optimistic row, and that is not evidence it holds.** `headroom-margin` at 8192:
+6 of 6 correct, exit 0, largest coexisting pair 3.1 GB. Re-run at 131072, the
+context that had evicted earlier in the session: 6 of 6 correct, exit 0,
+largest coexisting pair 8.22 GB. No pair evicted in either run, so every
+`requires_loading, nothing displaced` was right because nothing was evicted. The
+answer was never tested where it failed before. Two things in those rows:
+
+- **Readiness's footprint is the last one measured, at whatever context.** At
+  8192 it predicted `llama3.2:1b` at 6.2 GB, its 131072 footprint from earlier
+  probing. At 131072 it predicted 1.73 GB, its 8192 footprint, for a load that
+  came in at 6.2 GB. Those two predictions were wrong in opposite directions,
+  and the outcome was right only because nothing was evicted.
+- `/v1/readiness` takes no context. The live dispatch below shows what follows.
+
+**Do `wicklee` and `smallest_first` still tie?** **Yes.** Five runs per
+policy, randomised, held model `qwen2.5:1.5b`, acceptable `llama3.2:1b` then
+`gemma3:1b`:
+
+| Policy | Chose | B step ms | A latency ms | A reloads | In-use displaced | Deferrals |
+| --- | --- | --- | --- | --- | --- | --- |
+| `naive` | llama3.2:1b ×5 | 674 (667–696) | 97 (96–98) | 0/5 | 0/5 | 0 |
+| `loaded_check` | llama3.2:1b ×5 | 674 (665–678) | 97 (95–98) | 0/5 | 0/5 | 0 |
+| `smallest_first` | gemma3:1b ×5 | 608 (572–880) | 96 (94–97) | 0/5 | 0/5 | 0 |
+| `wicklee` | gemma3:1b ×5 | 611 (589–1875) | 95 (93–103) | 0/5 | 0/5 | 0 |
+
+Same choice and same displacement record. On a host where every option
+coexists, `wicklee` ranks the unverified fits by footprint and so becomes
+`smallest_first`. It differs from `loaded_check`, but nothing was displaced
+under any policy, so the difference bought nothing. It also overrode the
+operator's first preference.
+
+**Which acceptance rows can this host now answer?**
+
+| Row | Result |
+| --- | --- |
+| Reproducible | **pass.** Three `gemma3:1b` fingerprints overlap; medians spread 0.6% |
+| Evidence holds | **pass.** 3 findings, all evidenced |
+| No side effects | **pass.** `expires_at` unchanged across all four reads |
+| Overhead | **reported, not judged.** RSS 84 MB, CPU 8.6% (peak 12.9%) idle, on a **debug** build, so not comparable with the release numbers above |
+| Detection | **partial**, below |
+| Fix confirmed | **half.** A live `worse` exists (−38.1%). A live `improved` was attempted once and not produced |
+| Quiet across 24 hours, other hardware, decision changed | **not reached**, as before |
+
+### Detection
+
+| Scenario | Result |
+| --- | --- |
+| `context_reset` | **fired.** "gemma3:1b was reloaded at the default 4096-token context 2 times in the last 3 minutes, dropping from as high as 8192 tokens. The load cost of each reload is not measured." |
+| `expiry_reload` | **fired.** "gemma3:1b expired and was loaded again within 10 minutes on 4 occasions in the last day — gaps from 5 seconds to 19 seconds. Neither the keep-alive duration nor the cold-load cost is reported by /api/ps, so neither is claimed here." |
+| `healthy` | **quiet.** Raised nothing new; `context_reset` and `expiry_reload` still open from the injection |
+| `cpu_split` | **not inducible here.** `size_vram` equals `size` (1,008,247,766 bytes): unified memory. `gemma3:1b` also cannot be made larger than the budget, because the runtime clamps its context to 32768 |
+| `baseline_regression` | **not inducible here** with the harness's induction: −3.4% against 20%, above |
+| `eviction_churn` | **missed in the transcript, most likely not induced.** "4 alternations between llama3.2:1b and qwen2.5:1.5b at context 69632 produced no finding." The script does not check that an eviction happened. Re-run by hand at 69632 straight afterwards, sampling `/api/ps` every 0.5 s, all three models stayed resident and every reload was warm (`load_duration` 1 ms). The boundary had moved (above) |
+
+**`eviction_churn` then fired on the harness's own unloads.** After the
+controller and acceptance runs, `wicklee inspect` showed F-047fb3: "3 models
+were cleared 13 times in the last 8 minutes within 10 seconds of another model
+loading, each before its own keep-alive expired: gemma3:1b, llama3.2:1b,
+qwen2.5:1.5b", inferring "Memory contention may be causing the reloads". The
+controller recorded 0 in-use displacements in all 20 runs, and it clears models
+itself with `keep_alive: 0` between runs. In `/api/ps` an explicit unload looks
+the same as an eviction, and only Wicklee's own `Probe` and `Fingerprint`
+requests are excluded. That makes it a false positive for this rule under any
+caller that unloads deliberately, and the hedge in the inferred statement is
+doing real work.
+
+### The dispatcher, live
+
+```
+$ node examples/dispatch.mjs --acceptable llama3.2:1b,gemma3:1b --num-ctx 4096 \
+    --prompt "Say hello." --agent http://127.0.0.1:7999 --ollama http://127.0.0.1:11999
+ask   llama3.2:1b: ready_now
+decision  run llama3.2:1b — ready_now
+ran   llama3.2:1b in 608 ms (load 541.018084 ms, 3 tokens)
+receipt sent to Wicklee: HTTP 201
+
+Hello.
+```
+
+`wicklee_readiness` over MCP answered **`ready_now`**. The receipt was
+**accepted** (201). **The `ready_now` was wrong for this request.**
+`llama3.2:1b` was resident at 8192 and the dispatch asked for 4096, so the
+runtime reloaded it, 541 ms of load, and `ollama ps` afterwards showed it at
+4096. Readiness has no context parameter, so it answers about the resident copy
+whatever context the caller is about to use. That is the `context_reset` mistake
+made by Wicklee's own consumer, after Wicklee said it was safe.
+
+The stored receipt also lists `co_resident: gemma3:1b, llama3.1:8b,
+qwen2.5:1.5b, qwen3.5:4b, qwen3.5:9b`, which includes three models that were
+installed and not loaded. `ambient_from_states` in `agent/src/receipts.rs` adds
+every tracked model state without checking residency. Recorded, not fixed.
+
+### Smaller things
+
+- `ollama-capabilities.mjs` defaults to `:11434` and, unlike the step 8 and 9
+  scripts, does not refuse it. `examples/dispatch.mjs` defaults to `:7700` and
+  `:11434`. Both were run with explicit private URLs.
+- The runbook's tidy-up, `pkill -f "ollama serve"`, also matches the default
+  Ollama app. The private processes were stopped by PID instead.
+- `ollama-capabilities.mjs` was run with the private agent stopped, as its
+  header asks, with `--model gemma3:1b --big-model llama3.2:1b`. V1 and V4 saw
+  no split and no eviction at these sizes. V3 and V5 matched the earlier run.
+  Its V8 answer is a static grep and was not re-checked.
+- The `bandwidth_ceiling_reached` observation also appeared in `/v1/findings`
+  during the hand-run alternation.
+
+Raw:
+[`bench-capabilities-m4-1b-2026-11-28.json`](bench-capabilities-m4-1b-2026-11-28.json),
+[`bench-fault-inject-m4-1b-2026-11-28.json`](bench-fault-inject-m4-1b-2026-11-28.json),
+[`bench-headroom-m4-1b-2026-11-28.json`](bench-headroom-m4-1b-2026-11-28.json),
+[`bench-headroom-ctx131072-m4-1b-2026-11-28.json`](bench-headroom-ctx131072-m4-1b-2026-11-28.json),
+[`bench-controller-4policy-m4-1b-2026-11-28.json`](bench-controller-4policy-m4-1b-2026-11-28.json),
+[`bench-controller-m4-1b-2026-11-28.md`](bench-controller-m4-1b-2026-11-28.md),
+[`bench-acceptance-m4-1b-2026-11-28.json`](bench-acceptance-m4-1b-2026-11-28.json).
+The verify runs, the eviction bisection and the dispatcher run were done by hand
+and are quoted here; they have no transcript.

@@ -1,0 +1,158 @@
+{
+  "started_at": "2026-11-28T13:44:31.599Z",
+  "host": {
+    "label": "M4 Mac mini, 16 GB unified, 1b-class models",
+    "platform": "darwin",
+    "accelerator_budget_gb": 12.9,
+    "notes": "Budget is what the agent reports: headroom.free_bytes 12884901888 (apple_wired_limit; iogpu.wired_limit_mb reads 0, so 75% of 16 GiB). scenarios.m4.json and the runbook say 11.6; the agent says 12.9. eviction_context measured for llama3.2:1b + qwen2.5:1.5b loaded together, both orders: both resident at 65536 (reproduced twice each order), evicted at 69632, 73728, 81920, 98304 and 131072. Combined footprint at the boundary does not bracket cleanly: 6.12 GB coexisted at 65536 while 5.95 GB evicted at 69632. qwen2.5:1.5b and gemma3:1b cap at 32768: the runtime clamps any larger num_ctx to 32768 (gemma3:1b 1.01 GB, qwen2.5:1.5b 2.12 GB there). So too_large_for_accelerator does NOT exceed the budget for gemma3:1b: 131072 is clamped to 32768 at 1.01 GB. No context makes the small model exceed the budget on this host; cpu_split is not inducible here on that ground as well as unified memory. Conditions during the run: the default Ollama app (:11434, not touched) had a llama3.1:8b llama-server runner alive (-c 4096, RSS 9 MB), swap 7.49 GB used of 8 GB at the start. The private agent was started with WICKLEE_LLAMACPP_PORT=11998 (nothing listening) because its llama.cpp process discovery otherwise attaches to Ollama's own llama-server runners, including the default runtime's."
+  },
+  "context": 131072,
+  "env": {
+    "agent_version": "0.16.0",
+    "ollama_version": "0.40.16"
+  },
+  "pairs": [
+    {
+      "first": "gemma3:1b",
+      "second": "llama3.2:1b",
+      "first_resident_bytes": 1008247766,
+      "predicted": {
+        "readiness": "requires_loading",
+        "fit_basis": "measured",
+        "footprint_bytes": 1732708925,
+        "headroom_bytes": 11876654122,
+        "headroom_source": "apple_wired_limit",
+        "safety_margin_bytes": 536870912,
+        "would_displace": []
+      },
+      "both_resident": true,
+      "resident_after": [
+        "llama3.2:1b",
+        "gemma3:1b"
+      ],
+      "total_bytes_after": 7205394840,
+      "attempted_total_bytes": 7205394840,
+      "verdict": "correct"
+    },
+    {
+      "first": "gemma3:1b",
+      "second": "qwen2.5:1.5b",
+      "first_resident_bytes": 1008247766,
+      "predicted": {
+        "readiness": "requires_loading",
+        "fit_basis": "measured",
+        "footprint_bytes": 1367049502,
+        "headroom_bytes": 11876654122,
+        "headroom_source": "apple_wired_limit",
+        "safety_margin_bytes": 536870912,
+        "would_displace": []
+      },
+      "both_resident": true,
+      "resident_after": [
+        "qwen2.5:1.5b",
+        "gemma3:1b"
+      ],
+      "total_bytes_after": 3130271988,
+      "attempted_total_bytes": 3130271988,
+      "verdict": "correct"
+    },
+    {
+      "first": "llama3.2:1b",
+      "second": "gemma3:1b",
+      "first_resident_bytes": 6197147074,
+      "predicted": {
+        "readiness": "requires_loading",
+        "fit_basis": "measured",
+        "footprint_bytes": 1008247766,
+        "headroom_bytes": 6687754814,
+        "headroom_source": "apple_wired_limit",
+        "safety_margin_bytes": 536870912,
+        "would_displace": []
+      },
+      "both_resident": true,
+      "resident_after": [
+        "gemma3:1b",
+        "llama3.2:1b"
+      ],
+      "total_bytes_after": 7106272951,
+      "attempted_total_bytes": 7106272951,
+      "verdict": "correct"
+    },
+    {
+      "first": "llama3.2:1b",
+      "second": "qwen2.5:1.5b",
+      "first_resident_bytes": 6197147074,
+      "predicted": {
+        "readiness": "requires_loading",
+        "fit_basis": "measured",
+        "footprint_bytes": 2122024222,
+        "headroom_bytes": 6687754814,
+        "headroom_source": "apple_wired_limit",
+        "safety_margin_bytes": 536870912,
+        "would_displace": []
+      },
+      "both_resident": true,
+      "resident_after": [
+        "qwen2.5:1.5b",
+        "llama3.2:1b"
+      ],
+      "total_bytes_after": 8217962740,
+      "attempted_total_bytes": 8217962740,
+      "verdict": "correct"
+    },
+    {
+      "first": "qwen2.5:1.5b",
+      "second": "gemma3:1b",
+      "first_resident_bytes": 2122024222,
+      "predicted": {
+        "readiness": "requires_loading",
+        "fit_basis": "measured",
+        "footprint_bytes": 1008247766,
+        "headroom_bytes": 10762877666,
+        "headroom_source": "apple_wired_limit",
+        "safety_margin_bytes": 536870912,
+        "would_displace": []
+      },
+      "both_resident": true,
+      "resident_after": [
+        "gemma3:1b",
+        "qwen2.5:1.5b"
+      ],
+      "total_bytes_after": 3130271988,
+      "attempted_total_bytes": 3130271988,
+      "verdict": "correct"
+    },
+    {
+      "first": "qwen2.5:1.5b",
+      "second": "llama3.2:1b",
+      "first_resident_bytes": 2122024222,
+      "predicted": {
+        "readiness": "requires_loading",
+        "fit_basis": "measured",
+        "footprint_bytes": 6197147074,
+        "headroom_bytes": 10762877666,
+        "headroom_source": "apple_wired_limit",
+        "safety_margin_bytes": 536870912,
+        "would_displace": []
+      },
+      "both_resident": true,
+      "resident_after": [
+        "llama3.2:1b",
+        "qwen2.5:1.5b"
+      ],
+      "total_bytes_after": 8163772333,
+      "attempted_total_bytes": 8163772333,
+      "verdict": "correct"
+    }
+  ],
+  "bracket": {
+    "largest_coexisting_bytes": 8217962740,
+    "smallest_evicting_attempt_bytes": null,
+    "agent_budget_bytes": 12884901888,
+    "headroom_source": "apple_wired_limit"
+  },
+  "summary": {
+    "correct": 6
+  },
+  "finished_at": "2026-11-28T13:45:56.176Z"
+}

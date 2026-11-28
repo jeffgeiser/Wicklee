@@ -1,0 +1,653 @@
+{
+  "started_at": "2026-11-28T13:36:21.964Z",
+  "host": {
+    "label": "M4 Mac mini, 16 GB unified, 1b-class models",
+    "platform": "darwin",
+    "accelerator_budget_gb": 12.9,
+    "notes": "Budget is what the agent reports: headroom.free_bytes 12884901888 (apple_wired_limit; iogpu.wired_limit_mb reads 0, so 75% of 16 GiB). scenarios.m4.json and the runbook say 11.6; the agent says 12.9. eviction_context measured for llama3.2:1b + qwen2.5:1.5b loaded together, both orders: both resident at 65536 (reproduced twice each order), evicted at 69632, 73728, 81920, 98304 and 131072. Combined footprint at the boundary does not bracket cleanly: 6.12 GB coexisted at 65536 while 5.95 GB evicted at 69632. qwen2.5:1.5b and gemma3:1b cap at 32768: the runtime clamps any larger num_ctx to 32768 (gemma3:1b 1.01 GB, qwen2.5:1.5b 2.12 GB there). So too_large_for_accelerator does NOT exceed the budget for gemma3:1b: 131072 is clamped to 32768 at 1.01 GB. No context makes the small model exceed the budget on this host; cpu_split is not inducible here on that ground as well as unified memory. Conditions during the run: the default Ollama app (:11434, not touched) had a llama3.1:8b llama-server runner alive (-c 4096, RSS 9 MB), swap 7.49 GB used of 8 GB at the start. The private agent was started with WICKLEE_LLAMACPP_PORT=11998 (nothing listening) because its llama.cpp process discovery otherwise attaches to Ollama's own llama-server runners, including the default runtime's."
+  },
+  "ollama_base_url": "http://127.0.0.1:11999",
+  "agent_base_url": "http://127.0.0.1:7999",
+  "env": {
+    "agent_version": "0.16.0",
+    "store_healthy": true,
+    "ollama_version": "0.40.16"
+  },
+  "results": {
+    "cpu_split": {
+      "status": "not_inducible",
+      "detail": "the runtime reports size_vram (1008247766) equal to size (1008247766) at context 131072. On unified memory there is one pool, so no part of the footprint is outside the accelerator and cpu_split has nothing to see. Inducible on a discrete GPU",
+      "load_ms": 527,
+      "took_s": 8.6,
+      "expects": "cpu_split"
+    },
+    "context_reset": {
+      "status": "fired",
+      "finding": {
+        "first_seen_ms": 1795873019239,
+        "id": "F-868ecd",
+        "last_seen_ms": 1795873034241,
+        "models": [
+          "gemma3:1b",
+          "llama3.2:1b"
+        ],
+        "rule": "context_reset",
+        "severity": "warning",
+        "statements": [
+          {
+            "basis": [
+              {
+                "id": 12,
+                "kind": "transition",
+                "ts_ms": 1795873019239
+              },
+              {
+                "id": 16,
+                "kind": "transition",
+                "ts_ms": 1795873034241
+              }
+            ],
+            "label": "observed",
+            "subjects": [
+              "gemma3:1b",
+              "llama3.2:1b"
+            ],
+            "text": "gemma3:1b was reloaded at the default 4096-token context 2 times in the last 22 seconds, dropping from as high as 8192 tokens. The load cost of each reload is not measured."
+          },
+          {
+            "basis": [
+              {
+                "id": 12,
+                "kind": "transition",
+                "ts_ms": 1795873019239
+              },
+              {
+                "id": 16,
+                "kind": "transition",
+                "ts_ms": 1795873034241
+              }
+            ],
+            "label": "inferred",
+            "subjects": [
+              "gemma3:1b",
+              "llama3.2:1b"
+            ],
+            "text": "A caller is likely omitting num_ctx, so each such request silently reloads gemma3:1b at the default instead of reusing the resident copy."
+          }
+        ],
+        "title": "gemma3:1b is being reloaded at the default context"
+      },
+      "detail": "observed: gemma3:1b was reloaded at the default 4096-token context 2 times in the last 22 seconds, dropping from as high as 8192 tokens. The load cost of each reload is not measured. | inferred: A caller is likely omitting num_ctx, so each such request silently reloads gemma3:1b at the default instead of reusing the resident copy.",
+      "cycles": 3,
+      "took_s": 51.6,
+      "expects": "context_reset"
+    },
+    "eviction_churn": {
+      "status": "missed",
+      "detail": "4 alternations between llama3.2:1b and qwen2.5:1.5b at context 69632 produced no finding",
+      "cycles": 4,
+      "took_s": 67.1,
+      "expects": "eviction_churn"
+    },
+    "expiry_reload": {
+      "status": "fired",
+      "finding": {
+        "first_seen_ms": 1795873124241,
+        "id": "F-81259c",
+        "last_seen_ms": 1795873154241,
+        "models": [
+          "gemma3:1b",
+          "qwen2.5:1.5b",
+          "llama3.2:1b"
+        ],
+        "rule": "expiry_reload",
+        "severity": "info",
+        "statements": [
+          {
+            "basis": [
+              {
+                "id": 29,
+                "kind": "transition",
+                "ts_ms": 1795873124241
+              },
+              {
+                "id": 32,
+                "kind": "transition",
+                "ts_ms": 1795873139240
+              },
+              {
+                "id": 34,
+                "kind": "transition",
+                "ts_ms": 1795873154241
+              }
+            ],
+            "label": "observed",
+            "subjects": [
+              "gemma3:1b",
+              "qwen2.5:1.5b",
+              "llama3.2:1b"
+            ],
+            "text": "gemma3:1b expired and was loaded again within 10 minutes on 3 occasions in the last day — gaps from 5 seconds to 19 seconds. Neither the keep-alive duration nor the cold-load cost is reported by /api/ps, so neither is claimed here."
+          },
+          {
+            "basis": [
+              {
+                "id": 29,
+                "kind": "transition",
+                "ts_ms": 1795873124241
+              },
+              {
+                "id": 32,
+                "kind": "transition",
+                "ts_ms": 1795873139240
+              },
+              {
+                "id": 34,
+                "kind": "transition",
+                "ts_ms": 1795873154241
+              }
+            ],
+            "label": "inferred",
+            "subjects": [
+              "gemma3:1b",
+              "qwen2.5:1.5b",
+              "llama3.2:1b"
+            ],
+            "text": "The keep-alive may be shorter than the pause between the steps using this model, so each step may be paying a cold load."
+          }
+        ],
+        "title": "gemma3:1b is reloading after every keep-alive expiry"
+      },
+      "detail": "observed: gemma3:1b expired and was loaded again within 10 minutes on 3 occasions in the last day — gaps from 5 seconds to 19 seconds. Neither the keep-alive duration nor the cold-load cost is reported by /api/ps, so neither is claimed here. | inferred: The keep-alive may be shorter than the pause between the steps using this model, so each step may be paying a cold load.",
+      "cycles": 4,
+      "took_s": 62.4,
+      "expects": "expiry_reload"
+    },
+    "baseline_regression": {
+      "status": "not_inducible",
+      "detail": "the rate moved 3.4%, under the 20% the rule requires. Co-loading llama3.2:1b did not slow gemma3:1b enough on this hardware to count",
+      "rates": {
+        "baseline_tok_s": 98.18577575683594,
+        "after_tok_s": 94.84867858886719,
+        "refused": []
+      },
+      "took_s": 32.3,
+      "expects": "baseline_regression"
+    },
+    "healthy": {
+      "status": "quiet",
+      "detail": "raised nothing new. Still open from the injected faults: context_reset, expiry_reload. A clean 24-hour control is a step 9 acceptance run",
+      "preexisting": [
+        "context_reset",
+        "expiry_reload"
+      ],
+      "open": [
+        "context_reset",
+        "expiry_reload"
+      ],
+      "took_s": 20.5,
+      "expects": null
+    }
+  },
+  "final_inspect": {
+    "activity_signal": true,
+    "findings": [
+      {
+        "first_seen_ms": 1795873019239,
+        "id": "F-868ecd",
+        "last_seen_ms": 1795873034241,
+        "models": [
+          "gemma3:1b",
+          "llama3.2:1b"
+        ],
+        "rule": "context_reset",
+        "severity": "warning",
+        "statements": [
+          {
+            "basis": [
+              {
+                "id": 12,
+                "kind": "transition",
+                "ts_ms": 1795873019239
+              },
+              {
+                "id": 16,
+                "kind": "transition",
+                "ts_ms": 1795873034241
+              }
+            ],
+            "label": "observed",
+            "subjects": [
+              "gemma3:1b",
+              "llama3.2:1b"
+            ],
+            "text": "gemma3:1b was reloaded at the default 4096-token context 2 times in the last 3 minutes, dropping from as high as 8192 tokens. The load cost of each reload is not measured."
+          },
+          {
+            "basis": [
+              {
+                "id": 12,
+                "kind": "transition",
+                "ts_ms": 1795873019239
+              },
+              {
+                "id": 16,
+                "kind": "transition",
+                "ts_ms": 1795873034241
+              }
+            ],
+            "label": "inferred",
+            "subjects": [
+              "gemma3:1b",
+              "llama3.2:1b"
+            ],
+            "text": "A caller is likely omitting num_ctx, so each such request silently reloads gemma3:1b at the default instead of reusing the resident copy."
+          }
+        ],
+        "title": "gemma3:1b is being reloaded at the default context"
+      },
+      {
+        "first_seen_ms": 1795873124241,
+        "id": "F-81259c",
+        "last_seen_ms": 1795873169241,
+        "models": [
+          "gemma3:1b",
+          "qwen2.5:1.5b",
+          "llama3.2:1b"
+        ],
+        "rule": "expiry_reload",
+        "severity": "info",
+        "statements": [
+          {
+            "basis": [
+              {
+                "id": 29,
+                "kind": "transition",
+                "ts_ms": 1795873124241
+              },
+              {
+                "id": 32,
+                "kind": "transition",
+                "ts_ms": 1795873139240
+              },
+              {
+                "id": 34,
+                "kind": "transition",
+                "ts_ms": 1795873154241
+              },
+              {
+                "id": 36,
+                "kind": "transition",
+                "ts_ms": 1795873169241
+              }
+            ],
+            "label": "observed",
+            "subjects": [
+              "gemma3:1b",
+              "qwen2.5:1.5b",
+              "llama3.2:1b"
+            ],
+            "text": "gemma3:1b expired and was loaded again within 10 minutes on 4 occasions in the last day — gaps from 5 seconds to 19 seconds. Neither the keep-alive duration nor the cold-load cost is reported by /api/ps, so neither is claimed here."
+          },
+          {
+            "basis": [
+              {
+                "id": 29,
+                "kind": "transition",
+                "ts_ms": 1795873124241
+              },
+              {
+                "id": 32,
+                "kind": "transition",
+                "ts_ms": 1795873139240
+              },
+              {
+                "id": 34,
+                "kind": "transition",
+                "ts_ms": 1795873154241
+              },
+              {
+                "id": 36,
+                "kind": "transition",
+                "ts_ms": 1795873169241
+              }
+            ],
+            "label": "inferred",
+            "subjects": [
+              "gemma3:1b",
+              "qwen2.5:1.5b",
+              "llama3.2:1b"
+            ],
+            "text": "The keep-alive may be shorter than the pause between the steps using this model, so each step may be paying a cold load."
+          }
+        ],
+        "title": "gemma3:1b is reloading after every keep-alive expiry"
+      }
+    ],
+    "headroom": {
+      "free_bytes": 11926985770,
+      "source": "apple_wired_limit"
+    },
+    "history": {
+      "findings_persisted": true,
+      "persisted": true,
+      "scope": "stored",
+      "transitions": 47
+    },
+    "node_id": "WK-502B",
+    "not_checked": [
+      {
+        "reason": "this host has unified memory, so there is no accelerator boundary for part of a model to fall outside of",
+        "rule": "cpu_split"
+      }
+    ],
+    "observed_at_ms": 1795873224471,
+    "readiness": [
+      {
+        "displacement": null,
+        "fit_basis": "measured",
+        "footprint": {
+          "basis": "measured",
+          "bytes": 957916118,
+          "calibrated": true,
+          "context_length": 8192
+        },
+        "headroom": {
+          "free_bytes": 11926985770,
+          "source": "apple_wired_limit"
+        },
+        "in_use": true,
+        "last_activity_ms": 1795873214241,
+        "model": "gemma3:1b",
+        "observed_at_ms": 1795873224471,
+        "readiness": "ready_now",
+        "safety_margin_bytes": 536870912,
+        "statements": [
+          {
+            "basis": [
+              {
+                "id": 47,
+                "kind": "transition",
+                "ts_ms": 1795873219240
+              }
+            ],
+            "label": "observed",
+            "subjects": [
+              "gemma3:1b"
+            ],
+            "text": "gemma3:1b is resident, fully inside accelerator memory, running at context 8192."
+          }
+        ],
+        "valid_for_s": 10,
+        "would_displace": []
+      },
+      {
+        "coexistence": "unverified",
+        "displacement": null,
+        "fit_basis": "estimated_weights_only",
+        "footprint": {
+          "basis": "estimated_weights_only",
+          "bytes": 7462042369,
+          "calibrated": true,
+          "context_length": null
+        },
+        "headroom": {
+          "free_bytes": 11926985770,
+          "source": "apple_wired_limit"
+        },
+        "in_use": false,
+        "last_activity_ms": null,
+        "model": "llama3.1:8b",
+        "observed_at_ms": 1795873224471,
+        "readiness": "requires_loading",
+        "safety_margin_bytes": 536870912,
+        "statements": [
+          {
+            "basis": [
+              {
+                "id": 47,
+                "kind": "transition",
+                "ts_ms": 1795873219240
+              }
+            ],
+            "label": "observed",
+            "subjects": [
+              "gemma3:1b"
+            ],
+            "text": "gemma3:1b is resident."
+          },
+          {
+            "basis": [
+              {
+                "id": 47,
+                "kind": "transition",
+                "ts_ms": 1795873219240
+              }
+            ],
+            "label": "inferred",
+            "subjects": [
+              "gemma3:1b"
+            ],
+            "text": "Fits by memory accounting. On the one host tested, the runtime evicted a resident model in 5 of 6 such cases, so this may still displace gemma3:1b."
+          }
+        ],
+        "valid_for_s": 10,
+        "would_displace": []
+      },
+      {
+        "coexistence": "unverified",
+        "displacement": null,
+        "fit_basis": "measured",
+        "footprint": {
+          "basis": "measured",
+          "bytes": 1732708925,
+          "calibrated": true,
+          "context_length": 8192
+        },
+        "headroom": {
+          "free_bytes": 11926985770,
+          "source": "apple_wired_limit"
+        },
+        "in_use": false,
+        "last_activity_ms": 1795873094244,
+        "model": "llama3.2:1b",
+        "observed_at_ms": 1795873224471,
+        "readiness": "requires_loading",
+        "safety_margin_bytes": 536870912,
+        "statements": [
+          {
+            "basis": [
+              {
+                "id": 47,
+                "kind": "transition",
+                "ts_ms": 1795873219240
+              }
+            ],
+            "label": "observed",
+            "subjects": [
+              "gemma3:1b"
+            ],
+            "text": "gemma3:1b is resident."
+          },
+          {
+            "basis": [
+              {
+                "id": 47,
+                "kind": "transition",
+                "ts_ms": 1795873219240
+              }
+            ],
+            "label": "inferred",
+            "subjects": [
+              "gemma3:1b"
+            ],
+            "text": "Fits by memory accounting. On the one host tested, the runtime evicted a resident model in 5 of 6 such cases, so this may still displace gemma3:1b."
+          }
+        ],
+        "valid_for_s": 10,
+        "would_displace": []
+      },
+      {
+        "coexistence": "unverified",
+        "displacement": null,
+        "fit_basis": "measured",
+        "footprint": {
+          "basis": "measured",
+          "bytes": 2020815666,
+          "calibrated": true,
+          "context_length": 32768
+        },
+        "headroom": {
+          "free_bytes": 11926985770,
+          "source": "apple_wired_limit"
+        },
+        "in_use": false,
+        "last_activity_ms": 1795873104247,
+        "model": "qwen2.5:1.5b",
+        "observed_at_ms": 1795873224471,
+        "readiness": "requires_loading",
+        "safety_margin_bytes": 536870912,
+        "statements": [
+          {
+            "basis": [
+              {
+                "id": 47,
+                "kind": "transition",
+                "ts_ms": 1795873219240
+              }
+            ],
+            "label": "observed",
+            "subjects": [
+              "gemma3:1b"
+            ],
+            "text": "gemma3:1b is resident."
+          },
+          {
+            "basis": [
+              {
+                "id": 47,
+                "kind": "transition",
+                "ts_ms": 1795873219240
+              }
+            ],
+            "label": "inferred",
+            "subjects": [
+              "gemma3:1b"
+            ],
+            "text": "Fits by memory accounting. On the one host tested, the runtime evicted a resident model in 5 of 6 such cases, so this may still displace gemma3:1b."
+          }
+        ],
+        "valid_for_s": 10,
+        "would_displace": []
+      },
+      {
+        "coexistence": "unverified",
+        "displacement": null,
+        "fit_basis": "estimated_weights_only",
+        "footprint": {
+          "basis": "estimated_weights_only",
+          "bytes": 5140717401,
+          "calibrated": true,
+          "context_length": null
+        },
+        "headroom": {
+          "free_bytes": 11926985770,
+          "source": "apple_wired_limit"
+        },
+        "in_use": false,
+        "last_activity_ms": null,
+        "model": "qwen3.5:4b",
+        "observed_at_ms": 1795873224471,
+        "readiness": "requires_loading",
+        "safety_margin_bytes": 536870912,
+        "statements": [
+          {
+            "basis": [
+              {
+                "id": 47,
+                "kind": "transition",
+                "ts_ms": 1795873219240
+              }
+            ],
+            "label": "observed",
+            "subjects": [
+              "gemma3:1b"
+            ],
+            "text": "gemma3:1b is resident."
+          },
+          {
+            "basis": [
+              {
+                "id": 47,
+                "kind": "transition",
+                "ts_ms": 1795873219240
+              }
+            ],
+            "label": "inferred",
+            "subjects": [
+              "gemma3:1b"
+            ],
+            "text": "Fits by memory accounting. On the one host tested, the runtime evicted a resident model in 5 of 6 such cases, so this may still displace gemma3:1b."
+          }
+        ],
+        "valid_for_s": 10,
+        "would_displace": []
+      },
+      {
+        "coexistence": "unverified",
+        "displacement": null,
+        "fit_basis": "estimated_weights_only",
+        "footprint": {
+          "basis": "estimated_weights_only",
+          "bytes": 10000145590,
+          "calibrated": true,
+          "context_length": null
+        },
+        "headroom": {
+          "free_bytes": 11926985770,
+          "source": "apple_wired_limit"
+        },
+        "in_use": false,
+        "last_activity_ms": null,
+        "model": "qwen3.5:9b",
+        "observed_at_ms": 1795873224471,
+        "readiness": "requires_loading",
+        "safety_margin_bytes": 536870912,
+        "statements": [
+          {
+            "basis": [
+              {
+                "id": 47,
+                "kind": "transition",
+                "ts_ms": 1795873219240
+              }
+            ],
+            "label": "observed",
+            "subjects": [
+              "gemma3:1b"
+            ],
+            "text": "gemma3:1b is resident."
+          },
+          {
+            "basis": [
+              {
+                "id": 47,
+                "kind": "transition",
+                "ts_ms": 1795873219240
+              }
+            ],
+            "label": "inferred",
+            "subjects": [
+              "gemma3:1b"
+            ],
+            "text": "Fits by memory accounting. On the one host tested, the runtime evicted a resident model in 5 of 6 such cases, so this may still displace gemma3:1b."
+          }
+        ],
+        "valid_for_s": 10,
+        "would_displace": []
+      }
+    ],
+    "since_ms": null
+  },
+  "finished_at": "2026-11-28T13:40:24.483Z"
+}

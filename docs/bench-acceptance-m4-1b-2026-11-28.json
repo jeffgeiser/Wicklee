@@ -1,0 +1,382 @@
+{
+  "started_at": "2026-11-28T13:49:20.913Z",
+  "label": "M4 Mac mini, 16 GB unified, 1b-class models",
+  "host": {
+    "declared": {
+      "label": "M4 Mac mini, 16 GB unified, 1b-class models",
+      "platform": "darwin",
+      "accelerator_budget_gb": 12.9,
+      "notes": "Budget is what the agent reports: headroom.free_bytes 12884901888 (apple_wired_limit; iogpu.wired_limit_mb reads 0, so 75% of 16 GiB). scenarios.m4.json and the runbook say 11.6; the agent says 12.9. eviction_context measured for llama3.2:1b + qwen2.5:1.5b loaded together, both orders: both resident at 65536 (reproduced twice each order), evicted at 69632, 73728, 81920, 98304 and 131072. Combined footprint at the boundary does not bracket cleanly: 6.12 GB coexisted at 65536 while 5.95 GB evicted at 69632. qwen2.5:1.5b and gemma3:1b cap at 32768: the runtime clamps any larger num_ctx to 32768 (gemma3:1b 1.01 GB, qwen2.5:1.5b 2.12 GB there). So too_large_for_accelerator does NOT exceed the budget for gemma3:1b: 131072 is clamped to 32768 at 1.01 GB. No context makes the small model exceed the budget on this host; cpu_split is not inducible here on that ground as well as unified memory. Conditions during the run: the default Ollama app (:11434, not touched) had a llama3.1:8b llama-server runner alive (-c 4096, RSS 9 MB), swap 7.49 GB used of 8 GB at the start. The private agent was started with WICKLEE_LLAMACPP_PORT=11998 (nothing listening) because its llama.cpp process discovery otherwise attaches to Ollama's own llama-server runners, including the default runtime's."
+    },
+    "platform": "darwin arm64 25.5.0",
+    "cpus": 10,
+    "cpu_model": "Apple M4",
+    "total_mem_bytes": 17179869184
+  },
+  "env": {
+    "agent_version": "0.16.0",
+    "build_target": "macos-aarch64",
+    "store_healthy": true,
+    "ollama_version": "0.40.16"
+  },
+  "checks": {
+    "reproducible": {
+      "pass": true,
+      "detail": "all three overlap; medians spread 0.6%",
+      "data": {
+        "runs": [
+          {
+            "high": 100.83448791503906,
+            "low": 100.69268035888672,
+            "median": 100.74805450439453,
+            "n": 3
+          },
+          {
+            "high": 101.43205261230469,
+            "low": 100.51715850830078,
+            "median": 100.98383331298828,
+            "n": 3
+          },
+          {
+            "high": 101.00907897949219,
+            "low": 100.01917266845703,
+            "median": 100.36852264404297,
+            "n": 3
+          }
+        ],
+        "median_spread_pct": 0.6
+      },
+      "took_s": 20.9
+    },
+    "evidence": {
+      "pass": true,
+      "detail": "3 finding(s), all evidenced",
+      "data": {
+        "findings": [
+          {
+            "id": "F-868ecd",
+            "rule": "context_reset",
+            "statements": [
+              {
+                "basis": [
+                  {
+                    "id": 12,
+                    "kind": "transition",
+                    "ts_ms": 1795873019239
+                  },
+                  {
+                    "id": 16,
+                    "kind": "transition",
+                    "ts_ms": 1795873034241
+                  }
+                ],
+                "label": "observed",
+                "subjects": [
+                  "gemma3:1b",
+                  "llama3.2:1b"
+                ],
+                "text": "gemma3:1b was reloaded at the default 4096-token context 2 times in the last 13 minutes, dropping from as high as 8192 tokens. The load cost of each reload is not measured."
+              },
+              {
+                "basis": [
+                  {
+                    "id": 12,
+                    "kind": "transition",
+                    "ts_ms": 1795873019239
+                  },
+                  {
+                    "id": 16,
+                    "kind": "transition",
+                    "ts_ms": 1795873034241
+                  }
+                ],
+                "label": "inferred",
+                "subjects": [
+                  "gemma3:1b",
+                  "llama3.2:1b"
+                ],
+                "text": "A caller is likely omitting num_ctx, so each such request silently reloads gemma3:1b at the default instead of reusing the resident copy."
+              }
+            ]
+          },
+          {
+            "id": "F-047fb3",
+            "rule": "eviction_churn",
+            "statements": [
+              {
+                "basis": [
+                  {
+                    "id": 59,
+                    "kind": "transition",
+                    "ts_ms": 1795873344248
+                  },
+                  {
+                    "id": 67,
+                    "kind": "transition",
+                    "ts_ms": 1795873364241
+                  },
+                  {
+                    "id": 70,
+                    "kind": "transition",
+                    "ts_ms": 1795873374241
+                  },
+                  {
+                    "id": 71,
+                    "kind": "transition",
+                    "ts_ms": 1795873374241
+                  },
+                  {
+                    "id": 77,
+                    "kind": "transition",
+                    "ts_ms": 1795873414241
+                  },
+                  {
+                    "id": 81,
+                    "kind": "transition",
+                    "ts_ms": 1795873444241
+                  },
+                  {
+                    "id": 86,
+                    "kind": "transition",
+                    "ts_ms": 1795873474246
+                  },
+                  {
+                    "id": 87,
+                    "kind": "transition",
+                    "ts_ms": 1795873474246
+                  },
+                  {
+                    "id": 93,
+                    "kind": "transition",
+                    "ts_ms": 1795873504249
+                  },
+                  {
+                    "id": 94,
+                    "kind": "transition",
+                    "ts_ms": 1795873504249
+                  },
+                  {
+                    "id": 98,
+                    "kind": "transition",
+                    "ts_ms": 1795873529240
+                  },
+                  {
+                    "id": 103,
+                    "kind": "transition",
+                    "ts_ms": 1795873569242
+                  },
+                  {
+                    "id": 104,
+                    "kind": "transition",
+                    "ts_ms": 1795873569242
+                  }
+                ],
+                "label": "observed",
+                "subjects": [
+                  "qwen2.5:1.5b",
+                  "llama3.2:1b",
+                  "gemma3:1b"
+                ],
+                "text": "3 models were cleared 13 times in the last 7 minutes within 10 seconds of another model loading, each before its own keep-alive expired: gemma3:1b, llama3.2:1b, qwen2.5:1.5b."
+              },
+              {
+                "basis": [
+                  {
+                    "id": 59,
+                    "kind": "transition",
+                    "ts_ms": 1795873344248
+                  },
+                  {
+                    "id": 67,
+                    "kind": "transition",
+                    "ts_ms": 1795873364241
+                  },
+                  {
+                    "id": 70,
+                    "kind": "transition",
+                    "ts_ms": 1795873374241
+                  },
+                  {
+                    "id": 71,
+                    "kind": "transition",
+                    "ts_ms": 1795873374241
+                  },
+                  {
+                    "id": 77,
+                    "kind": "transition",
+                    "ts_ms": 1795873414241
+                  },
+                  {
+                    "id": 81,
+                    "kind": "transition",
+                    "ts_ms": 1795873444241
+                  },
+                  {
+                    "id": 86,
+                    "kind": "transition",
+                    "ts_ms": 1795873474246
+                  },
+                  {
+                    "id": 87,
+                    "kind": "transition",
+                    "ts_ms": 1795873474246
+                  },
+                  {
+                    "id": 93,
+                    "kind": "transition",
+                    "ts_ms": 1795873504249
+                  },
+                  {
+                    "id": 94,
+                    "kind": "transition",
+                    "ts_ms": 1795873504249
+                  },
+                  {
+                    "id": 98,
+                    "kind": "transition",
+                    "ts_ms": 1795873529240
+                  },
+                  {
+                    "id": 103,
+                    "kind": "transition",
+                    "ts_ms": 1795873569242
+                  },
+                  {
+                    "id": 104,
+                    "kind": "transition",
+                    "ts_ms": 1795873569242
+                  }
+                ],
+                "label": "inferred",
+                "subjects": [
+                  "qwen2.5:1.5b",
+                  "llama3.2:1b",
+                  "gemma3:1b"
+                ],
+                "text": "Memory contention may be causing the reloads: a load that does not fit clears resident models rather than queueing."
+              }
+            ]
+          },
+          {
+            "id": "F-81259c",
+            "rule": "expiry_reload",
+            "statements": [
+              {
+                "basis": [
+                  {
+                    "id": 29,
+                    "kind": "transition",
+                    "ts_ms": 1795873124241
+                  },
+                  {
+                    "id": 32,
+                    "kind": "transition",
+                    "ts_ms": 1795873139240
+                  },
+                  {
+                    "id": 34,
+                    "kind": "transition",
+                    "ts_ms": 1795873154241
+                  },
+                  {
+                    "id": 36,
+                    "kind": "transition",
+                    "ts_ms": 1795873169241
+                  }
+                ],
+                "label": "observed",
+                "subjects": [
+                  "gemma3:1b",
+                  "qwen2.5:1.5b",
+                  "llama3.2:1b"
+                ],
+                "text": "gemma3:1b expired and was loaded again within 10 minutes on 4 occasions in the last day — gaps from 5 seconds to 19 seconds. Neither the keep-alive duration nor the cold-load cost is reported by /api/ps, so neither is claimed here."
+              },
+              {
+                "basis": [
+                  {
+                    "id": 29,
+                    "kind": "transition",
+                    "ts_ms": 1795873124241
+                  },
+                  {
+                    "id": 32,
+                    "kind": "transition",
+                    "ts_ms": 1795873139240
+                  },
+                  {
+                    "id": 34,
+                    "kind": "transition",
+                    "ts_ms": 1795873154241
+                  },
+                  {
+                    "id": 36,
+                    "kind": "transition",
+                    "ts_ms": 1795873169241
+                  }
+                ],
+                "label": "inferred",
+                "subjects": [
+                  "gemma3:1b",
+                  "qwen2.5:1.5b",
+                  "llama3.2:1b"
+                ],
+                "text": "The keep-alive may be shorter than the pause between the steps using this model, so each step may be paying a cold load."
+              }
+            ]
+          }
+        ]
+      },
+      "took_s": 0
+    },
+    "no_side_effects": {
+      "pass": true,
+      "detail": "expires_at unchanged across all four reads",
+      "data": {
+        "before": "2026-11-28T09:04:41.900985-05:00",
+        "after": "2026-11-28T09:04:41.900985-05:00"
+      },
+      "took_s": 3.6
+    },
+    "overhead": {
+      "pass": null,
+      "detail": "0.16.0: RSS 84 MB (peak 84), CPU 8.6% (peak 12.9%). Reported, not judged — the spec asks for the numbers against the 0.12.0 baseline, which needs both builds",
+      "data": {
+        "agent_version": "0.16.0",
+        "pid": 7363,
+        "rss_mb_median": 84,
+        "rss_mb_max": 84,
+        "cpu_pct_median": 8.6,
+        "cpu_pct_max": 12.9,
+        "samples": [
+          {
+            "rss_kb": 85888,
+            "cpu_pct": 12.9
+          },
+          {
+            "rss_kb": 86112,
+            "cpu_pct": 3.8
+          },
+          {
+            "rss_kb": 86112,
+            "cpu_pct": 1.8
+          },
+          {
+            "rss_kb": 86128,
+            "cpu_pct": 8.6
+          },
+          {
+            "rss_kb": 86128,
+            "cpu_pct": 12.6
+          }
+        ]
+      },
+      "took_s": 20.1
+    }
+  },
+  "not_covered": {
+    "healthy_24h": "a day of normal use with `wicklee inspect` read at the end",
+    "throughput_without_agent": "needs the agent stopped and restarted; run by hand"
+  },
+  "finished_at": "2026-11-28T13:50:05.589Z"
+}
