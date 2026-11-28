@@ -249,6 +249,7 @@ Each of these is blocked on something outside the code. The next five days of wo
 | Stage 2's result | A host where the smallest model is not the one that coexists — a rented NVIDIA GPU with discrete VRAM, or 1b-class models on the Mac mini |
 | `inspect` against the installed service daemon | A daemon restart onto a current binary, which needs root. Everything verified so far used a hand-started agent with a fresh store, which proves the query and the render but not what a week of real traffic looks like |
 | Four acceptance rows | A day of normal use, a >5% fix lever that 16 GB cannot provide, and three other machines |
+| Findings and readiness as Prometheus metrics | A maintainer decision on the proposal in [`proposals/METRICS_ENDPOINT.md`](proposals/METRICS_ENDPOINT.md). Recommended first step is a textfile-collector example, not an agent change |
 | `baseline_regression` on the musl build | The rule reads the store, and musl has none. The in-memory receipt buffer added in v0.15.0 could carry it; `inspect` currently reports it as not checked, with the reason |
 
 ---

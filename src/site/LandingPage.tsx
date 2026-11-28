@@ -56,6 +56,24 @@ done`,
   },
 ];
 
+const alongside = [
+  {
+    tool: 'nvidia-smi, Activity Monitor',
+    tells: 'How busy the GPU and memory are right now.',
+    adds: 'Whether the model in memory is the one you think, whether part of it has spilled out of accelerator memory, and the thermal state the OS reports that most monitors do not surface.',
+  },
+  {
+    tool: 'Prometheus, Grafana, Datadog',
+    tells: 'Time series of utilisation, and latency as your application sees it.',
+    adds: 'Why a model was reloaded or evicted, with each statement labelled observed, inferred or verified, and which models can run right now without displacing another.',
+  },
+  {
+    tool: 'ollama ps, runtime logs',
+    tells: 'What is loaded at this moment.',
+    adds: 'What happened over the last hours: reloads at the wrong context, keep-alives that expired too early, models clearing each other, and a verify step that checks whether your fix helped.',
+  },
+];
+
 const agentEntryPoints = [
   { path: '/llms.txt', what: 'Short overview, endpoints and key metrics' },
   { path: '/llms-full.txt', what: 'The complete API reference in one file' },
@@ -104,6 +122,12 @@ const commands = [
   { cmd: 'wicklee fingerprint MODEL', what: 'Measure a model and store a baseline. Asks first' },
   { cmd: 'wicklee verify F-xxxxxx', what: "Re-run a finding's own test and compare against the last run" },
 ];
+
+const heroFinding = `F-7fff93  OBSERVED  qwen3.5:4b was reloaded at the default 4096-token context
+                      4 times in the last 5 minutes, dropping from as high as
+                      8192 tokens.
+          INFERRED  A caller is likely omitting num_ctx, so each such request
+                      silently reloads the model at the default.`;
 
 const inspectOutput = `WHAT IS HAPPENING
   F-7fff93  OBSERVED  qwen3.5:4b was reloaded at the default 4096-token context 4
@@ -177,6 +201,16 @@ const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
           actually helped. You can ask it from the command line too. One binary, over
           localhost. No account.
         </p>
+        <div className="max-w-3xl mx-auto mt-8 text-left">
+          <div className="bg-zinc-950 border border-zinc-800 rounded-2xl p-4 sm:p-5 overflow-x-auto">
+            <p className="font-mono text-[11px] sm:text-xs text-gray-500 mb-2">$ wicklee inspect</p>
+            <pre className="font-mono text-[11px] sm:text-xs leading-relaxed text-gray-300 whitespace-pre">{heroFinding}</pre>
+          </div>
+          <p className="mt-2 text-xs text-gray-600 text-center">
+            Real output from a 16 GB M4 Mac mini. If nothing is wrong, it says that too,
+            and lists anything it could not check.
+          </p>
+        </div>
         <div className="flex items-center justify-center mt-10">
           <button
             onClick={() => document.getElementById('install-snippet')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
@@ -350,6 +384,39 @@ const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
           >
             in the repository
           </a>.
+        </p>
+      </section>
+
+      <section className="max-w-5xl mx-auto px-4 sm:px-8 py-16 sm:py-24 border-t border-gray-800 relative z-10">
+        <h2 className="text-3xl sm:text-4xl font-bold text-white tracking-tight text-center mb-4">
+          Works alongside what you already run.
+        </h2>
+        <p className="text-gray-400 text-center max-w-3xl mx-auto mb-12 leading-relaxed">
+          Your monitoring tells you the numbers. Wicklee tells you what they mean and what to
+          change. It reads your runtime&rsquo;s API and the machine&rsquo;s own sensors, so it
+          sees thermal state, memory pressure and VRAM, and power draw where the OS allows it.
+        </p>
+        <div className="rounded-3xl border border-gray-700/60 overflow-hidden">
+          <div className="hidden md:grid grid-cols-[14rem_1fr_1.4fr] gap-6 px-6 py-3 bg-gray-800/60 text-xs font-bold uppercase tracking-widest text-gray-500">
+            <span>You already have</span>
+            <span>It tells you</span>
+            <span>Wicklee adds</span>
+          </div>
+          {alongside.map((a, i) => (
+            <div
+              key={a.tool}
+              className={`grid grid-cols-1 md:grid-cols-[14rem_1fr_1.4fr] gap-2 md:gap-6 px-6 py-5 ${i % 2 ? 'bg-gray-800/20' : 'bg-gray-800/40'}`}
+            >
+              <p className="font-mono text-xs text-cyan-400">{a.tool}</p>
+              <p className="text-sm text-gray-400 leading-relaxed">{a.tells}</p>
+              <p className="text-sm text-gray-300 leading-relaxed">{a.adds}</p>
+            </div>
+          ))}
+        </div>
+        <p className="mt-6 text-xs text-gray-500 text-center max-w-3xl mx-auto leading-relaxed">
+          It does not replace any of these and it is not in your request path. Today it
+          answers over its own CLI, HTTP and MCP interfaces; it does not push into your
+          dashboards.
         </p>
       </section>
 

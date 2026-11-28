@@ -183,6 +183,12 @@ function landingBodyHtml() {
     what is already loaded, and whether a change actually helped. You can ask it from the command
     line too. One binary, over localhost. No account.
   </p>
+  <p style="color:#9ca3af;line-height:1.6;font-family:ui-monospace,monospace;font-size:0.85rem">
+    $ wicklee inspect: F-7fff93 OBSERVED qwen3.5:4b was reloaded at the default 4096-token context 4
+    times in the last 5 minutes, dropping from as high as 8192 tokens. INFERRED A caller is likely
+    omitting num_ctx, so each such request silently reloads the model at the default. (Real output from
+    a 16 GB M4 Mac mini.)
+  </p>
   <p style="margin:0 0 2rem">
     <code style="background:#1f2937;border:1px solid #374151;border-radius:0.375rem;padding:0.5rem 0.75rem;color:#f9fafb;font-family:ui-monospace,monospace;font-size:0.875rem">curl -fsSL https://wicklee.dev/install.sh | bash</code>
   </p>
@@ -203,6 +209,18 @@ function landingBodyHtml() {
   <ul style="list-style:none;padding:0;color:#9ca3af;line-height:1.6">
 ${stepHtml}
   </ul>
+  <h2 style="font-size:1.4rem;font-weight:700;color:#f9fafb;margin-top:2.5rem">Works alongside what you already run</h2>
+  <p style="color:#9ca3af;line-height:1.6">
+    Your monitoring tells you the numbers; Wicklee tells you what they mean and what to change. It
+    reads your runtime's API and the machine's own sensors: thermal state, memory pressure and VRAM,
+    and power draw where the OS allows it. nvidia-smi and Activity Monitor show how busy the hardware
+    is; Wicklee adds whether the model in memory is the one you think and whether it has spilled out
+    of accelerator memory. Prometheus, Grafana and Datadog show time series; Wicklee adds why a model
+    was reloaded or evicted, each statement labelled observed, inferred or verified. ollama ps and
+    runtime logs show what is loaded now; Wicklee adds what happened over the last hours and a verify
+    step. It does not replace any of these and is not in your request path. Today it answers over its
+    own CLI, HTTP and MCP interfaces; it does not push into your dashboards.
+  </p>
   <h2 style="font-size:1.4rem;font-weight:700;color:#f9fafb;margin-top:2.5rem">Every line says what kind of claim it is</h2>
   <p style="color:#9ca3af;line-height:1.6">
     OBSERVED is a transition, sample or receipt Wicklee recorded, and never states a cause.
